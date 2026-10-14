@@ -45,6 +45,16 @@ app.add_middleware(SessionMiddleware, secret_key=config.SECRET_KEY, same_site="s
                    session_cookie="ps5sf_session", max_age=7 * 24 * 3600)
 
 
+@app.middleware("http")
+async def revalidate_html(request: Request, call_next):
+    """index.html must not be served from browser cache, or a rebuilt app keeps loading the old bundle.
+    Hashed assets under /assets are fine to cache."""
+    response = await call_next(request)
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.exception_handler(StarletteHTTPException)
 async def error_body(request: Request, exc: StarletteHTTPException):
     """Errors are {"error": code, "message": text} (project.md §17), not FastAPI's {"detail": ...}."""
