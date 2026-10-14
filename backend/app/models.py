@@ -76,12 +76,20 @@ class Console(Base):
     connection_type: Mapped[str] = mapped_column(String(16))  # ftp|http|custom|mock
     port: Mapped[int] = mapped_column(Integer)
     username: Mapped[str | None] = mapped_column(String)
-    credentials_secret_id: Mapped[str | None] = mapped_column(String(36))
+    credentials_secret_id: Mapped[str | None] = mapped_column(String(36))  # -> secrets.id
     firmware: Mapped[str | None] = mapped_column(String)
     helper_status: Mapped[dict] = mapped_column(JSON, default=dict)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_inventory_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Secret(Base):
+    """Encrypted credential (Fernet token). Only app/credentials.py reads or writes these."""
+    __tablename__ = "secrets"
+    id: Mapped[str] = _pk()
+    ciphertext: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Drive(Base):

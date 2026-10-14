@@ -23,5 +23,7 @@ def _secret_key() -> str:
 
 
 SECRET_KEY = os.environ.get("SECRET_KEY") or _secret_key()
+# Console passwords are encrypted with a key derived from this. Changing it makes saved passwords unreadable.
+CREDENTIALS_ENCRYPTION_KEY = os.environ.get("CREDENTIALS_ENCRYPTION_KEY") or SECRET_KEY
 
 SCAN_INTERVAL_MINUTES = int(os.environ.get("SCAN_INTERVAL_MINUTES", "60"))  # 0 disables

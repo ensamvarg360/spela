@@ -1,7 +1,7 @@
 # PS5 Local Storefront
 
 Self-hosted, single-user catalog for your own PS5 game backups. LAN-only; never expose it to the internet.
-Full spec: [project.md](project.md). **Status:** Phases 1–2 (foundation + library scanner). Console integration isn't built yet.
+Full spec: [project.md](project.md). **Status:** Phases 1–2 (foundation + library scanner), plus console profiles. The app can't talk to a console yet (only the mock adapter exists).
 
 ## Run (Windows)
 
@@ -12,6 +12,7 @@ A folder is scanned with all its subfolders. System folders such as `$RECYCLE.BI
 
 Data (database, covers, password, `app.log`) lives in `%LOCALAPPDATA%\PS5 Local Storefront`. To move to another PC, copy that folder.
 Forgot the password? Delete `admin_password` in that folder and restart; you'll be asked to choose a new one.
+Console passwords (added under **Settings → Consoles**) are encrypted in the database with a key derived from `secret_key` in that folder, or from the `CREDENTIALS_ENCRYPTION_KEY` environment variable if you set it. If you lose or change that key, re-enter the console passwords. The key sits next to the database, so encryption protects a copied database file, not a copied data folder.
 Only this PC can reach it by default. To open it from a phone on your LAN, start it with the environment variable `HOST=0.0.0.0` (allow it through Windows Firewall when asked). Never expose it to the internet.
 
 ## Build the .exe

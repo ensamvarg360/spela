@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, type Root, type ScanStatus } from "./api";
+import Consoles from "./Consoles";
 
 interface Listing { path: string; parent: string | null; dirs: string[] }
 
@@ -122,6 +123,8 @@ export default function Settings() {
           </>
         )}
       </section>
+
+      <Consoles />
     </div>
   );
 }

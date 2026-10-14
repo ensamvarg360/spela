@@ -10,6 +10,7 @@ dependencies = [
   "python-multipart>=0.0.9",
   "pystray>=0.19",  # tray icon (launcher.py)
   "pillow>=10",
+  "cryptography>=43",  # Fernet for console credentials
 ]
 
 [project.optional-dependencies]

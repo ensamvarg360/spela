@@ -10,15 +10,15 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import config, scanner
+from . import config, credentials, scanner
 from .database import Base, SessionLocal, engine, get_db
-from .models import AuditLog, Game, LibraryRoot
+from .models import AuditLog, Console, Game, LibraryRoot, _id
 
 
 @asynccontextmanager
@@ -362,6 +362,107 @@ def browse(path: str = ""):
     parent = os.path.dirname(path)
     return {"path": path, "parent": "" if parent == path else parent,
             "dirs": [os.path.join(path, d) for d in dirs]}
+
+
+# ---------------------------------------------------------------- consoles
+
+ConnectionType = Literal["ftp", "http", "custom", "mock"]
+
+
+class ConsoleIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    ip_address: IPvAnyAddress
+    connection_type: ConnectionType
+    port: int = Field(ge=1, le=65535)
+    username: str | None = Field(None, max_length=100)
+    password: str | None = Field(None, max_length=200)
+    enabled: bool = True
+
+
+class ConsolePatch(BaseModel):
+    """Omitted fields stay as they are. `password`: a string replaces it, "" or null forgets it."""
+    model_config = ConfigDict(extra="forbid")
+    # Defaults of None aren't validated, but an explicit null is rejected for these.
+    name: str = Field(None, min_length=1, max_length=100)
+    ip_address: IPvAnyAddress = None
+    connection_type: ConnectionType = None
+    port: int = Field(None, ge=1, le=65535)
+    username: str | None = Field(None, max_length=100)
+    password: str | None = Field(None, max_length=200)
+    enabled: bool = None
+
+
+class ConsoleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    ip_address: str
+    connection_type: str
+    port: int
+    username: str | None
+    has_password: bool = False
+    firmware: str | None
+    last_seen_at: datetime | None
+    enabled: bool
+
+
+def _console_out(c: Console) -> ConsoleOut:
+    return ConsoleOut.model_validate(c).model_copy(update={"has_password": bool(c.credentials_secret_id)})
+
+
+def _audit_console(db: Session, action: str, c: Console, fields: list[str]):
+    # Field names only, never values: the password must not reach the audit log.
+    db.add(AuditLog(action=action, console_id=c.id, result="success", details={"name": c.name, "fields": fields}))
+    if "password" in fields:
+        db.add(AuditLog(action="credential_update", console_id=c.id, result="success", details={"name": c.name}))
+
+
+def _save_console(db: Session, c: Console, changes: dict):
+    if "ip_address" in changes:
+        changes["ip_address"] = str(changes["ip_address"])
+    for k, v in changes.items():
+        if k == "password":
+            credentials.set_password(db, c, v)
+        else:
+            setattr(c, k, v)
+
+
+@api.get("/consoles", response_model=list[ConsoleOut])
+def list_consoles(db: Session = Depends(get_db)):
+    return [_console_out(c) for c in db.scalars(select(Console).order_by(Console.name))]
+
+
+@api.post("/consoles", response_model=ConsoleOut, status_code=201)
+def add_console(body: ConsoleIn, db: Session = Depends(get_db)):
+    c = Console(id=_id())
+    db.add(c)
+    changes = body.model_dump()
+    _save_console(db, c, changes)
+    _audit_console(db, "console_create", c, [k for k, v in changes.items() if v is not None])
+    db.commit()
+    return _console_out(c)
+
+
+@api.patch("/consoles/{console_id}", response_model=ConsoleOut)
+def patch_console(console_id: str, body: ConsolePatch, db: Session = Depends(get_db)):
+    c = db.get(Console, console_id) or _not_found()
+    changes = body.model_dump(exclude_unset=True)
+    _save_console(db, c, changes)
+    _audit_console(db, "console_update", c, list(changes))
+    db.commit()
+    return _console_out(c)
+
+
+@api.delete("/consoles/{console_id}")
+def delete_console(console_id: str, db: Session = Depends(get_db)):
+    # ponytail: nothing stores drives/installed games/jobs per console yet; delete or block on them once something does.
+    c = db.get(Console, console_id) or _not_found()
+    credentials.set_password(db, c, None)
+    _audit_console(db, "console_delete", c, [])
+    db.delete(c)
+    db.commit()
+    return {"ok": True}
 
 
 def _not_found():

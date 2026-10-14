@@ -42,6 +42,21 @@ export interface Root {
   reachable: boolean;
 }
 
+export type ConnectionType = "ftp" | "http" | "custom" | "mock";
+
+export interface Console {
+  id: string;
+  name: string;
+  ip_address: string;
+  connection_type: ConnectionType;
+  port: number;
+  username: string | null;
+  has_password: boolean;
+  firmware: string | null;
+  last_seen_at: string | null;
+  enabled: boolean;
+}
+
 export interface ScanStatus {
   running: boolean;
   finished_at: string | null;
