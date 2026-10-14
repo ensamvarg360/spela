@@ -23,7 +23,7 @@ The app checks each console every 15 seconds and reads its drives and installed 
 Installed games are matched to your library by title ID, and marked *Update in library* when your library holds a newer version.
 
 What FTP can't tell yet: firmware, total drive size, free space (only if the FTP server supports `AVBL`) and the size of folder dumps.
-The console paths it reads (`/user/app`, `/data/homebrew`, `/mnt/usbN`, `/mnt/extN`) are in `FTP_DRIVES` in [backend/app/consoles.py](backend/app/consoles.py) and haven't been checked on real hardware yet.
+The console paths it reads (`/user/app`, `/data/homebrew`, `/mnt/usbN`, `/mnt/extN`) are in `FTP_DRIVES` in [backend/app/consoles.py](backend/app/consoles.py) and have been checked against ftpsrv v0.21. A drive shows up only when its mount point has something in it.
 Set `CONSOLE_CHECK_SECONDS=0` to turn the checks off.
 
 ## Build the .exe

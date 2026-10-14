@@ -25,16 +25,23 @@ def ps5(tmp_path):
     write(tmp_path / "user/appmeta/PPSA02222/param.json", PARAM_JSON)  # "Native Game" 01.020.000
     write(tmp_path / "user/app/CUSA00001/app.pkg", b"x" * 10)
     write(tmp_path / "user/appmeta/CUSA00001/param.sfo", sfo({"TITLE_ID": "CUSA00001", "TITLE": "Old Game", "APP_VER": "01.05"}))
-    write(tmp_path / "user/app/NPXS40000/app.pkg")  # no appmeta
+    write(tmp_path / "user/app/MOUU00001/app.pkg")  # no appmeta
+    write(tmp_path / "user/app/NPXS40000/app.pkg")  # system app
+    write(tmp_path / "user/app/PPSA03333/mount.lnk", b"/data/homebrew/Dump")  # ShadowMountPlus stub
+    write(tmp_path / "user/app/WKAL00001/sce_sys/param.json")  # homebrew launcher
     write(tmp_path / "user/app/system.dat")  # not a game
     write(tmp_path / "data/homebrew/Dump/sce_sys/param.json", PARAM_JSON.replace(b"PPSA02222", b"PPSA03333"))
     write(tmp_path / "data/homebrew/Racer PPSA04444.ffpkg", b"x" * 99)
     write(tmp_path / "data/homebrew/tool.elf")  # homebrew, not a game
+    write(tmp_path / "data/homebrew/.PPSA05555-app0.gc-moving.tmp/sce_sys/param.json")  # mid-copy
     write(tmp_path / "mnt/usb0/homebrew/Old CUSA00009.exfat", b"x" * 5)
+    (tmp_path / "mnt/usb1").mkdir()  # unused mount point
+    (tmp_path / "mnt/ext0").mkdir()
 
     auth = DummyAuthorizer()
     auth.add_user("ps5", "pw", str(tmp_path), perm="elr")
-    handler = type("H", (FTPHandler,), {"authorizer": auth})
+    # ftpsrv on the PS5 has no NLST
+    handler = type("H", (FTPHandler,), {"authorizer": auth, "ftp_NLST": lambda self, path: self.respond("502 Command not recognized.")})
     server = FTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, kwargs={"timeout": 0.2}, daemon=True).start()
     yield tmp_path, server.socket.getsockname()[1]
@@ -52,11 +59,11 @@ def test_ftp_adapter_reads_drives_and_games(ps5):
     assert [d.external_id for d in asyncio.run(a.list_drives())] == ["internal", "usb0"]
 
     games = {g.title_id: g for g in asyncio.run(a.scan_installed_games())}
-    assert set(games) == {"PPSA02222", "CUSA00001", "NPXS40000", "PPSA03333", "PPSA04444", "CUSA00009"}
+    assert set(games) == {"PPSA02222", "CUSA00001", "MOUU00001", "PPSA03333", "PPSA04444", "CUSA00009"}
     native = games["PPSA02222"]
     assert (native.title, native.version, native.install_route, native.size_bytes) == ("Native Game", "01.020.000", "package_installer", 1234)
     assert (games["CUSA00001"].title, games["CUSA00001"].version) == ("Old Game", "01.05")
-    assert games["NPXS40000"].title == "NPXS40000"  # no metadata: title ID stands in
+    assert games["MOUU00001"].title == "MOUU00001"  # no metadata: title ID stands in
     dump = games["PPSA03333"]
     assert (dump.install_route, dump.installed_path, dump.source_path) == ("shadowmountplus", "/data/homebrew/Dump", "/data/homebrew/Dump")
     assert games["PPSA04444"].size_bytes == 99

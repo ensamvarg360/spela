@@ -262,27 +262,19 @@ class FTPConsoleAdapter:
         return await asyncio.to_thread(self._call, fn)
 
     @staticmethod
-    def _ls(ftp: ftplib.FTP, path: str) -> list[str]:
+    def _ls(ftp: ftplib.FTP, path: str) -> dict[str, tuple[bool, int]]:
+        """{name: (is_dir, size)} from a Unix-style LIST. ftpsrv on the PS5 has no NLST."""
+        lines = []
         try:
-            names = ftp.nlst(path)
-        except ftplib.error_perm:  # missing or empty folder
-            return []
-        return [n for n in (n.rstrip("/").rsplit("/", 1)[-1] for n in names) if n not in (".", "..")]
-
-    @staticmethod
-    def _is_dir(ftp: ftplib.FTP, path: str) -> bool:
-        try:
-            ftp.cwd(path)
-            return True
-        except ftplib.error_perm:
-            return False
-
-    @staticmethod
-    def _size(ftp: ftplib.FTP, path: str) -> int:
-        try:
-            return ftp.size(path) or 0
-        except ftplib.error_perm:
-            return 0
+            ftp.retrlines(f"LIST {path}", lines.append)
+        except ftplib.error_perm:  # missing folder
+            return {}
+        entries = {}
+        for line in lines:  # "drwxr-xr-x 2 0 0 512 Oct 07 01:15 name with spaces"
+            parts = line.split(None, 8)
+            if len(parts) == 9 and parts[8] not in (".", ".."):
+                entries[parts[8]] = (parts[0].startswith("d"), int(parts[4]) if parts[4].isdigit() else 0)
+        return entries
 
     @staticmethod
     def _get(ftp: ftplib.FTP, path: str) -> bytes | None:
@@ -303,7 +295,8 @@ class FTPConsoleAdapter:
 
     def _drives(self, ftp: ftplib.FTP) -> list[tuple[DriveInfo, str, str]]:
         return [(DriveInfo(ext, label, path, kind, 0, self._free(ftp, path)), user, homebrew)
-                for ext, label, path, kind, user, homebrew in FTP_DRIVES if self._is_dir(ftp, path)]
+                # unused mount points exist as empty folders, so a drive counts only if its mount point has contents
+                for ext, label, path, kind, user, homebrew in FTP_DRIVES if self._ls(ftp, path)]
 
     @staticmethod
     def _meta(tid: str, data: bytes | None) -> PkgMetadata:
@@ -318,19 +311,25 @@ class FTPConsoleAdapter:
         games = []
         for drive, user, homebrew in self._drives(ftp):
             for tid in self._ls(ftp, f"{user}/app"):
-                if not TITLE_ID.fullmatch(tid):
+                if not TITLE_ID.fullmatch(tid) or tid.startswith("NPXS"):  # NPXS = system apps
+                    continue
+                path = f"{user}/app/{tid}"
+                files = self._ls(ftp, path)
+                # mount.lnk = ShadowMountPlus stub, listed from its homebrew source below; no app.pkg = homebrew launcher
+                if "mount.lnk" in files or "app.pkg" not in files:
                     continue
                 param = "param.sfo" if tid.startswith("CUSA") else "param.json"
                 meta = self._meta(tid, self._get(ftp, f"{user}/appmeta/{tid}/{param}"))
-                path = f"{user}/app/{tid}"
                 games.append(InstalledGameInfo(tid, meta.title or tid, meta.version, "package_installer",
-                                               drive.external_id, path, None, self._size(ftp, f"{path}/app.pkg")))
-            for name in self._ls(ftp, homebrew):
+                                               drive.external_id, path, None, files["app.pkg"][1]))
+            for name, (is_dir, size) in self._ls(ftp, homebrew).items():
                 path, m = f"{homebrew}/{name}", TITLE_ID.search(name)
-                if self._is_dir(ftp, path):  # folder dump; size stays 0, summing a tree over FTP is too slow
+                if name.startswith("."):  # hidden, e.g. ".PPSA25381-app0.gc-moving.tmp" mid-copy
+                    continue
+                if is_dir:  # folder dump; size stays 0, summing a tree over FTP is too slow
                     meta, size = self._meta("PPSA", self._get(ftp, f"{path}/sce_sys/param.json")), 0
                 elif name.lower().endswith(IMAGE_EXTS):
-                    meta, size = PkgMetadata(), self._size(ftp, path)
+                    meta = PkgMetadata()
                 else:
                     continue
                 tid = meta.title_id or (m and m[0])
