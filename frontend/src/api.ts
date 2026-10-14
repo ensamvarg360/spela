@@ -53,8 +53,44 @@ export interface Console {
   username: string | null;
   has_password: boolean;
   firmware: string | null;
+  helper_status: Record<string, string>;
   last_seen_at: string | null;
+  last_inventory_scan_at: string | null;
   enabled: boolean;
+  state: ConsoleState;
+  status_message: string;
+}
+
+export type ConsoleState = "online" | "degraded" | "offline" | "disabled" | "unknown";
+
+export interface Drive {
+  id: string;
+  external_id: string;
+  label: string;
+  path: string;
+  drive_type: "internal" | "usb" | "network" | "unknown";
+  total_bytes: number; // 0 = unknown
+  free_bytes: number; // 0 = unknown
+  is_install_target: boolean;
+  last_seen_at: string | null;
+  installed_count: number;
+}
+
+export interface InstalledGame {
+  id: string;
+  game_id: string | null;
+  has_cover: boolean;
+  title_id: string;
+  title: string;
+  version: string | null;
+  library_version: string | null;
+  install_route: "package_installer" | "shadowmountplus" | "unknown";
+  drive_id: string | null;
+  installed_path: string;
+  source_path: string | null;
+  size_bytes: number;
+  status: "installed" | "update_available" | "partially_installed" | "orphaned_icon" | "unknown";
+  last_verified_at: string | null;
 }
 
 export interface ScanStatus {

@@ -16,9 +16,10 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import config, credentials, scanner
+from . import config, credentials, inventory, scanner
+from .consoles import AdapterError
 from .database import Base, SessionLocal, engine, get_db
-from .models import AuditLog, Console, Game, LibraryRoot, _id
+from .models import AuditLog, Console, Drive, Game, InstalledGame, LibraryRoot, _id
 
 
 @asynccontextmanager
@@ -26,9 +27,13 @@ async def lifespan(app: FastAPI):
     config.COVERS_DIR.mkdir(parents=True, exist_ok=True)
     # ponytail: create_all instead of Alembic; add migrations before the first schema change after v1.
     Base.metadata.create_all(engine)
-    task = asyncio.create_task(_scheduled_scans()) if config.SCAN_INTERVAL_MINUTES > 0 else None
+    tasks = []
+    if config.SCAN_INTERVAL_MINUTES > 0:
+        tasks.append(asyncio.create_task(_scheduled_scans()))
+    if config.CONSOLE_CHECK_SECONDS > 0:
+        tasks.append(asyncio.create_task(inventory.monitor()))
     yield
-    if task:
+    for task in tasks:
         task.cancel()
 
 
@@ -413,12 +418,21 @@ class ConsoleOut(BaseModel):
     username: str | None
     has_password: bool = False
     firmware: str | None
+    helper_status: dict
     last_seen_at: datetime | None
+    last_inventory_scan_at: datetime | None
     enabled: bool
+    state: str = "unknown"  # online|degraded|offline|disabled|unknown (not checked yet)
+    status_message: str = ""
 
 
 def _console_out(c: Console) -> ConsoleOut:
-    return ConsoleOut.model_validate(c).model_copy(update={"has_password": bool(c.credentials_secret_id)})
+    s = inventory.status.get(c.id, {})
+    return ConsoleOut.model_validate(c).model_copy(update={
+        "has_password": bool(c.credentials_secret_id),
+        "state": s.get("state", "unknown") if c.enabled else "disabled",
+        "status_message": s.get("message", ""),
+    })
 
 
 def _audit_console(db: Session, action: str, c: Console, fields: list[str]):
@@ -464,15 +478,115 @@ def patch_console(console_id: str, body: ConsolePatch, db: Session = Depends(get
     return _console_out(c)
 
 
+@api.get("/consoles/{console_id}", response_model=ConsoleOut)
+def get_console(console_id: str, db: Session = Depends(get_db)):
+    return _console_out(db.get(Console, console_id) or _not_found())
+
+
 @api.delete("/consoles/{console_id}")
 def delete_console(console_id: str, db: Session = Depends(get_db)):
-    # ponytail: nothing stores drives/installed games/jobs per console yet; delete or block on them once something does.
+    # ponytail: no jobs exist yet; block deleting a console with active jobs once Phase 4 adds them.
     c = db.get(Console, console_id) or _not_found()
+    inventory.forget(db, c.id)
     credentials.set_password(db, c, None)
     _audit_console(db, "console_delete", c, [])
     db.delete(c)
     db.commit()
     return {"ok": True}
+
+
+@api.get("/consoles/{console_id}/status")
+def console_status(console_id: str, db: Session = Depends(get_db)):
+    c = _console_out(db.get(Console, console_id) or _not_found())
+    return {"state": c.state, "message": c.status_message, "last_seen_at": c.last_seen_at}
+
+
+@api.post("/consoles/{console_id}/test-connection", response_model=ConsoleOut)
+async def test_connection(console_id: str, db: Session = Depends(get_db)):
+    """Checks now instead of waiting for the monitor. Reads the inventory too when the console just came online."""
+    db.get(Console, console_id) or _not_found()
+    await inventory.check(console_id)
+    db.expire_all()  # check() wrote through its own session
+    return _console_out(db.get(Console, console_id))
+
+
+@api.post("/consoles/{console_id}/rescan", response_model=ConsoleOut)
+async def rescan_console(console_id: str, db: Session = Depends(get_db)):
+    c = db.get(Console, console_id) or _not_found()
+    try:
+        await inventory.refresh(db, c)
+    except AdapterError as e:
+        raise HTTPException(502, {"error": e.code, "message": e.message})
+    inventory.record(c.id, "online")
+    return _console_out(c)
+
+
+class DriveOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    external_id: str
+    label: str
+    path: str
+    drive_type: str
+    total_bytes: int
+    free_bytes: int
+    is_install_target: bool
+    last_seen_at: datetime | None
+    installed_count: int = 0
+
+
+class DrivePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    is_install_target: bool
+
+
+@api.get("/consoles/{console_id}/drives", response_model=list[DriveOut])
+def list_drives(console_id: str, db: Session = Depends(get_db)):
+    db.get(Console, console_id) or _not_found()
+    counts: dict[str | None, int] = {}
+    for drive_id in db.scalars(select(InstalledGame.drive_id).where(InstalledGame.console_id == console_id)):
+        counts[drive_id] = counts.get(drive_id, 0) + 1
+    drives = db.scalars(select(Drive).where(Drive.console_id == console_id).order_by(Drive.external_id))
+    return [DriveOut.model_validate(d).model_copy(update={"installed_count": counts.get(d.id, 0)}) for d in drives]
+
+
+@api.patch("/consoles/{console_id}/drives/{drive_id}", response_model=DriveOut)
+def patch_drive(console_id: str, drive_id: str, body: DrivePatch, db: Session = Depends(get_db)):
+    d = db.get(Drive, drive_id)
+    if not d or d.console_id != console_id:
+        _not_found()
+    d.is_install_target = body.is_install_target
+    db.commit()
+    return DriveOut.model_validate(d)
+
+
+class InstalledOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    game_id: str | None
+    has_cover: bool = False
+    title_id: str
+    title: str
+    version: str | None
+    library_version: str | None = None
+    install_route: str
+    drive_id: str | None
+    installed_path: str
+    source_path: str | None
+    size_bytes: int
+    status: str
+    last_verified_at: datetime | None
+
+
+@api.get("/consoles/{console_id}/installed", response_model=list[InstalledOut])
+def list_installed(console_id: str, db: Session = Depends(get_db)):
+    db.get(Console, console_id) or _not_found()
+    out = []
+    for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == console_id).order_by(InstalledGame.title)):
+        lib = db.get(Game, g.game_id) if g.game_id else None
+        out.append(InstalledOut.model_validate(g).model_copy(update={
+            "has_cover": bool(lib and lib.cover_path), "library_version": lib and lib.version}))
+    return out
 
 
 def _not_found():

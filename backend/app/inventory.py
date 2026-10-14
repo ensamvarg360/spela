@@ -1,0 +1,123 @@
+"""Console inventory sync and health monitor (project.md §9, §11). Copies what an adapter
+reports into drives/installed_games; those tables are a cache of the console, not a source of truth."""
+import asyncio
+import re
+import time
+
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
+
+from . import config, credentials
+from .consoles import AdapterError, ConsoleAdapter, get_adapter
+from .database import SessionLocal
+from .models import Console, Drive, Game, InstalledGame, now
+
+BACKOFF = (2, 5, 10, 30, 60)  # seconds between checks after 1, 2, 3... failures in a row
+status: dict[str, dict] = {}  # console id -> {state, message, checked_at, failures}; live, so in memory
+
+
+def adapter_for(db: Session, console: Console) -> ConsoleAdapter:
+    return get_adapter(console, credentials.get_password(db, console))
+
+
+def _ver(v: str | None) -> tuple[int, ...]:
+    return tuple(int(n) for n in re.findall(r"\d+", v or ""))
+
+
+async def refresh(db: Session, console: Console):
+    """Reads info, drives and installed games from the console and stores them. Raises AdapterError."""
+    adapter = adapter_for(db, console)
+    info = await adapter.get_console_info()
+    drives = await adapter.list_drives()
+    games = await adapter.scan_installed_games()
+
+    t = now()
+    console.firmware = info.firmware or console.firmware
+    console.helper_status = info.helper_status
+    console.last_seen_at = console.last_inventory_scan_at = t
+
+    # Drives that aren't seen stay (an unplugged USB drive keeps its install-target setting).
+    rows = {d.external_id: d for d in db.scalars(select(Drive).where(Drive.console_id == console.id))}
+    for d in drives:
+        row = rows.get(d.external_id)
+        if not row:
+            row = rows[d.external_id] = Drive(console_id=console.id, external_id=d.external_id,
+                                              is_install_target=d.drive_type != "network")
+            db.add(row)
+        row.label, row.path, row.drive_type = d.label, d.path, d.drive_type
+        row.total_bytes, row.free_bytes, row.last_seen_at = d.total_bytes, d.free_bytes, t
+    db.flush()
+
+    library: dict[str, Game] = {}  # title ID -> newest library copy
+    for g in db.scalars(select(Game).where(Game.title_id.is_not(None))):
+        if g.title_id not in library or _ver(g.version) > _ver(library[g.title_id].version):
+            library[g.title_id] = g
+
+    installed = {g.installed_path: g for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == console.id))}
+    for g in games:
+        row = installed.pop(g.installed_path, None)
+        if not row:
+            row = InstalledGame(console_id=console.id, installed_path=g.installed_path)
+            db.add(row)
+        match = library.get(g.title_id)
+        row.title_id, row.title, row.version, row.install_route = g.title_id, g.title, g.version, g.install_route
+        row.source_path, row.size_bytes, row.last_verified_at = g.source_path, g.size_bytes, t
+        row.drive_id = rows[g.drive_external_id].id if g.drive_external_id in rows else None
+        row.game_id = match.id if match else None
+        newer = match and g.version and match.version and _ver(match.version) > _ver(g.version)
+        row.status = "update_available" if newer else "installed"
+    for gone in installed.values():  # no longer on the console
+        db.delete(gone)
+    db.commit()
+
+
+def forget(db: Session, console_id: str):
+    """Drops the cached inventory of a console that's being deleted."""
+    db.execute(delete(InstalledGame).where(InstalledGame.console_id == console_id))
+    db.execute(delete(Drive).where(Drive.console_id == console_id))
+    status.pop(console_id, None)
+
+
+def record(console_id: str, state: str, message: str = "") -> dict:
+    prev = status.get(console_id, {})
+    failures = 0 if state == "online" else prev.get("failures", 0) + 1
+    status[console_id] = {"state": state, "message": message, "checked_at": now(), "failures": failures}
+    return prev
+
+
+async def check(console_id: str) -> dict:
+    """One health check. After an offline -> online change it also refreshes the inventory."""
+    with SessionLocal() as db:
+        console = db.get(Console, console_id)
+        if not console:
+            return {"state": "unknown"}
+        try:
+            result = await adapter_for(db, console).connect()
+        except AdapterError as e:  # unsupported connection type, unreadable password
+            record(console_id, "degraded", e.message)
+            return status[console_id]
+        prev = record(console_id, result.state, result.message)
+        if result.state == "online":
+            console.last_seen_at, console.helper_status = now(), result.helper_status
+            db.commit()
+            if prev.get("state") != "online":
+                try:
+                    await refresh(db, console)
+                except AdapterError as e:
+                    record(console_id, "degraded", e.message)
+        return status[console_id]
+
+
+async def monitor():
+    """Checks every enabled console every CONSOLE_CHECK_SECONDS, backing off while it's unreachable."""
+    due: dict[str, float] = {}
+    while True:
+        with SessionLocal() as db:
+            ids = list(db.scalars(select(Console.id).where(Console.enabled)))
+        todo = [i for i in ids if due.get(i, 0) <= time.monotonic()]
+        # ponytail: checks run together, so one slow console delays the next round. Fine for a handful of consoles.
+        await asyncio.gather(*(check(i) for i in todo), return_exceptions=True)
+        for i in todo:
+            failures = status.get(i, {}).get("failures", 0)
+            due[i] = time.monotonic() + (BACKOFF[min(failures, len(BACKOFF)) - 1] if failures else config.CONSOLE_CHECK_SECONDS)
+        await asyncio.sleep(1)

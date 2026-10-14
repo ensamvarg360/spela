@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, type Console } from "./api";
+import { STATE_BADGE } from "./Installed";
 
 const EMPTY = { name: "", ip_address: "", connection_type: "ftp", port: "2121", username: "", password: "" };
 type Draft = typeof EMPTY;
@@ -68,6 +69,7 @@ export default function Consoles() {
   const load = () => api<Console[]>("/consoles").then(setConsoles, (e) => setError(e.message));
   useEffect(() => { load(); }, []);
   const done = () => (setEditing(null), load());
+  const test = (c: Console) => api<Console>(`/consoles/${c.id}/test-connection`, { method: "POST" }).then(load, (e) => setError(e.message));
   const remove = (c: Console) =>
     confirm(`Remove ${c.name}? Nothing on the console is changed.`) &&
     api(`/consoles/${c.id}`, { method: "DELETE" }).then(load, (e) => setError(e.message));
@@ -82,8 +84,11 @@ export default function Consoles() {
             <li key={c.id}>
               <strong>{c.name}</strong>
               <code>{c.connection_type}://{c.ip_address}:{c.port}</code>
-              <span className="muted">{c.has_password ? "Password saved" : "No password"}{c.enabled ? "" : " · Disabled"}</span>
+              <span className="muted">
+                <span className={`badge ${STATE_BADGE[c.state]}`}>{c.state}</span> {c.status_message || (c.has_password ? "Password saved" : "No password")}
+              </span>
               <span className="inline">
+                <button className="link" onClick={() => test(c)}>Test connection</button>
                 <button className="link" onClick={() => setEditing(c.id)}>Edit</button>
                 <button className="link" onClick={() => remove(c)}>Remove</button>
               </span>

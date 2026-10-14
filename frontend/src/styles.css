@@ -113,6 +113,15 @@ summary { cursor: pointer; color: var(--muted); }
 .report { list-style: none; padding: 0; }
 .report details { margin: 0.25rem 0; }
 
+.installed { display: flex; flex-direction: column; gap: 1.25rem; }
+.installed .toolbar { margin-bottom: 0.75rem; }
+.inline-title { margin: 0; }
+.spacer { flex: 1; }
+.drives { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.drives li { display: flex; flex-direction: column; gap: 0.35rem; padding: 1rem; }
+.drives meter { width: 100%; }
+.tile a { text-decoration: none; }
+
 @media (max-width: 700px) {
   .detail { grid-template-columns: 1fr; }
   .detail aside { position: static; max-width: 260px; }

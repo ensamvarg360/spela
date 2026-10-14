@@ -5,7 +5,7 @@ import tempfile
 
 _data = tempfile.mkdtemp()
 os.environ.update(SECRET_KEY="test-secret", DATA_DIR=_data,
-                  DATABASE_URL=f"sqlite:///{_data}/test.db", SCAN_INTERVAL_MINUTES="0")
+                  DATABASE_URL=f"sqlite:///{_data}/test.db", SCAN_INTERVAL_MINUTES="0", CONSOLE_CHECK_SECONDS="0")
 
 import pytest  # noqa: E402
 

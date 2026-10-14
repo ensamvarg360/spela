@@ -13,7 +13,7 @@ def run(coro):
 def test_factory():
     assert isinstance(get_adapter(Console(connection_type="mock")), MockConsoleAdapter)
     with pytest.raises(UnsupportedConsoleConnectionError):
-        get_adapter(Console(connection_type="ftp"))
+        get_adapter(Console(connection_type="http"))
 
 
 def test_mock_install_and_remove_roundtrip():

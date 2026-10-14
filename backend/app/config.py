@@ -27,3 +27,4 @@ SECRET_KEY = os.environ.get("SECRET_KEY") or _secret_key()
 CREDENTIALS_ENCRYPTION_KEY = os.environ.get("CREDENTIALS_ENCRYPTION_KEY") or SECRET_KEY
 
 SCAN_INTERVAL_MINUTES = int(os.environ.get("SCAN_INTERVAL_MINUTES", "60"))  # 0 disables
+CONSOLE_CHECK_SECONDS = int(os.environ.get("CONSOLE_CHECK_SECONDS", "15"))  # console health checks; 0 disables

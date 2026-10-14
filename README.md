@@ -1,7 +1,7 @@
 # PS5 Local Storefront
 
 Self-hosted, single-user catalog for your own PS5 game backups. LAN-only; never expose it to the internet.
-Full spec: [project.md](project.md). **Status:** Phases 1–2 (foundation + library scanner), plus console profiles. The app can't talk to a console yet (only the mock adapter exists).
+Full spec: [project.md](project.md). **Status:** Phases 1–3 (foundation, library scanner, console integration). The app can read a PS5's drives and installed games over FTP, but can't install or remove anything yet.
 
 ## Run (Windows)
 
@@ -14,6 +14,17 @@ Data (database, covers, password, `app.log`) lives in `%LOCALAPPDATA%\PS5 Local 
 Forgot the password? Delete `admin_password` in that folder and restart; you'll be asked to choose a new one.
 Console passwords (added under **Settings → Consoles**) are encrypted in the database with a key derived from `secret_key` in that folder, or from the `CREDENTIALS_ENCRYPTION_KEY` environment variable if you set it. If you lose or change that key, re-enter the console passwords. The key sits next to the database, so encryption protects a copied database file, not a copied data folder.
 Only this PC can reach it by default. To open it from a phone on your LAN, start it with the environment variable `HOST=0.0.0.0` (allow it through Windows Firewall when asked). Never expose it to the internet.
+
+## Consoles
+
+Add your PS5 under **Settings → Consoles** (connection **FTP**, the port of your FTP payload, often 2121 or 1337), then open **Installed**.
+The app checks each console every 15 seconds and reads its drives and installed games when it comes online; **Refresh inventory** reads them again.
+*Degraded* means the console answers but its FTP server isn't running or rejected the password; *Offline* means it doesn't answer at all.
+Installed games are matched to your library by title ID, and marked *Update in library* when your library holds a newer version.
+
+What FTP can't tell yet: firmware, total drive size, free space (only if the FTP server supports `AVBL`) and the size of folder dumps.
+The console paths it reads (`/user/app`, `/data/homebrew`, `/mnt/usbN`, `/mnt/extN`) are in `FTP_DRIVES` in [backend/app/consoles.py](backend/app/consoles.py) and haven't been checked on real hardware yet.
+Set `CONSOLE_CHECK_SECONDS=0` to turn the checks off.
 
 ## Build the .exe
 

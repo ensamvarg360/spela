@@ -2,9 +2,10 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "./api";
 import Library from "./Library";
 import GameDetail from "./GameDetail";
+import Installed from "./Installed";
 import Settings from "./Settings";
 
-// ponytail: hash routing, three routes. Swap in react-router when nested routes show up.
+// ponytail: hash routing, four routes. Swap in react-router when nested routes show up.
 function useHash() {
   const [hash, setHash] = useState(location.hash);
   useEffect(() => {
@@ -39,12 +40,13 @@ export default function App() {
         <a href="#/" className="brand">PS5 Local Storefront</a>
         <nav>
           <a href="#/" aria-current={route === "/" || !!gameId ? "page" : undefined}>Library</a>
+          <a href="#/installed" aria-current={route === "/installed" ? "page" : undefined}>Installed</a>
           <a href="#/settings" aria-current={route === "/settings" ? "page" : undefined}>Settings</a>
           <button className="link" onClick={logout}>Log out</button>
         </nav>
       </header>
       <main>
-        {gameId ? <GameDetail id={gameId} /> : route === "/settings" ? <Settings /> : <Library />}
+        {gameId ? <GameDetail id={gameId} /> : route === "/settings" ? <Settings /> : route === "/installed" ? <Installed /> : <Library />}
       </main>
     </>
   );
