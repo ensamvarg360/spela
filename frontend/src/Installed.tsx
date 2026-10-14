@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, formatBytes, type Console, type ConsoleState, type Drive, type InstalledGame } from "./api";
+import { api, appVersion, formatBytes, type Console, type ConsoleState, type Drive, type InstalledGame } from "./api";
 
 // Reuses the library badge colours.
 export const STATE_BADGE: Record<ConsoleState, string> = {
@@ -29,6 +29,8 @@ export default function Installed() {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [version, setVersion] = useState("");
+  useEffect(() => { appVersion.then(setVersion); }, []);
 
   const loadConsoles = () => api<Console[]>("/consoles").then((cs) => {
     setConsoles(cs);
@@ -64,6 +66,8 @@ export default function Installed() {
   const c = consoles.find((x) => x.id === id) ?? consoles[0];
   const driveLabel = Object.fromEntries(drives.map((d) => [d.id, d.label]));
   const updates = games.filter((g) => g.status === "update_available").length;
+  const helper = c.helper_status.helper; // "missing", a version, or absent before the first check
+  const helperOk = !!version && helper === version;
 
   async function act(path: string) {
     setBusy(true);
@@ -100,7 +104,16 @@ export default function Installed() {
         </div>
         <dl className="facts">
           <dt>Firmware</dt><dd>{c.firmware ?? "Unknown"}</dd>
-          <dt>Helpers</dt><dd>{Object.entries(c.helper_status).filter(([k]) => k !== "banner").map(([k, v]) => `${k}: ${v}`).join(", ") || "Unknown"}</dd>
+          <dt>Helper payload</dt>
+          <dd>
+            {!helper || helper === "missing" ? "Not running" : `v${helper}`}
+            {helper && helper !== "missing" && !helperOk && version && ` (this app needs v${version})`}
+            {!helperOk && (
+              <button className="small" disabled={busy || c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
+                onClick={() => act("helper")}>{!helper || helper === "missing" ? "Install helper" : "Update helper"}</button>
+            )}
+          </dd>
+          <dt>Connections</dt><dd>{Object.entries(c.helper_status).filter(([k]) => k !== "banner" && k !== "helper").map(([k, v]) => `${k}: ${v}`).join(", ") || "Unknown"}</dd>
           <dt>Last seen</dt><dd>{when(c.last_seen_at)}</dd>
           <dt>Last inventory</dt><dd>{when(c.last_inventory_scan_at)}</dd>
           <dt>Installed</dt><dd>{games.length} game{games.length === 1 ? "" : "s"}{updates ? ` · ${updates} with a newer version in your library` : ""}</dd>

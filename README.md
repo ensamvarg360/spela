@@ -22,9 +22,16 @@ The app checks each console every 15 seconds and reads its drives and installed 
 *Degraded* means the console answers but its FTP server isn't running or rejected the password; *Offline* means it doesn't answer at all.
 Installed games are matched to your library by title ID, and marked *Update in library* when your library holds a newer version.
 
-What FTP can't tell yet: firmware, total drive size, free space (only if the FTP server supports `AVBL`) and the size of folder dumps.
+FTP can't report firmware or drive space, so the app also uses its own **helper payload**. When the console is online, click **Install helper** on the **Installed** page. The app sends the helper through the console's ELF loader on port 9021 (the same loader you used for the FTP server), and the console shows a notification when the helper starts. The helper then reports firmware, model, and the size and free space of each drive on port 7735. Like the FTP server, it stops when the console restarts, so install it again after a reboot.
+The helper's version always equals the app's version. If they differ, the button changes to **Update helper**, and clicking it replaces the running copy.
+What the app can't tell yet: the size of folder dumps.
 The console paths it reads (`/user/app`, `/data/homebrew`, `/mnt/usbN`, `/mnt/extN`) are in `FTP_DRIVES` in [backend/app/consoles.py](backend/app/consoles.py) and have been checked against ftpsrv v0.21. A drive shows up only when its mount point has something in it.
 Set `CONSOLE_CHECK_SECONDS=0` to turn the checks off.
+
+## Versions
+
+The version number lives in one place: `__version__` in [backend/app/__init__.py](backend/app/__init__.py). The Python package, `/api/v1/health`, the page header and the helper payload all read it.
+To release a new version: bump it, run `./payload/build.ps1` (needs Docker Desktop; it rebuilds `backend/app/payload/storefront-helper.elf`, which is committed), then `./build.ps1`. A test fails if the bundled helper's version doesn't match the app's version.
 
 ## Build the .exe
 

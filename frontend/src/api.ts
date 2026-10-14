@@ -121,6 +121,9 @@ export async function api<T>(path: string, opts: { method?: string; json?: unkno
   return data as T;
 }
 
+// The console helper payload must report this same version (backend/app/__init__.py).
+export const appVersion: Promise<string> = api<{ version: string }>("/health").then((h) => h.version, () => "");
+
 export const coverUrl = (g: Game) => (g.has_cover ? `/api/v1/games/${g.id}/cover?v=${encodeURIComponent(g.updated_at)}` : null);
 
 export function formatBytes(n: number): string {

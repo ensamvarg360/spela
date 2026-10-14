@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, ApiError } from "./api";
+import { api, ApiError, appVersion } from "./api";
 import Library from "./Library";
 import GameDetail from "./GameDetail";
 import Installed from "./Installed";
@@ -20,6 +20,8 @@ export default function App() {
   const [user, setUser] = useState<string | null | undefined>(undefined);
   const [needsSetup, setNeedsSetup] = useState(false);
   const route = useHash();
+  const [version, setVersion] = useState("");
+  useEffect(() => { appVersion.then(setVersion); }, []);
 
   useEffect(() => {
     api<{ user: string }>("/auth/me").then((r) => setUser(r.user), (e) => {
@@ -38,6 +40,7 @@ export default function App() {
     <>
       <header className="topbar">
         <a href="#/" className="brand">PS5 Local Storefront</a>
+        {version && <span className="muted">v{version}</span>}
         <nav>
           <a href="#/" aria-current={route === "/" || !!gameId ? "page" : undefined}>Library</a>
           <a href="#/installed" aria-current={route === "/installed" ? "page" : undefined}>Installed</a>

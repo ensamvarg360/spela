@@ -3,11 +3,17 @@ through a ConsoleAdapter; console-specific paths and endpoints stay in here."""
 import asyncio
 import ftplib
 import io
+import json
 import re
+import socket
 import struct
+import time
+import urllib.request
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Callable, Literal, Protocol
 
+from . import __version__
 from .models import Console
 from .pkg import PkgMetadata, _read_param_json, _read_param_sfo
 
@@ -96,6 +102,7 @@ class ConsoleAdapter(Protocol):
     async def uninstall_package(self, title_id: str) -> RemovalResult: ...
     async def remove_shadowmount_source(self, installed_game: InstalledGameInfo, progress_callback: ProgressCallback) -> RemovalResult: ...
     async def remove_home_screen_icon(self, title_id: str) -> RemovalResult: ...
+    async def install_helper(self) -> str: ...
 
 
 GiB = 1024**3
@@ -152,11 +159,11 @@ class MockConsoleAdapter:
     async def connect(self) -> ConsoleStatus:
         if not self.online:
             return ConsoleStatus("offline", "No response.")
-        return ConsoleStatus("online", "", {"ftp": "ok", "installer": "ok", "shadowmountplus": "ok"})
+        return ConsoleStatus("online", "", {"ftp": "ok", "installer": "ok", "shadowmountplus": "ok", "helper": __version__})
 
     async def get_console_info(self) -> ConsoleInfo:
         self._check()
-        return ConsoleInfo("4.03", "CFI-1216A", {"ftp": "ok", "installer": "ok", "shadowmountplus": "ok"})
+        return ConsoleInfo("4.03", "CFI-1216A", {"ftp": "ok", "installer": "ok", "shadowmountplus": "ok", "helper": __version__})
 
     async def list_drives(self) -> list[DriveInfo]:
         self._check()
@@ -212,6 +219,10 @@ class MockConsoleAdapter:
         self.icons.discard(title_id)
         return RemovalResult(True, "Icon removed.")
 
+    async def install_helper(self) -> str:
+        self._check()
+        return __version__
+
 
 # ponytail: PS5 paths from community docs, not yet checked on a real console. Adjust them here after the
 # first hardware test. (external_id, label, mount path, type, user-data root, ShadowMountPlus source folder)
@@ -221,6 +232,7 @@ FTP_DRIVES = [
     *((f"usb{i}", f"USB drive {i}", f"/mnt/usb{i}", "usb", f"/mnt/usb{i}/user", f"/mnt/usb{i}/homebrew") for i in range(8)),
 ]
 IMAGE_EXTS = (".exfat", ".ffpkg", ".ffpfs", ".ffpfsc")
+HELPER_ELF = Path(__file__).parent / "payload" / "storefront-helper.elf"  # built from payload/ by payload/build.ps1
 
 
 class FTPConsoleAdapter:
@@ -228,6 +240,8 @@ class FTPConsoleAdapter:
     installing and removing come in Phases 4-5 and refuse with `not_implemented` until then."""
 
     TIMEOUT = 10
+    HELPER_PORT = 7735  # our helper payload (payload/main.c)
+    LOADER_PORT = 9021  # the jailbreak's ELF loader
 
     def __init__(self, console: Console, password: str | None = None):
         self.host, self.port = console.ip_address, console.port
@@ -285,18 +299,27 @@ class FTPConsoleAdapter:
             return None
         return buf.getvalue()
 
-    @staticmethod
-    def _free(ftp: ftplib.FTP, path: str) -> int:
-        # ponytail: AVBL is an optional FTP extension; servers without it report 0 (unknown). Total size is always unknown.
+    def _helper(self, path: str = "/info", method: str = "GET") -> dict | None:
+        """Calls the helper payload; None when it isn't running. It reports what FTP can't: firmware and drive space."""
+        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}{path}", method=method)
         try:
-            return int(re.findall(r"\d+", ftp.sendcmd(f"AVBL {path}"))[-1])
-        except (ftplib.Error, IndexError):
-            return 0
+            with urllib.request.urlopen(req, timeout=3) as r:
+                return json.loads(r.read())
+        except (OSError, ValueError):
+            return None
 
     def _drives(self, ftp: ftplib.FTP) -> list[tuple[DriveInfo, str, str]]:
-        return [(DriveInfo(ext, label, path, kind, 0, self._free(ftp, path)), user, homebrew)
-                # unused mount points exist as empty folders, so a drive counts only if its mount point has contents
-                for ext, label, path, kind, user, homebrew in FTP_DRIVES if self._ls(ftp, path)]
+        info = self._helper()
+        space = {m["mount"]: (m["total"], m["free"]) for m in info["mounts"]} if info else {}
+        drives = []
+        for ext, label, path, kind, user, homebrew in FTP_DRIVES:
+            # unused mount points exist as empty folders, so a drive counts only if its mount point has contents
+            if self._ls(ftp, path):
+                # the drive's own mount, or the deepest one above it (never "/": that's not the drive)
+                mount = max((m for m in space if path == m or path.startswith(m + "/")), key=len, default=None)
+                total, free = space.get(mount, (0, 0))
+                drives.append((DriveInfo(ext, label, path, kind, total, free), user, homebrew))
+        return drives
 
     @staticmethod
     def _meta(tid: str, data: bytes | None) -> PkgMetadata:
@@ -338,17 +361,38 @@ class FTPConsoleAdapter:
                                                    drive.external_id, path, path, size))
         return games
 
+    async def _helper_status(self, banner: str) -> tuple[dict, dict | None]:
+        info = await asyncio.to_thread(self._helper)
+        return {"ftp": "ok", "banner": banner, "helper": info["version"] if info else "missing"}, info
+
     async def connect(self) -> ConsoleStatus:
         try:
             banner = await self._run(lambda f: f.getwelcome())
         except AdapterError as e:
             return ConsoleStatus("offline" if e.code == "console_offline" else "degraded", e.message, {"ftp": e.code})
-        return ConsoleStatus("online", "", {"ftp": "ok", "banner": banner})
+        return ConsoleStatus("online", "", (await self._helper_status(banner))[0])
 
     async def get_console_info(self) -> ConsoleInfo:
-        banner = await self._run(lambda f: f.getwelcome())
-        # ponytail: FTP can't tell the firmware; read it once a helper that reports it is supported.
-        return ConsoleInfo(None, "unknown", {"ftp": "ok", "banner": banner})
+        status, info = await self._helper_status(await self._run(lambda f: f.getwelcome()))
+        return ConsoleInfo(info and info["firmware"] or None, info and info["model"] or "unknown", status)
+
+    def _install_helper(self) -> str:
+        self._helper("/quit", "POST")  # a running copy frees the port for the new one
+        try:
+            with socket.create_connection((self.host, self.LOADER_PORT), timeout=self.TIMEOUT) as s:
+                s.sendall(HELPER_ELF.read_bytes())
+        except OSError:
+            raise AdapterError("loader_unreachable", f"The console's ELF loader isn't running (port {self.LOADER_PORT}). "
+                                                     "Start it with your jailbreak, then try again.")
+        for _ in range(15):  # it may wait for the old copy to let go of the port
+            time.sleep(1)
+            if (info := self._helper()) and info.get("version") == __version__:
+                return __version__
+        raise AdapterError("helper_not_started", "The helper was sent but didn't start. Check the console for a message.")
+
+    async def install_helper(self) -> str:
+        """Sends the bundled helper payload through the console's ELF loader. Returns the running version."""
+        return await asyncio.to_thread(self._install_helper)
 
     async def list_drives(self) -> list[DriveInfo]:
         return [d for d, _, _ in await self._run(self._drives)]

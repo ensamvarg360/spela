@@ -1,8 +1,11 @@
 """FTP adapter + inventory sync against a real local FTP server laid out like a PS5."""
 import asyncio
+import json
+import re
 import shutil
 import socket
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from conftest import PARAM_JSON, sfo, write
@@ -13,7 +16,8 @@ from pyftpdlib.servers import FTPServer
 from sqlalchemy import select
 from test_console_profiles import login
 
-from app.consoles import FTPConsoleAdapter
+from app import __version__
+from app.consoles import HELPER_ELF, AdapterError, FTPConsoleAdapter
 from app.database import SessionLocal
 from app.main import app
 from app.models import Console, Drive, Game, InstalledGame
@@ -73,6 +77,75 @@ def test_ftp_adapter_reads_drives_and_games(ps5):
         asyncio.run(a.uninstall_package("PPSA02222"))
 
 
+class FakeHelper(BaseHTTPRequestHandler):
+    """The helper payload's API; `version` changes when the fake loader receives a new .elf."""
+    version, quits = "0.0.1", 0
+
+    def do_GET(self):
+        G = 1024**3
+        self._send({"version": FakeHelper.version, "firmware": "4.03", "model": "CFI-1216A", "mounts": [
+            {"mount": "/", "total": 100 * G, "free": 20 * G},
+            {"mount": "/user", "total": 800 * G, "free": 200 * G},
+            {"mount": "/mnt/usb0", "total": 2000 * G, "free": 612 * G}]})
+
+    def do_POST(self):
+        FakeHelper.quits += 1
+        self._send({"ok": True})
+
+    def _send(self, body):
+        data = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_ftp_adapter_helper(ps5):
+    _, port = ps5
+    helper = ThreadingHTTPServer(("127.0.0.1", 0), FakeHelper)
+    threading.Thread(target=helper.serve_forever, daemon=True).start()
+    loader, received = socket.create_server(("127.0.0.1", 0)), []
+
+    def elfldr():  # reads one payload, then the "new" helper answers
+        conn, _ = loader.accept()
+        with conn:
+            received.append(b"".join(iter(lambda: conn.recv(65536), b"")))
+        FakeHelper.version = __version__
+
+    threading.Thread(target=elfldr, daemon=True).start()
+    a = adapter(port)
+    a.HELPER_PORT, a.LOADER_PORT = helper.server_address[1], loader.getsockname()[1]
+    try:
+        G = 1024**3
+        assert {d.external_id: (d.total_bytes, d.free_bytes) for d in asyncio.run(a.list_drives())} ==             {"internal": (800 * G, 200 * G), "usb0": (2000 * G, 612 * G)}  # "/" never counts as a drive
+        info = asyncio.run(a.get_console_info())
+        assert (info.firmware, info.helper_status["helper"]) == ("4.03", "0.0.1")
+
+        assert asyncio.run(a.install_helper()) == __version__
+        assert received == [HELPER_ELF.read_bytes()] and FakeHelper.quits == 1  # old copy told to quit first
+        assert asyncio.run(a.connect()).helper_status["helper"] == __version__
+
+        # loader not running: a clear error. Helper gone: drives listed, space and firmware unknown.
+        loader.close()
+        with pytest.raises(AdapterError, match="ELF loader"):
+            asyncio.run(a.install_helper())
+    finally:
+        helper.shutdown()
+        helper.server_close()
+    assert {(d.total_bytes, d.free_bytes) for d in asyncio.run(a.list_drives())} == {(0, 0)}
+    info = asyncio.run(a.get_console_info())
+    assert (info.firmware, info.helper_status["helper"]) == (None, "missing")
+
+
+def test_bundled_helper_matches_app_version():
+    # Fails after a version bump until payload/build.ps1 is run, so the app never ships a helper it doesn't expect.
+    m = re.search(rb"storefront-helper-version:([\w.-]+)", HELPER_ELF.read_bytes())
+    assert m and m[1].decode() == __version__
+
+
 def test_ftp_adapter_failures(ps5):
     _, port = ps5
     bad = asyncio.run(adapter(port, "wrong").connect())
@@ -109,11 +182,14 @@ def test_inventory_sync_via_api(ps5):
         usb = drives[1]
         assert c.patch(f"{url}/drives/{usb['id']}", json={"is_install_target": False}).json()["is_install_target"] is False
 
-        # Game removed and USB drive unplugged: the game row goes, the drive keeps its setting.
+        # Game removed and USB drive unplugged: the game row goes, the drive is hidden but keeps its setting.
         shutil.rmtree(root / "user/app/CUSA00001")
-        shutil.rmtree(root / "mnt/usb0")
+        shutil.move(root / "mnt/usb0", root / "unplugged")
         assert c.post(f"{url}/rescan").status_code == 200
         assert "CUSA00001" not in {g["title_id"] for g in c.get(f"{url}/installed").json()}
+        assert [d["external_id"] for d in c.get(f"{url}/drives").json()] == ["internal"]
+        shutil.move(root / "unplugged", root / "mnt/usb0")
+        assert c.post(f"{url}/rescan").status_code == 200
         assert {d["external_id"]: d["is_install_target"] for d in c.get(f"{url}/drives").json()} == {"internal": True, "usb0": False}
 
         c.patch(url, json={"password": "wrong"})

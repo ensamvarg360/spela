@@ -92,7 +92,8 @@ label.check { flex-direction: row; align-items: center; gap: 0.4rem; color: var(
 .detail section { max-width: 820px; }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; margin: 0 0 1rem; }
 .facts dt { color: var(--muted); }
-.facts dd { margin: 0; }
+.facts dd { margin: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
+button.small { padding: 0.15rem 0.6rem; font-size: 0.85rem; }
 .edit { display: flex; flex-direction: column; gap: 0.75rem; }
 .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; }
 .actions { display: flex; align-items: center; gap: 1rem; }

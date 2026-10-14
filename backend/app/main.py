@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import config, credentials, inventory, scanner
+from . import __version__, config, credentials, inventory, scanner
 from .consoles import AdapterError
 from .database import Base, SessionLocal, engine, get_db
 from .models import AuditLog, Console, Drive, Game, InstalledGame, LibraryRoot, _id
@@ -153,7 +153,7 @@ def me(request: Request):
 
 @public.get("/health")
 def health():
-    return {"status": "ok", "app": APP_ID}  # the launcher checks `app` to recognise a running copy
+    return {"status": "ok", "app": APP_ID, "version": __version__}  # the launcher checks `app` to recognise a running copy
 
 
 # ---------------------------------------------------------------- library
@@ -521,6 +521,23 @@ async def rescan_console(console_id: str, db: Session = Depends(get_db)):
     return _console_out(c)
 
 
+@api.post("/consoles/{console_id}/helper", response_model=ConsoleOut)
+async def install_helper(console_id: str, db: Session = Depends(get_db)):
+    """Loads the bundled helper payload on the console (replacing an older one), then re-reads the inventory."""
+    c = db.get(Console, console_id) or _not_found()
+    try:
+        version = await inventory.adapter_for(db, c).install_helper()
+        await inventory.refresh(db, c)
+    except AdapterError as e:
+        db.add(AuditLog(action="helper_install", console_id=c.id, result="failed", details={"error": e.code}))
+        db.commit()
+        raise HTTPException(502, {"error": e.code, "message": e.message})
+    db.add(AuditLog(action="helper_install", console_id=c.id, result="success", details={"version": version}))
+    db.commit()
+    inventory.record(c.id, "online")
+    return _console_out(c)
+
+
 class DriveOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
@@ -542,12 +559,14 @@ class DrivePatch(BaseModel):
 
 @api.get("/consoles/{console_id}/drives", response_model=list[DriveOut])
 def list_drives(console_id: str, db: Session = Depends(get_db)):
-    db.get(Console, console_id) or _not_found()
+    c = db.get(Console, console_id) or _not_found()
     counts: dict[str | None, int] = {}
     for drive_id in db.scalars(select(InstalledGame.drive_id).where(InstalledGame.console_id == console_id)):
         counts[drive_id] = counts.get(drive_id, 0) + 1
     drives = db.scalars(select(Drive).where(Drive.console_id == console_id).order_by(Drive.external_id))
-    return [DriveOut.model_validate(d).model_copy(update={"installed_count": counts.get(d.id, 0)}) for d in drives]
+    # Only drives seen in the latest inventory; unplugged ones stay in the table to keep their setting.
+    return [DriveOut.model_validate(d).model_copy(update={"installed_count": counts.get(d.id, 0)})
+            for d in drives if d.last_seen_at == c.last_inventory_scan_at]
 
 
 @api.patch("/consoles/{console_id}/drives/{drive_id}", response_model=DriveOut)
