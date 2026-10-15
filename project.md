@@ -1304,7 +1304,7 @@ When implementing deletion:
 
 The project is complete when the user can:
 
-1. Start the stack with Docker Compose.
+1. Start the app (the Windows `.exe`; Docker Compose was dropped, see README "Deviations").
 2. Log in locally.
 3. Add one or more library roots.
 4. Scan a library containing folder dumps, image files, package files, and archives.
@@ -1318,4 +1318,4 @@ The project is complete when the user can:
 12. Remove only the approved console-side content.
 13. Retain PC-side backups and save data by default.
 14. Review an audit log of installs and removals.
-15. Redeploy the entire application on another Docker host using the same Compose file and persistent volumes.
+15. Move the entire application to another PC by copying its data folder (README "Backup and restore").

@@ -10,13 +10,13 @@ PW = "hunter2-very-secret"
 
 
 def login(c):
-    with TestClient(app, client=("127.0.0.1", 50000)) as local:
+    with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as local:
         local.post("/api/v1/auth/setup", json={"password": "password1"})  # 409 if another test did it first
     assert c.post("/api/v1/auth/login", json={"password": "password1"}).status_code == 200
 
 
 def test_console_crud_with_encrypted_password():
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1") as c:
         assert c.get("/api/v1/consoles").status_code == 401
         login(c)
         base = {"name": "Living Room PS5", "ip_address": "192.168.1.50", "connection_type": "ftp", "port": 2121}

@@ -1,11 +1,14 @@
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import os
 import socket
 import time
+import urllib.parse
 from contextlib import asynccontextmanager
 from datetime import date, datetime
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request, UploadFile
@@ -52,6 +55,24 @@ app.add_middleware(SessionMiddleware, secret_key=config.SECRET_KEY, same_site="s
                    session_cookie="ps5sf_session", max_age=7 * 24 * 3600)
 
 
+def _direct_host(host: str) -> bool:
+    """The app is opened by IP (or localhost), never by a domain name. Refusing domain names stops DNS rebinding:
+    a website pointing its own name at 127.0.0.1 to reach this app from the browser, e.g. to claim first-run setup."""
+    name = urllib.parse.urlsplit(f"//{host}").hostname or ""
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return name == "localhost"
+
+
+@app.middleware("http")
+async def check_host(request: Request, call_next):
+    if not _direct_host(request.headers.get("host", "")):
+        return JSONResponse({"error": "bad_host", "message": "Open the app by its IP address, as the tray icon shows."}, 421)
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def revalidate_html(request: Request, call_next):
     """index.html must not be served from browser cache, or a rebuilt app keeps loading the old bundle.
@@ -69,8 +90,20 @@ async def error_body(request: Request, exc: StarletteHTTPException):
     return JSONResponse(body, status_code=exc.status_code)
 
 
+def _password_salt() -> str | None:
+    """Stored in each session at login, so resetting the password (deleting its file) logs every device out."""
+    try:
+        return config.PASSWORD_FILE.read_text().split(":")[0]
+    except OSError:
+        return None
+
+
+def _log_in(request: Request):
+    request.session.update(user="admin", pw=_password_salt())
+
+
 def require_user(request: Request):
-    if not request.session.get("user"):
+    if not request.session.get("user") or request.session.get("pw") != _password_salt():
         raise HTTPException(401, {"error": "authentication_required", "message": "Log in first."})
 
 
@@ -118,7 +151,7 @@ def setup(body: SetupIn, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(409, {"error": "already_set_up", "message": "A password is already set."})
     db.add(AuditLog(action="setup", result="success", details={}))
     db.commit()
-    request.session["user"] = "admin"
+    _log_in(request)
     return {"user": "admin"}
 
 
@@ -136,7 +169,7 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
         _failures[ip] = recent + [time.time()]
         raise HTTPException(401, {"error": "invalid_credentials", "message": "Wrong password."})
     _failures.pop(ip, None)
-    request.session["user"] = "admin"
+    _log_in(request)
     return {"user": "admin"}
 
 
@@ -263,12 +296,20 @@ def delete_game(game_id: str, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+def _cover_file(g: Game) -> str:
+    """The cover's file. An uploaded one is found in COVERS_DIR by name too, since a data folder copied to another
+    PC (or another Windows user) keeps the old absolute path."""
+    if g.cover_path and os.path.isfile(g.cover_path):
+        return g.cover_path
+    moved = config.COVERS_DIR / Path(g.cover_path or "").name
+    if g.cover_path and moved.is_file():
+        return str(moved)
+    raise HTTPException(404, {"error": "not_found", "message": "No cover."})
+
+
 @api.get("/games/{game_id}/cover")
 def get_cover(game_id: str, db: Session = Depends(get_db)):
-    g = _game(db, game_id)
-    if not g.cover_path or not os.path.isfile(g.cover_path):
-        raise HTTPException(404, {"error": "not_found", "message": "No cover."})
-    return FileResponse(g.cover_path)
+    return FileResponse(_cover_file(_game(db, game_id)))
 
 
 COVER_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
@@ -835,11 +876,8 @@ def console_library(c: Console = Depends(console_from_token), db: Session = Depe
 @console_api.get("/covers/{game_id}")
 def console_cover(game_id: str, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
     """The cover as raw RGBA pixels, COVER_SIZE, cropped to fill. The console has no image decoder."""
-    g = _game(db, game_id)
-    if not g.cover_path or not os.path.isfile(g.cover_path):
-        _not_found()
     # ponytail: resized on every request; cache the bytes in COVERS_DIR if the grid ever loads slowly.
-    with Image.open(g.cover_path) as im:
+    with Image.open(_cover_file(_game(db, game_id))) as im:
         data = ImageOps.fit(im.convert("RGBA"), COVER_SIZE).tobytes()
     return Response(data, media_type="application/octet-stream")
 

@@ -2,23 +2,36 @@ import os
 
 from fastapi.testclient import TestClient
 
+from app import config
+from app.database import SessionLocal
 from app.main import app
+from app.models import Game
 
 
 def test_flow(library):
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1") as c:
         assert c.get("/api/v1/auth/me").json()["error"] == "setup_required"
         assert c.post("/api/v1/auth/login", json={"password": "password1"}).status_code == 409
         assert c.post("/api/v1/auth/setup", json={"password": "short"}).status_code == 422
         assert c.post("/api/v1/auth/setup", json={"password": "password1"}).status_code == 403  # not from loopback
-    with TestClient(app, client=("127.0.0.1", 50000)) as local:
+    # DNS rebinding: a website that points its own name at 127.0.0.1 must not reach setup (or anything else)
+    with TestClient(app, base_url="http://evil.example:8787", client=("127.0.0.1", 50000)) as rebound:
+        assert rebound.post("/api/v1/auth/setup", json={"password": "password1"}).status_code == 421
+    with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as local:
         assert local.post("/api/v1/auth/setup", json={"password": "password1"}).status_code == 200
         assert local.get("/api/v1/auth/me").json() == {"user": "admin"}
         assert local.post("/api/v1/auth/setup", json={"password": "password2"}).status_code == 409
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1") as c:
         assert c.get("/api/v1/games").json()["error"] == "authentication_required"
         assert c.post("/api/v1/auth/login", json={"password": "nope"}).status_code == 401
         assert c.post("/api/v1/auth/login", json={"password": "password1"}).status_code == 200
+        assert c.get("http://[::1]:8787/api/v1/health").status_code == 200  # IPv6 literal with a port is fine
+
+        saved = config.PASSWORD_FILE.read_text()  # a password reset logs existing sessions out
+        config.PASSWORD_FILE.write_text(("1" if saved[0] != "1" else "2") + saved[1:])
+        assert c.get("/api/v1/auth/me").status_code == 401
+        config.PASSWORD_FILE.write_text(saved)
+        assert c.get("/api/v1/auth/me").status_code == 200
 
         assert c.post("/api/v1/library/roots", json={"path": "relative/path"}).status_code == 400
         for r in c.get("/api/v1/library/roots").json():
@@ -47,6 +60,11 @@ def test_flow(library):
 
         r = c.post(f"/api/v1/games/{dump['id']}/cover", files={"file": ("c.png", b"newpng", "image/png")})
         assert r.status_code == 200 and c.get(f"/api/v1/games/{dump['id']}/cover").content == b"newpng"
+        with SessionLocal() as db:  # data folder copied to another PC: the stored path is stale, the file moved along
+            g = db.get(Game, dump["id"])
+            g.cover_path = os.path.join("C:\\Users\\someone-else\\old", os.path.basename(g.cover_path))
+            db.commit()
+        assert c.get(f"/api/v1/games/{dump['id']}/cover").content == b"newpng"
         assert c.post(f"/api/v1/games/{dump['id']}/cover", files={"file": ("x.sh", b"#!", "text/x-sh")}).status_code == 415
 
         # Removing the root drops its catalog records too.
@@ -60,7 +78,7 @@ def test_browse_and_drive_root_layout(tmp_path):
     write(tmp_path / "Extracted" / "Game" / "sce_sys" / "param.json", PARAM_JSON.replace(b"PPSA02222", b"PPSA06666"))
     write(tmp_path / "Compressed" / "Game PPSA06666.7z", b"7z\xbc\xaf\x27\x1c" + b"\0" * 50)
     write(tmp_path / "$RECYCLE.BIN" / "Old PPSA08888.exfat", b"x")
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1") as c:
         c.post("/api/v1/auth/login", json={"password": "password1"})  # set up in test_flow
         drives = c.get("/api/v1/library/browse").json()
         assert drives["path"] == "" and drives["dirs"]
@@ -80,7 +98,7 @@ def test_browse_and_drive_root_layout(tmp_path):
 
 
 def test_audit_log():
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1") as c:
         c.post("/api/v1/auth/login", json={"password": "nope"})
         c.post("/api/v1/auth/login", json={"password": "password1"})  # set up in test_flow
         rows = c.get("/api/v1/maintenance/audit-logs").json()

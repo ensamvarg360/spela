@@ -1,7 +1,7 @@
 # PS5 Local Storefront
 
 Self-hosted, single-user catalog for your own PS5 game backups. LAN-only; never expose it to the internet.
-Full spec: [project.md](project.md). **Status:** Phases 1–3 plus installing through ShadowMountPlus, and a PS5 app. The app can copy folder dumps and disc images to a PS5, and remove them again (from the Installed page or the PS5 app), but can't install `.pkg` files yet.
+Full spec: [project.md](project.md). **Status:** Phases 1–5 done, Phase 6 (hardening) in progress. The app copies folder dumps, disc images and archives holding them to a PS5 through ShadowMountPlus, and removes them again (from the Installed page or the PS5 app). It can't install `.pkg` files yet.
 
 ## Run (Windows)
 
@@ -10,10 +10,10 @@ Right-click the tray icon to **Open** it, **Open data folder**, **Restart** or *
 The first time, choose an admin password. Then go to **Settings**, click **Browse…**, pick a folder or a whole drive (for example `G:\`), and click **Scan now**.
 A folder is scanned with all its subfolders. System folders such as `$RECYCLE.BIN` and `System Volume Information` are skipped.
 
-Data (database, covers, password, `app.log`) lives in `%LOCALAPPDATA%\PS5 Local Storefront`. To move to another PC, copy that folder.
-Forgot the password? Delete `admin_password` in that folder and restart; you'll be asked to choose a new one.
+Data (database, covers, password, `app.log`) lives in `%LOCALAPPDATA%\PS5 Local Storefront`. To back it up or move to another PC, see [Backup and restore](#backup-and-restore).
+Forgot the password? Delete `admin_password` in that folder and restart; you'll be asked to choose a new one. That also logs out every device that was logged in.
 Console passwords (added under **Settings → Consoles**) are encrypted in the database with a key derived from `secret_key` in that folder, or from the `CREDENTIALS_ENCRYPTION_KEY` environment variable if you set it. If you lose or change that key, re-enter the console passwords. The key sits next to the database, so encryption protects a copied database file, not a copied data folder.
-Only this PC can reach it by default. To open it from a phone or another computer at home, right-click the tray icon and tick **Allow other devices on my network**. Windows asks for admin rights once, to let the app through the firewall on private networks, and the app restarts. The tray menu then shows the address to open on the other device, for example `http://192.168.0.40:8787`. If Windows treats your network as *Public*, other devices stay blocked; the app tells you how to switch it to *Private*. Never expose the app to the internet. (The `HOST` environment variable, if set, overrides the tray option.)
+Only this PC can reach it by default. To open it from a phone or another computer at home, right-click the tray icon and tick **Allow other devices on my network**. Windows asks for admin rights once, to let the app through the firewall on private networks, and the app restarts. The tray menu then shows the address to open on the other device, for example `http://192.168.0.40:8787`. If Windows treats your network as *Public*, other devices stay blocked; the app tells you how to switch it to *Private*. Never expose the app to the internet. (The `HOST` environment variable, if set, overrides the tray option.) Open it by IP address (or `localhost`), not by the PC's name: requests addressed to a name are refused, so a malicious website can't reach the app by pointing its own name at your PC (DNS rebinding).
 
 ## Consoles
 
@@ -54,6 +54,35 @@ The app is built from [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5
 
 The version number lives in one place: `__version__` in [backend/app/__init__.py](backend/app/__init__.py). The Python package, `/api/v1/health`, the page header and the helper payload all read it.
 To release a new version: bump it, run `./payload/build.ps1` (needs Docker Desktop; it rebuilds `backend/app/payload/storefront-helper.elf`, which is committed), then `./build.ps1`. A test fails if the bundled helper's version doesn't match the app's version.
+
+## Backup and restore
+
+Everything the app knows is in the data folder (`%LOCALAPPDATA%\PS5 Local Storefront`, or `DATA_DIR`). Your game files are never in it.
+
+1. **Quit** from the tray menu, so the database isn't being written.
+2. Copy the whole folder. `staging` (temporary archive extractions), `webview` (the window's browser profile) and `app.log` can be left out.
+3. To restore, quit the app, put the folder back (or copy it to the same place on the new PC) and start it.
+
+Keep `secret_key` together with `app.db`. Without it, saved console passwords can't be decrypted (enter them again) and the PS5 app's pairing key stops working (click **Update PS5 app**). Library folders are stored by full path, so on a new PC give the drives the same letters, or remove the old folders under **Settings** and add the new ones. Games in a removed folder leave the library, and the next scan adds them back. Uploaded covers move with the folder.
+
+## Troubleshooting
+
+| Symptom | What to do |
+|---|---|
+| "Port 8787 is already in use" at start | Another program holds the port. Close it, or set `PORT` to another number. |
+| The app's window stays blank or the tray says it couldn't start | Look at `app.log` in the data folder. |
+| A phone or other PC can't open the app | Tick **Allow other devices on my network** in the tray, make sure the network is *Private* in Windows, and open the address the tray shows (an IP address, not the PC's name). |
+| "Open the app by its IP address" | You opened it by a name. Use `http://127.0.0.1:8787` on this PC, or the IP address from the tray elsewhere. |
+| Console shows *Offline* | Check the IP address, and that the PS5 is on and on the same network. |
+| Console shows *Degraded* | The PS5 is on but the helper isn't running (it stops on every reboot) or is outdated: click **Install helper** / **Update helper**. If that fails with "ELF loader isn't running", start your jailbreak's loader first. |
+| Console shows *Rest mode* | Wake the PS5. Payloads don't run in rest mode. |
+| Install fails with "can't see free space" | Install the helper; FTP alone can't report drive space. |
+| Install fails with "Not enough space on this PC to extract" | Free space on the PC, or point `STAGING_DIR` at a bigger drive. |
+| Install shows *Interrupted* | The app or the connection stopped mid-copy. Queue it again; the leftover partial copy is replaced. |
+| Removed game's tile is still on the home screen | Delete the tile on the PS5 (Options, then Delete). It won't come back, since its files are gone. |
+| PS5 app says it isn't paired | The console was deleted on the PC, or `secret_key` changed. Click **Update PS5 app**. |
+| Saved console password "can't be decrypted" | `secret_key` or `CREDENTIALS_ENCRYPTION_KEY` changed. Enter the password again. |
+| Covers or games missing after moving to a new PC | See [Backup and restore](#backup-and-restore): drive letters must match, or re-add the library folders. |
 
 ## Build the .exe
 
@@ -100,4 +129,4 @@ If a root or subfolder can't be read, the scan reports an error and leaves exist
 - **No Alembic yet.** Tables are created with `create_all`. Add migrations before the first schema change on a live install.
 - **Interval rescans, no watchdog.** Filesystem events aren't reliable on SMB/NFS mounts.
 - Login is rate-limited to 5 failures per minute per IP. Read-only users aren't built yet.
-- **Removals are tracked in memory**, not in the `removal_jobs` table: its foreign key would block dropping the installed game once it's gone. The audit log keeps the record; a restart forgets previews and progress. Previews expire after 10 minutes. No orphan detection yet.
+- **Removals are tracked in memory**, not in the `removal_jobs` table: its foreign key would block dropping the installed game once it's gone. The audit log keeps the record; a restart forgets previews and progress. Previews expire after 10 minutes.

@@ -303,7 +303,7 @@ def test_archive_jobs(ps5, tmp_path):
 
 def test_install_api(ps5):
     _, port, lib = ps5
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         login(client)
         with SessionLocal() as db:
             c, (image,) = _setup(db, port, lib, (lib / "Racer PPSA04444.exfat", "image"))
@@ -353,7 +353,7 @@ def test_remove_source_allowlist(ps5):
 def test_uninstall_api(ps5):
     root, port, lib = ps5
     write(root / "mnt/usb0/homebrew/Racer PPSA04444.exfat", EXFAT)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         login(client)
         with SessionLocal() as db:
             c, _ = _setup(db, port, lib)
@@ -393,7 +393,7 @@ def test_uninstall_tile_left(ps5, monkeypatch):
     root, port, lib = ps5
     write(root / "data/homebrew/Racer PPSA04444.exfat", EXFAT)
     monkeypatch.setattr(FTPConsoleAdapter, "_remove_tile", lambda self, tid: RemovalResult(False, "The helper is too old to do it."))
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         login(client)
         with SessionLocal() as db:
             c, _ = _setup(db, port, lib)
@@ -421,7 +421,7 @@ def test_orphaned_tile(ps5, monkeypatch):
     write(root / "data/homebrew/Here PPSA07777/sce_sys/param.json", PARAM_JSON.replace(b"PPSA02222", b"PPSA07777"))
     tiles = []
     monkeypatch.setattr(FTPConsoleAdapter, "_remove_tile", lambda self, tid: tiles.append(tid) or RemovalResult(True, ""))
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         login(client)
         with SessionLocal() as db:
             c, _ = _setup(db, port, lib)

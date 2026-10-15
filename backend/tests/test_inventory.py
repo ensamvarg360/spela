@@ -171,7 +171,7 @@ def test_ftp_adapter_failures(ps5):
 
 def test_inventory_sync_via_api(ps5):
     root, port = ps5
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1") as c:
         login(c)
         con = c.post("/api/v1/consoles", json={"name": "Lab", "ip_address": "127.0.0.1", "connection_type": "ftp",
                                                "port": port, "username": "ps5", "password": "pw"}).json()

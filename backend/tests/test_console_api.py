@@ -20,7 +20,7 @@ def _console(client, name="PS5"):
 def test_console_api(tmp_path):
     cover = tmp_path / "c.png"
     Image.new("RGB", (600, 900), "red").save(cover)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         login(client)
         a, b = _console(client, "A"), _console(client, "B")
         with SessionLocal() as db:
@@ -66,7 +66,7 @@ def test_install_console_app_endpoint(tmp_path, monkeypatch):
     (bundle / "sce_sys").mkdir(parents=True)
     (bundle / "eboot.bin").write_bytes(b"elf")
     monkeypatch.setattr(main, "CONSOLE_APP_DIR", bundle)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         login(client)
         cid = _console(client)
         monkeypatch.setattr(config, "HOST", "127.0.0.1")
