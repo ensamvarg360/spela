@@ -35,6 +35,8 @@ def ps5(tmp_path):
     write(tmp_path / "user/app/WKAL00001/sce_sys/param.json")  # homebrew launcher
     write(tmp_path / "user/app/system.dat")  # not a game
     write(tmp_path / "data/homebrew/Dump/sce_sys/param.json", PARAM_JSON.replace(b"PPSA02222", b"PPSA03333"))
+    write(tmp_path / "data/homebrew/Dump/sce_sys/icon0.png", b"dump icon")
+    write(tmp_path / "user/appmeta/CUSA00001/icon0.png", b"old icon")
     write(tmp_path / "data/homebrew/Racer PPSA04444.ffpkg", b"x" * 99)
     write(tmp_path / "data/homebrew/tool.elf")  # homebrew, not a game
     write(tmp_path / "data/homebrew/.PPSA05555-app0.gc-moving.tmp/sce_sys/param.json")  # mid-copy
@@ -189,6 +191,11 @@ def test_inventory_sync_via_api(ps5):
         native = installed["PPSA02222"]
         assert (native["game_id"], native["status"], native["library_version"]) == (lib.id, "update_available", "01.100.000")
         assert installed["CUSA00001"]["status"] == "installed" and installed["CUSA00001"]["game_id"] is None
+        # icons read from the console: a dump's sce_sys, else appmeta; none found -> no cover
+        assert c.get(installed["CUSA00001"]["cover_url"]).content == b"old icon"
+        assert c.get(installed["PPSA03333"]["cover_url"]).content == b"dump icon"
+        assert installed["MOUU00001"]["cover_url"] is None
+        assert c.get("/api/v1/icons/..%2Fsecret_key").status_code == 404
 
         usb = drives[1]
         assert c.patch(f"{url}/drives/{usb['id']}", json={"is_install_target": False}).json()["is_install_target"] is False

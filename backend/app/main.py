@@ -19,7 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import __version__, config, credentials, inventory, jobs, scanner
-from .consoles import CONSOLE_APP_DIR, AdapterError
+from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError
 from .database import Base, SessionLocal, engine, get_db
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id
 
@@ -586,7 +586,7 @@ class InstalledOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     game_id: str | None
-    has_cover: bool = False
+    cover_url: str | None = None  # the library copy's cover, else the icon read from the console
     title_id: str
     title: str
     version: str | None
@@ -606,9 +606,20 @@ def list_installed(console_id: str, db: Session = Depends(get_db)):
     out = []
     for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == console_id).order_by(InstalledGame.title)):
         lib = db.get(Game, g.game_id) if g.game_id else None
+        cover = (f"/api/v1/games/{lib.id}/cover" if lib and lib.cover_path
+                 else f"/api/v1/icons/{g.title_id}" if inventory.icon_path(g.title_id).is_file() else None)
         out.append(InstalledOut.model_validate(g).model_copy(update={
-            "has_cover": bool(lib and lib.cover_path), "library_version": lib and lib.version}))
+            "cover_url": cover, "library_version": lib and lib.version}))
     return out
+
+
+@api.get("/icons/{title_id}")
+def get_icon(title_id: str):
+    """A title's icon as read from a console (inventory.refresh)."""
+    path = inventory.icon_path(title_id)
+    if not TITLE_ID.fullmatch(title_id) or not path.is_file():
+        _not_found()
+    return FileResponse(path)
 
 
 # ---------------------------------------------------------------- installs

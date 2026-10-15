@@ -98,6 +98,7 @@ class ConsoleAdapter(Protocol):
     async def get_console_info(self) -> ConsoleInfo: ...
     async def list_drives(self) -> list[DriveInfo]: ...
     async def scan_installed_games(self) -> list[InstalledGameInfo]: ...
+    async def get_icons(self, games: list[InstalledGameInfo]) -> dict[str, bytes]: ...  # title ID -> icon0.png
     async def check_space(self, drive_id: str, bytes_needed: int) -> SpaceCheckResult: ...
     async def install_package(self, package_path: str, progress_callback: ProgressCallback) -> InstallResult: ...
     # `cancel` set = stop between chunks and raise AdapterError("canceled"); the partial upload is removed.
@@ -177,6 +178,10 @@ class MockConsoleAdapter:
     async def scan_installed_games(self) -> list[InstalledGameInfo]:
         self._check()
         return [replace(g) for g in self.games]
+
+    async def get_icons(self, games: list[InstalledGameInfo]) -> dict[str, bytes]:
+        self._check()
+        return {}
 
     async def check_space(self, drive_id: str, bytes_needed: int) -> SpaceCheckResult:
         self._check()
@@ -433,6 +438,20 @@ class FTPConsoleAdapter:
 
     async def scan_installed_games(self) -> list[InstalledGameInfo]:
         return await self._run(self._games)
+
+    async def get_icons(self, games: list[InstalledGameInfo]) -> dict[str, bytes]:
+        """Each game's icon0.png: from a folder dump's sce_sys, else the appmeta folder the console keeps per title
+        (ShadowMountPlus fills it for images too)."""
+        def fetch(ftp: ftplib.FTP):
+            icons = {}
+            for g in games:
+                user = g.installed_path.split("/app/")[0] if g.install_route == "package_installer" else "/user"
+                for path in (f"{g.installed_path}/sce_sys/icon0.png", f"{user}/appmeta/{g.title_id}/icon0.png"):
+                    if data := self._get(ftp, path):
+                        icons[g.title_id] = data
+                        break
+            return icons
+        return await self._run(fetch)
 
     async def check_space(self, drive_id: str, bytes_needed: int) -> SpaceCheckResult:
         drive = next((d for d in await self.list_drives() if d.external_id == drive_id), None)

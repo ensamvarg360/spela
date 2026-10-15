@@ -79,7 +79,7 @@ export interface Drive {
 export interface InstalledGame {
   id: string;
   game_id: string | null;
-  has_cover: boolean;
+  cover_url: string | null;
   title_id: string;
   title: string;
   version: string | null;

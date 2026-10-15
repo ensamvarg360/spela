@@ -8,7 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from . import config, credentials
-from .consoles import AdapterError, ConsoleAdapter, get_adapter
+from .consoles import TITLE_ID, AdapterError, ConsoleAdapter, get_adapter
 from .database import SessionLocal
 from .models import Console, Drive, Game, InstalledGame, now
 
@@ -69,6 +69,22 @@ async def refresh(db: Session, console: Console):
     for gone in installed.values():  # no longer on the console
         db.delete(gone)
     db.commit()
+
+    # Icons for titles we have no picture of yet; kept forever, since a title's icon doesn't change.
+    need = [g for g in games if TITLE_ID.fullmatch(g.title_id) and not icon_path(g.title_id).is_file()
+            and not ((m := library.get(g.title_id)) and m.cover_path)]
+    if need:
+        try:
+            icons = await adapter.get_icons(need)
+        except AdapterError:
+            return  # the inventory is stored; icons are tried again next scan
+        icon_path("x").parent.mkdir(parents=True, exist_ok=True)
+        for tid, data in icons.items():
+            icon_path(tid).write_bytes(data)
+
+
+def icon_path(title_id: str):
+    return config.COVERS_DIR / "console" / f"{title_id}.png"
 
 
 def forget(db: Session, console_id: str):

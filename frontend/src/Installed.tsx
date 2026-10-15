@@ -222,8 +222,8 @@ export default function Installed() {
               const [label, cls] = STATUS[g.status];
               return (
                 <li key={g.id} className="tile">
-                  {g.has_cover
-                    ? <img className="cover" src={`/api/v1/games/${g.game_id}/cover`} alt="" loading="lazy" />
+                  {g.cover_url
+                    ? <img className="cover" src={g.cover_url} alt="" loading="lazy" />
                     : <div className="cover placeholder" aria-hidden>{g.title.slice(0, 1)}</div>}
                   <span className={`badge ${cls}`}>{label}</span>
                   <strong>{g.game_id ? <a href={`#/game/${g.game_id}`}>{g.title}</a> : g.title}</strong>
