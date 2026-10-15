@@ -10,8 +10,10 @@ COVERS_DIR = DATA_DIR / "covers"
 STATIC_DIR = Path(os.environ.get("STATIC_DIR", Path(__file__).parent / "static"))
 PASSWORD_FILE = DATA_DIR / "admin_password"  # delete it to reset the password
 
-# 127.0.0.1 = this PC only. Set HOST=0.0.0.0 to open it from phones etc. on your LAN (never the internet).
-HOST = os.environ.get("HOST", "127.0.0.1")
+# 127.0.0.1 = this PC only; 0.0.0.0 = also phones etc. on your LAN (never the internet).
+# The tray option "Allow other devices on my network" creates LAN_FILE; the HOST variable overrides it.
+LAN_FILE = DATA_DIR / "allow_other_devices"
+HOST = os.environ.get("HOST") or ("0.0.0.0" if LAN_FILE.exists() else "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8787"))
 
 

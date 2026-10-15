@@ -13,7 +13,7 @@ A folder is scanned with all its subfolders. System folders such as `$RECYCLE.BI
 Data (database, covers, password, `app.log`) lives in `%LOCALAPPDATA%\PS5 Local Storefront`. To move to another PC, copy that folder.
 Forgot the password? Delete `admin_password` in that folder and restart; you'll be asked to choose a new one.
 Console passwords (added under **Settings → Consoles**) are encrypted in the database with a key derived from `secret_key` in that folder, or from the `CREDENTIALS_ENCRYPTION_KEY` environment variable if you set it. If you lose or change that key, re-enter the console passwords. The key sits next to the database, so encryption protects a copied database file, not a copied data folder.
-Only this PC can reach it by default. To open it from a phone on your LAN, start it with the environment variable `HOST=0.0.0.0` (allow it through Windows Firewall when asked). Never expose it to the internet.
+Only this PC can reach it by default. To open it from a phone or another computer at home, right-click the tray icon and tick **Allow other devices on my network**. Windows asks for admin rights once, to let the app through the firewall on private networks, and the app restarts. The tray menu then shows the address to open on the other device, for example `http://192.168.0.40:8787`. If Windows treats your network as *Public*, other devices stay blocked; the app tells you how to switch it to *Private*. Never expose the app to the internet. (The `HOST` environment variable, if set, overrides the tray option.)
 
 ## Consoles
 

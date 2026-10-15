@@ -18,6 +18,7 @@ from app import config
 from app.main import APP_ID, app
 
 URL = f"http://127.0.0.1:{config.PORT}"
+APP_NAME = "PS5 Local Storefront"
 logging.basicConfig(filename=config.DATA_DIR / "app.log", level=logging.WARNING,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -40,6 +41,36 @@ def _port_owner() -> str:
             return "us" if json.load(r).get("app") == APP_ID else "other"
     except (OSError, ValueError):
         return "other"
+
+
+def _lan_url() -> str | None:
+    """The address other devices use, or None when only this PC may connect."""
+    if config.HOST == "127.0.0.1":
+        return None
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("8.8.8.8", 9))  # UDP connect sends nothing; it just picks the network card with the default route
+            return f"http://{s.getsockname()[0]}:{config.PORT}"
+        except OSError:
+            return None
+
+
+def _network_is_public() -> bool:
+    out = subprocess.run(["powershell", "-NoProfile", "-Command", "(Get-NetConnectionProfile).NetworkCategory"],
+                         capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW).stdout
+    return "Public" in out
+
+
+def _allow_through_firewall() -> bool:
+    """Adds an inbound rule for the port on private networks. Asks for admin rights; False if refused."""
+    rule = f'name="{APP_NAME}"'
+    args = (f"/c netsh advfirewall firewall delete rule {rule} >nul & netsh advfirewall firewall add rule {rule} "
+            f"dir=in action=allow protocol=TCP localport={config.PORT} profile=private")
+    return ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", args, None, 0) > 32
+
+
+def _message(text: str, flags: int = 0x40):  # MB_ICONINFORMATION
+    ctypes.windll.user32.MessageBoxW(None, text, APP_NAME, flags)
 
 
 def main():
@@ -80,9 +111,28 @@ def main():
         subprocess.Popen([*cmd, "--no-browser"], env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
         icon.stop()
 
-    icon = pystray.Icon("ps5sf", _icon_image(), f"PS5 Local Storefront\n{URL}", pystray.Menu(
+    def toggle_lan(icon):
+        if config.LAN_FILE.exists():
+            config.LAN_FILE.unlink()
+        else:
+            if not _allow_through_firewall():
+                return _message("Other devices weren't allowed: Windows needs admin rights to let them through "
+                                "the firewall.", 0x30)  # MB_ICONWARNING
+            config.LAN_FILE.touch()
+            if _network_is_public():
+                _message("Windows treats this network as Public and blocks other devices on it.\n\nIf this is your "
+                         "home network, open Settings → Network & internet → your connection, and choose Private "
+                         "network.", 0x30)
+        restart(icon)
+
+    lan_url = _lan_url()
+    icon = pystray.Icon("ps5sf", _icon_image(), f"{APP_NAME}\n{lan_url or URL}", pystray.Menu(
         pystray.MenuItem("Open", lambda: webbrowser.open(URL), default=True),
         pystray.MenuItem("Open data folder", lambda: os.startfile(config.DATA_DIR)),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Allow other devices on my network", toggle_lan, checked=lambda _: config.LAN_FILE.exists(),
+                         enabled="HOST" not in os.environ),  # the variable wins, so the option would do nothing
+        pystray.MenuItem(f"On other devices: {lan_url}", lambda: webbrowser.open(lan_url), visible=bool(lan_url)),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Restart", restart),
         pystray.MenuItem("Quit", quit_),
