@@ -74,6 +74,7 @@ label.check { flex-direction: row; align-items: center; gap: 0.4rem; color: var(
 
 .badge { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--surface-2); }
 .badge.ready { background: var(--ready); color: #04210f; }
+.badge.installed { background: var(--accent); color: #fff; }
 .badge.needs_attention { background: var(--attention); color: #2a1a00; }
 .badge.incompatible, .badge.unknown { background: var(--bad); color: #fff; }
 

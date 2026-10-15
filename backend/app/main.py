@@ -191,10 +191,15 @@ class GameOut(BaseModel):
     detection_evidence: dict
     created_at: datetime
     updated_at: datetime
+    installed: bool = False  # on any console, per its last storage scan
 
 
-def _out(g: Game) -> GameOut:
-    return GameOut.model_validate(g).model_copy(update={"has_cover": bool(g.cover_path)})
+def _out(g: Game, installed: bool = False) -> GameOut:
+    return GameOut.model_validate(g).model_copy(update={"has_cover": bool(g.cover_path), "installed": installed})
+
+
+def _installed_title_ids(db: Session) -> set[str]:
+    return set(db.scalars(select(InstalledGame.title_id)))
 
 
 class GamePatch(BaseModel):
@@ -222,12 +227,14 @@ def _game(db: Session, game_id: str) -> Game:
 @api.get("/games", response_model=list[GameOut])
 def list_games(db: Session = Depends(get_db)):
     # ponytail: returns the whole library; filtering is client-side. Paginate past a few thousand titles.
-    return [_out(g) for g in db.scalars(select(Game).order_by(Game.title))]
+    installed = _installed_title_ids(db)
+    return [_out(g, g.title_id in installed) for g in db.scalars(select(Game).order_by(Game.title))]
 
 
 @api.get("/games/{game_id}", response_model=GameOut)
 def get_game(game_id: str, db: Session = Depends(get_db)):
-    return _out(_game(db, game_id))
+    g = _game(db, game_id)
+    return _out(g, g.title_id in _installed_title_ids(db))
 
 
 @api.patch("/games/{game_id}", response_model=GameOut)

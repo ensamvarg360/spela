@@ -81,7 +81,9 @@ export default function Library() {
           <li key={g.id}>
             <a className="tile" href={`#/game/${g.id}`}>
               <Cover game={g} />
-              <span className={`badge ${g.compatibility_status}`}>{STATUS_LABEL[g.compatibility_status]}</span>
+              {g.installed
+                ? <span className="badge installed">Installed</span>
+                : <span className={`badge ${g.compatibility_status}`}>{STATUS_LABEL[g.compatibility_status]}</span>}
               <strong>{g.favorite && "★ "}{g.title}</strong>
               <span className="muted">{g.title_id ?? "No title ID"} · {formatLabel(g)} · {formatBytes(g.size_bytes)}</span>
             </a>

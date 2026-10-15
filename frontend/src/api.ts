@@ -32,6 +32,7 @@ export interface Game {
   detection_evidence: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  installed: boolean; // on any console, per its last storage scan
 }
 
 export interface Root {
