@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import inventory
-from .consoles import IMAGE_EXTS, AdapterError, DriveInfo, InstalledGameInfo
+from .consoles import IMAGE_EXTS, AdapterError, DriveInfo, InstalledGameInfo, RemovalResult
 from .database import SessionLocal
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, _id, now
 
@@ -212,12 +212,16 @@ def preview(db: Session, row: InstalledGame) -> dict:
     """Exactly what removing would delete. Removing then needs this preview's id and the title ID typed back."""
     lib = db.get(Game, row.game_id) if row.game_id else None
     reason = removal_blocker(db, row)
+    orphaned = row.status == "orphaned_icon"
     warnings = ["If the game is running on the PS5, close it first."]
-    if (row.source_path or "").lower().endswith(IMAGE_EXTS):
+    if orphaned:
+        warnings = ["Its files are already gone from the console, so this only removes its home-screen tile."]
+    elif (row.source_path or "").lower().endswith(IMAGE_EXTS):
         warnings.append("If ShadowMountPlus has the disc image mounted, the space may only come back after the PS5 restarts.")
     p = {"id": _id(), "console_id": row.console_id, "installed_game_id": row.id, "title_id": row.title_id,
          "title": row.title, "install_route": row.install_route, "source_path": row.source_path,
-         "icon_removal_required": True, "estimated_bytes_freed": row.size_bytes or (lib.size_bytes if lib else 0),
+         "icon_removal_required": True, "orphaned": orphaned,
+         "estimated_bytes_freed": 0 if orphaned else row.size_bytes or (lib.size_bytes if lib else 0),
          "save_data_retained": True, "library_backup_retained": True, "warnings": warnings,
          "allowed": reason is None, "reason": reason or "",
          "status": "awaiting_confirmation" if reason is None else "blocked", "message": "", "created": time.monotonic(),
@@ -266,7 +270,11 @@ async def _remove(removal_id: str):
             if not console:
                 raise AdapterError("not_found", "The console was deleted.")
             adapter = inventory.adapter_for(db, console)
-            result = await adapter.remove_shadowmount_source(game, progress)
+            if r["orphaned"]:  # files already gone; the helper re-checks that before removing the tile
+                result = RemovalResult(True, "")
+                progress(0, 0)
+            else:
+                result = await adapter.remove_shadowmount_source(game, progress)
             if not result.ok:
                 raise AdapterError("failed", result.message)
             r["message"] = "Removing its tile from the home screen."

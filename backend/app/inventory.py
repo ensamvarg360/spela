@@ -65,7 +65,7 @@ async def refresh(db: Session, console: Console):
         row.drive_id = rows[g.drive_external_id].id if g.drive_external_id in rows else None
         row.game_id = match.id if match else None
         newer = match and g.version and match.version and _ver(match.version) > _ver(g.version)
-        row.status = "update_available" if newer else "installed"
+        row.status = "orphaned_icon" if g.orphaned else "update_available" if newer else "installed"
     for gone in installed.values():  # no longer on the console
         db.delete(gone)
     db.commit()

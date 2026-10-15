@@ -102,6 +102,7 @@ export interface Removal {
   title_id: string;
   title: string;
   source_path: string | null;
+  orphaned: boolean; // tile only: its files are already gone
   estimated_bytes_freed: number; // 0 = unknown
   warnings: string[];
   allowed: boolean;

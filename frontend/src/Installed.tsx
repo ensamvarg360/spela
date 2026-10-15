@@ -86,11 +86,16 @@ function RemoveDialog({ consoleId, game, onClose }: { consoleId: string; game: I
     <dialog ref={ref} className="card remove" onClose={onClose} aria-labelledby="remove-title">
       <h2 id="remove-title">Remove {game.title} ({game.title_id})?</h2>
       {!p ? <p className="muted">{error || "Checking…"}</p> : !p.allowed ? <p>{p.reason}</p> : (
-        <>
+        <>{p.orphaned ? <>
+          <p>Its home-screen tile points at files that are no longer on the console:</p>
+          <code>{p.source_path}</code>
+          <p>No space is freed. Save data and the copy in your PC library are kept.</p>
+        </> : <>
           <p>This deletes the game's ShadowMountPlus files from the console:</p>
           <code>{p.source_path}</code>
           <p>Space freed: {p.estimated_bytes_freed ? `about ${formatBytes(p.estimated_bytes_freed)}` : "unknown"}. Save data and the copy in your PC library are kept.</p>
           <p className="muted">Its home-screen tile is removed too. If that fails, you'll be told to delete it on the PS5.</p>
+        </>}
           {p.warnings.map((w) => <p className="muted" key={w}>{w}</p>)}
           {p.status === "awaiting_confirmation" && (
             <form onSubmit={confirm}>

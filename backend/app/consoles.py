@@ -72,6 +72,7 @@ class InstalledGameInfo:
     installed_path: str
     source_path: str | None
     size_bytes: int
+    orphaned: bool = False  # a ShadowMountPlus tile whose files (source_path) are gone
 
 
 @dataclass
@@ -359,16 +360,38 @@ class FTPConsoleAdapter:
             pass  # unreadable metadata: the title ID stands in for the title
         return meta
 
+    def _orphan(self, ftp: ftplib.FTP, tid: str, path: str, files: dict, user: str, homebrews: dict[str, str],
+                listings: dict[str, dict]) -> InstalledGameInfo | None:
+        """The ShadowMountPlus tile at `path` when the files its .lnk names are gone; same rule as the helper's
+        uninstall_tile (payload/main.c). Judged only for a homebrew folder on a plugged-in drive: an unplugged
+        USB drive's games aren't orphans."""
+        lnk = (ftp.get(f"{path}/mount_img.lnk") if "mount_img.lnk" in files else None) or ftp.get(f"{path}/mount.lnk")
+        source = ((lnk or b"").decode(errors="replace").splitlines() or [""])[0]
+        parent, _, name = source.rpartition("/")
+        if parent not in homebrews or not name:
+            return None
+        if parent not in listings:
+            listings[parent] = ftp.ls(parent)
+        if name in listings[parent]:
+            return None
+        meta = self._meta(tid, ftp.get(f"{user}/appmeta/{tid}/param.json"))
+        return InstalledGameInfo(tid, meta.title or tid, meta.version, "shadowmountplus", homebrews[parent],
+                                 path, source, 0, orphaned=True)
+
     def _games(self, ftp: ftplib.FTP) -> list[InstalledGameInfo]:
-        games = []
-        for drive, user, homebrew in self._drives(ftp):
+        games, drives, listings = [], self._drives(ftp), {}
+        homebrews = {hb: d.external_id for d, _, hb in drives}
+        for drive, user, homebrew in drives:
             for tid in ftp.ls(f"{user}/app"):
                 if not TITLE_ID.fullmatch(tid) or tid.startswith("NPXS"):  # NPXS = system apps
                     continue
                 path = f"{user}/app/{tid}"
                 files = ftp.ls(path)
-                # mount.lnk = ShadowMountPlus stub, listed from its homebrew source below; no app.pkg = homebrew launcher
-                if "mount.lnk" in files or "app.pkg" not in files:
+                if "mount.lnk" in files:  # ShadowMountPlus stub, listed from its homebrew source below unless it's gone
+                    if orphan := self._orphan(ftp, tid, path, files, user, homebrews, listings):
+                        games.append(orphan)
+                    continue
+                if "app.pkg" not in files:  # homebrew launcher
                     continue
                 param = "param.sfo" if tid.startswith("CUSA") else "param.json"
                 meta = self._meta(tid, ftp.get(f"{user}/appmeta/{tid}/{param}"))
@@ -577,7 +600,7 @@ class FTPConsoleAdapter:
         if (homebrew not in {hb for *_, hb in FTP_DRIVES} or not name or name.startswith(".")
                 or any(ch in name for ch in "*?[]") or name == CONSOLE_APP_TITLE_ID):
             raise AdapterError("path_outside_allowlist", f"Won't delete {path}: it isn't a game in a homebrew folder.")
-        if not any(g.source_path == path and g.title_id == game.title_id for g in self._games(ftp)):
+        if not any(g.source_path == path and g.title_id == game.title_id and not g.orphaned for g in self._games(ftp)):
             raise AdapterError("not_found", f"{path} isn't on the console any more, or holds a different game.")
         entries = ftp.ls(homebrew)
         is_dir, size = entries[name]

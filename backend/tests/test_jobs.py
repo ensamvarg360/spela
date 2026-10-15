@@ -348,3 +348,38 @@ def test_uninstall_tile_left(ps5, monkeypatch):
         status, tile_left, message = text.rstrip("\n").split("\t")
         assert (status, tile_left) == ("success", "1") and "delete it there" in message and "too old" in message
         assert client.get(f"/api/v1/console-app/removals/{p['id']}").status_code == 401
+
+
+def test_orphaned_tile(ps5, monkeypatch):
+    """A ShadowMountPlus tile whose files are gone shows as orphaned, and removing it only removes the tile."""
+    root, port, lib = ps5
+    write(root / "user/app/PPSA05555/mount.lnk", b"/data/homebrew/Gone PPSA05555\n")
+    write(root / "user/appmeta/PPSA05555/param.json", PARAM_JSON.replace(b"PPSA02222", b"PPSA05555"))
+    write(root / "user/app/PPSA06666/mount.lnk", b"/mnt/usb1/homebrew/Away PPSA06666")  # drive unplugged: not judged
+    write(root / "user/app/PPSA07777/mount.lnk", b"/data/homebrew/Here PPSA07777")  # still there: listed from homebrew
+    write(root / "data/homebrew/Here PPSA07777/sce_sys/param.json", PARAM_JSON.replace(b"PPSA02222", b"PPSA07777"))
+    tiles = []
+    monkeypatch.setattr(FTPConsoleAdapter, "_remove_tile", lambda self, tid: tiles.append(tid) or RemovalResult(True, ""))
+    with TestClient(app) as client:
+        login(client)
+        with SessionLocal() as db:
+            c, _ = _setup(db, port, lib)
+            rows = {g.title_id: g for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
+        assert set(rows) == {"PPSA01111", "PPSA05555", "PPSA07777"}
+        orphan = rows["PPSA05555"]
+        assert (orphan.status, orphan.source_path, orphan.installed_path) == \
+            ("orphaned_icon", "/data/homebrew/Gone PPSA05555", "/user/app/PPSA05555")
+        assert rows["PPSA07777"].status == "installed"
+
+        url = f"/api/v1/consoles/{c.id}/uninstall"
+        p = client.post(f"{url}/preview", json={"installed_game_id": orphan.id}).json()
+        assert p["allowed"] and p["orphaned"] and p["estimated_bytes_freed"] == 0
+        assert client.post(url, json={"removal_id": p["id"], "confirm_title_id": "PPSA05555"}).status_code == 202
+        for _ in range(50):
+            j = client.get(f"/api/v1/removal-jobs/{p['id']}").json()
+            if j["status"] != "removing":
+                break
+            asyncio.run(asyncio.sleep(0.1))
+        assert j["status"] == "success", j
+        assert tiles == ["PPSA05555"]
+        assert (root / "data/homebrew/Here PPSA07777").exists()

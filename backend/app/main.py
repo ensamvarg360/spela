@@ -631,6 +631,7 @@ class RemovalOut(BaseModel):
     install_route: str
     source_path: str | None
     icon_removal_required: bool
+    orphaned: bool = False
     estimated_bytes_freed: int
     save_data_retained: bool
     library_backup_retained: bool
