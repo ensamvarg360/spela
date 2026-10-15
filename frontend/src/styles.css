@@ -128,3 +128,6 @@ summary { cursor: pointer; color: var(--muted); }
   .detail aside { position: static; max-width: 260px; }
   .roots li { grid-template-columns: 1fr; }
 }
+.jobs { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.jobs li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+.jobs progress { flex: 1 1 200px; }

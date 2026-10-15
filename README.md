@@ -1,12 +1,12 @@
 # PS5 Local Storefront
 
 Self-hosted, single-user catalog for your own PS5 game backups. LAN-only; never expose it to the internet.
-Full spec: [project.md](project.md). **Status:** Phases 1–3 (foundation, library scanner, console integration). The app can read a PS5's drives and installed games over FTP, but can't install or remove anything yet.
+Full spec: [project.md](project.md). **Status:** Phases 1–3 plus installing through ShadowMountPlus, and a PS5 app. The app can copy folder dumps and disc images to a PS5, but can't install `.pkg` files or remove anything yet.
 
 ## Run (Windows)
 
-Double-click **PS5 Local Storefront.exe**. It opens in your browser at http://127.0.0.1:8787 and runs in the background with an icon in the system tray.
-Right-click the tray icon to **Open** it, **Open data folder**, **Restart** or **Quit**. Starting the .exe again while it's running just opens the browser.
+Double-click **PS5 Local Storefront.exe**. It opens in its own window (Windows' built-in WebView2, not your browser) and runs in the background with an icon in the system tray. Closing the window keeps it running in the tray.
+Right-click the tray icon to **Open** it, **Open data folder**, **Restart** or **Quit**. Starting the .exe again while it's running brings its window back. The address http://127.0.0.1:8787 still works in a browser too.
 The first time, choose an admin password. Then go to **Settings**, click **Browse…**, pick a folder or a whole drive (for example `G:\`), and click **Scan now**.
 A folder is scanned with all its subfolders. System folders such as `$RECYCLE.BIN` and `System Volume Information` are skipped.
 
@@ -19,7 +19,7 @@ Only this PC can reach it by default. To open it from a phone or another compute
 
 Add your PS5 under **Settings → Consoles** (connection **FTP**, the port of your FTP payload, often 2121 or 1337), then open **Installed**.
 The app checks each console every 15 seconds and reads its drives and installed games when it comes online; **Refresh inventory** reads them again.
-*Degraded* means the console answers but its FTP server isn't running or rejected the password; *Offline* means it doesn't answer at all.
+*Rest mode* means the console is asleep (detected only when the PS5's rest mode setting *Stay connected to the internet* is on); *Degraded* means the console is on but its FTP server isn't running or rejected the password; *Offline* means it doesn't answer at all.
 Installed games are matched to your library by title ID, and marked *Update in library* when your library holds a newer version.
 
 FTP can't report firmware or drive space, so the app also uses its own **helper payload**. When the console is online, click **Install helper** on the **Installed** page. The app sends the helper through the console's ELF loader on port 9021 (the same loader you used for the FTP server), and the console shows a notification when the helper starts. The helper then reports firmware, model, and the size and free space of each drive on port 7735. Like the FTP server, it stops when the console restarts, so install it again after a reboot.
@@ -27,6 +27,19 @@ The helper's version always equals the app's version. If they differ, the button
 What the app can't tell yet: the size of folder dumps.
 The console paths it reads (`/user/app`, `/data/homebrew`, `/mnt/usbN`, `/mnt/extN`) are in `FTP_DRIVES` in [backend/app/consoles.py](backend/app/consoles.py) and have been checked against ftpsrv v0.21. A drive shows up only when its mount point has something in it.
 Set `CONSOLE_CHECK_SECONDS=0` to turn the checks off.
+
+## Installing games
+
+Open a game in the library and click **Install**. The app copies it over FTP into the `homebrew` folder of a drive where **Allow installs here** is ticked (the one with the most free space, unless you pick one). ShadowMountPlus then adds it to the home screen.
+It copies under a hidden `.<name>.partial` name and renames it when the copy is complete, so ShadowMountPlus never sees half a game. Installs run one at a time; follow them, or cancel them, on the **Installed** page.
+Only folder dumps and disc images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) can be installed: the console has no package installer for `.pkg` files, and archives must be extracted first.
+The helper must be running, so the app can check free space first. If the app or the connection stops mid-copy, the install shows *Interrupted*; queue it again, and the leftover partial copy is replaced.
+
+## PS5 app
+
+**Install PS5 app** on the **Installed** page puts *PS5 Local Storefront* on the console's home screen (in `/data/homebrew/PPSA99787`, where ShadowMountPlus finds it). It shows the games on your PC, and Cross queues an install, the same as clicking Install on the PC.
+The PS5 must be able to reach this PC, so tick **Allow other devices on my network** in the tray menu first. The app is paired with this PC: the PC writes its address and a key into the app's `assets/server.txt`. The key only lets that console see the library and queue installs to itself. If the PC's address changes, click **Update PS5 app** again. Deleting the console on the PC revokes the key.
+The app is built from [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) (GPL-3.0-or-later) with our screen in [console-app/](console-app/). Run `./console-app/build.ps1` (needs Docker Desktop) after changing it: it rebuilds `backend/app/console_app/PPSA99787`, which is committed. `./console-app/build.ps1 -Preview` renders the screen on the PC into `console-app/preview/`, against a fake PC app.
 
 ## Versions
 

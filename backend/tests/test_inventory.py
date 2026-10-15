@@ -155,6 +155,17 @@ def test_ftp_adapter_failures(ps5):
         closed = s.getsockname()[1]
     assert asyncio.run(adapter(closed).connect()).helper_status["ftp"] == "helper_unreachable"
 
+    # rest mode: FTP refused, but the discovery probe answers "620 Server Standby"; "200 Ok" means awake
+    for reply, state in ((b"HTTP/1.1 620 Server Standby\nhost-type:PS5\n", "standby"), (b"HTTP/1.1 200 Ok\n", "degraded")):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as ddp:
+            ddp.bind(("127.0.0.1", 0))
+            a = adapter(closed)
+            a.DDP_PORT = ddp.getsockname()[1]
+            t = threading.Thread(target=lambda: (lambda d, addr: ddp.sendto(reply, addr))(*ddp.recvfrom(2048)))
+            t.start()
+            assert asyncio.run(a.connect()).state == state
+            t.join()
+
 
 def test_inventory_sync_via_api(ps5):
     root, port = ps5

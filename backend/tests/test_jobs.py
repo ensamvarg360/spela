@@ -1,0 +1,187 @@
+"""Install engine: FTP staging into ShadowMountPlus folders and the job runner, against a real local FTP server."""
+import asyncio
+import threading
+from http.server import ThreadingHTTPServer
+
+import pytest
+from conftest import EXFAT, PARAM_JSON, write
+from fastapi.testclient import TestClient
+from pyftpdlib.authorizers import DummyAuthorizer
+from pyftpdlib.handlers import FTPHandler
+from pyftpdlib.servers import FTPServer
+from sqlalchemy import delete, select
+from test_console_profiles import login
+from test_inventory import FakeHelper
+
+from app import credentials, inventory, jobs
+from app.consoles import AdapterError, DriveInfo, FTPConsoleAdapter
+from app.database import Base, SessionLocal, engine
+from app.main import app
+from app.models import Console, Drive, Game, InstalledGame, InstallJob
+
+
+@pytest.fixture(autouse=True)
+def forget_consoles():
+    """The test database is shared; other tests expect no consoles left over."""
+    yield
+    with SessionLocal() as db:
+        for model in (InstallJob, InstalledGame, Drive, Console):
+            db.execute(delete(model))
+        db.commit()
+
+
+@pytest.fixture
+def ps5(tmp_path, monkeypatch):
+    Base.metadata.create_all(engine)  # these tests run jobs without starting the app
+    root = tmp_path / "ps5"
+    write(root / "user/app/PPSA01111/app.pkg", b"x")
+    (root / "data/homebrew").mkdir(parents=True)
+    write(root / "mnt/usb0/something", b"x")  # a USB drive without a homebrew folder yet
+    auth = DummyAuthorizer()
+    auth.add_user("ps5", "pw", str(root), perm="elradfmw")
+    handler = type("H", (FTPHandler,), {"authorizer": auth})
+    server = FTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, kwargs={"timeout": 0.2}, daemon=True).start()
+    helper = ThreadingHTTPServer(("127.0.0.1", 0), FakeHelper)  # reports free space
+    threading.Thread(target=helper.serve_forever, daemon=True).start()
+    monkeypatch.setattr(FTPConsoleAdapter, "HELPER_PORT", helper.server_address[1])
+    monkeypatch.setattr(FTPConsoleAdapter, "BLOCK", 16)  # many chunks from tiny files
+
+    lib = tmp_path / "lib"
+    write(lib / "Dump PPSA03333/sce_sys/param.json", PARAM_JSON.replace(b"PPSA02222", b"PPSA03333"))
+    write(lib / "Dump PPSA03333/eboot.bin", b"e" * 100)
+    write(lib / "Dump PPSA03333/sce_sys/about/right.sprx", b"s" * 50)
+    write(lib / "Racer PPSA04444.exfat", EXFAT)
+    yield root, server.socket.getsockname()[1], lib
+    server.close_all()
+    helper.shutdown()
+
+
+def adapter(port):
+    return FTPConsoleAdapter(Console(ip_address="127.0.0.1", port=port, username="ps5"), "pw")
+
+
+INTERNAL = DriveInfo("internal", "Internal SSD", "/user", "internal", 0, 0)
+USB = DriveInfo("usb0", "USB drive 0", "/mnt/usb0", "usb", 0, 0)
+
+
+def test_stage_folder_dump_and_image(ps5):
+    root, port, lib = ps5
+    a, progress = adapter(port), []
+    r = asyncio.run(a.stage_shadowmount_content(str(lib / "Dump PPSA03333"), INTERNAL, lambda d, t: progress.append((d, t))))
+    assert r.ok and r.installed.installed_path == "/data/homebrew/Dump PPSA03333"
+    assert (root / "data/homebrew/Dump PPSA03333/sce_sys/about/right.sprx").read_bytes() == b"s" * 50
+    assert progress[-1] == (len(PARAM_JSON) + 150, len(PARAM_JSON) + 150) and len(progress) > 3
+    assert [p.name for p in (root / "data/homebrew").iterdir()] == ["Dump PPSA03333"]  # no .partial left
+
+    asyncio.run(a.stage_shadowmount_content(str(lib / "Racer PPSA04444.exfat"), USB, lambda d, t: None))
+    assert (root / "mnt/usb0/homebrew/Racer PPSA04444.exfat").read_bytes() == EXFAT
+
+    with pytest.raises(AdapterError) as e:
+        asyncio.run(a.stage_shadowmount_content(str(lib / "Racer PPSA04444.exfat"), USB, lambda d, t: None))
+    assert e.value.code == "already_installed"
+
+
+def test_stage_cancel_and_leftovers(ps5):
+    root, port, lib = ps5
+    write(root / "data/homebrew/.Dump PPSA03333.partial/old", b"stale")  # an interrupted earlier attempt
+    stop = threading.Event()
+
+    def progress(done, total):
+        if done > 60:
+            stop.set()
+
+    with pytest.raises(AdapterError) as e:
+        asyncio.run(adapter(port).stage_shadowmount_content(str(lib / "Dump PPSA03333"), INTERNAL, progress, stop))
+    assert e.value.code == "canceled"
+    assert list((root / "data/homebrew").iterdir()) == []  # partial cleaned, stale one too
+
+    with pytest.raises(ValueError):  # the cleanup refuses anything that isn't our own partial upload
+        FTPConsoleAdapter._rm_partial(None, "/data/homebrew/Real Game")
+
+
+def _setup(db, port, lib, *formats):
+    c = Console(name="PS5", ip_address="127.0.0.1", connection_type="ftp", port=port, username="ps5")
+    db.add(c)
+    credentials.set_password(db, c, "pw")
+    games = [Game(title=p.name, title_id=None, format=f, source_path=str(p), source_fingerprint="x",
+                  size_bytes=200, compatibility_status="ready") for p, f in formats]
+    db.add_all(games)
+    db.commit()
+    asyncio.run(inventory.refresh(db, c))  # creates the drive rows
+    inventory.record(c.id, "online")
+    return c, games
+
+
+def test_job_runs_to_success_then_blocks_reinstall(ps5):
+    root, port, lib = ps5
+    with SessionLocal() as db:
+        c, (dump, pkg) = _setup(db, port, lib, (lib / "Dump PPSA03333", "folder_dump"), (lib / "x.pkg", "ps5_pkg"))
+        dump.title_id = "PPSA03333"
+        db.commit()
+        assert "package installer" in jobs.blocker(db, c, pkg)
+
+        job = jobs.queue(db, c, dump)
+        asyncio.run(jobs.run(job.id))
+        db.expire_all()
+        assert (job.status, job.progress, job.bytes_transferred) == ("success", 1.0, len(PARAM_JSON) + 150), job.message
+        # largest free space wins: usb0 (612 GiB) over internal (200 GiB)
+        assert db.get(Drive, job.target_drive_id).external_id == "usb0"
+        assert (root / "mnt/usb0/homebrew/Dump PPSA03333/eboot.bin").exists()
+        assert db.scalar(select(InstalledGame).where(InstalledGame.console_id == c.id, InstalledGame.title_id == "PPSA03333"))
+        assert jobs.blocker(db, c, dump) == "Already installed on this console."
+
+
+def test_job_failures(ps5, monkeypatch):
+    root, port, lib = ps5
+    with SessionLocal() as db:
+        c, (image,) = _setup(db, port, lib, (lib / "Racer PPSA04444.exfat", "image"))
+        image.size_bytes = 10 * 1024**4  # 10 TiB: fits nowhere
+        job = jobs.queue(db, c, image)
+        with pytest.raises(ValueError, match="Already queued"):
+            jobs.queue(db, c, image)
+        asyncio.run(jobs.run(job.id))
+        db.expire_all()
+        assert (job.status, job.error_detail["error"]) == ("failed", "no_space")
+
+        image.size_bytes = 10
+
+        def drop(*args):
+            raise AdapterError("connection_lost", "The FTP connection failed.")
+        monkeypatch.setattr(FTPConsoleAdapter, "_stage_or_clean", lambda self, *a: drop())
+        job = jobs.queue(db, c, image)
+        asyncio.run(jobs.run(job.id))
+        db.expire_all()
+        assert job.status == "interrupted"
+
+        job = jobs.queue(db, c, image)
+        assert jobs.cancel(db, job) and job.status == "canceled"
+        assert not jobs.cancel(db, job)
+
+        job = jobs.queue(db, c, image)
+        job.status = "transferring"  # the app stopped mid-copy
+        db.commit()
+        jobs.recover()
+        db.expire_all()
+        assert job.status == "interrupted"
+
+
+def test_install_api(ps5):
+    _, port, lib = ps5
+    with TestClient(app) as client:
+        login(client)
+        with SessionLocal() as db:
+            c, (image,) = _setup(db, port, lib, (lib / "Racer PPSA04444.exfat", "image"))
+        r = client.post(f"/api/v1/consoles/{c.id}/install", json={"game_id": image.id})
+        assert r.status_code == 201, r.text
+        job_id = r.json()["id"]
+        assert client.post(f"/api/v1/consoles/{c.id}/install", json={"game_id": image.id}).json()["error"] == "cannot_install"
+        assert client.delete(f"/api/v1/consoles/{c.id}").status_code == 409  # job active
+        for _ in range(50):  # the app's worker runs it
+            j = client.get(f"/api/v1/jobs/{job_id}").json()
+            if j["status"] not in jobs.ACTIVE:
+                break
+            asyncio.run(asyncio.sleep(0.1))
+        assert j["status"] == "success", j
+        assert client.get(f"/api/v1/consoles/{c.id}/jobs").json()[0]["title"] == "Racer PPSA04444.exfat"
+        assert client.post(f"/api/v1/jobs/{job_id}/cancel").status_code == 409

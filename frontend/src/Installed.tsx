@@ -1,12 +1,69 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, appVersion, formatBytes, type Console, type ConsoleState, type Drive, type InstalledGame } from "./api";
+import { api, appVersion, formatBytes, JOB_ACTIVE, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus } from "./api";
+
+const JOB_LABEL: Record<JobStatus, [string, string]> = {
+  queued: ["Waiting", "unknown"], preflight: ["Checking", "unknown"], transferring: ["Copying", "needs_attention"],
+  registering: ["Finishing", "needs_attention"], success: ["Installed", "ready"], failed: ["Failed", "incompatible"],
+  canceled: ["Canceled", "unknown"], interrupted: ["Interrupted", "incompatible"],
+};
+
+/** Installs on this console: polls every 2 s while one is running. `onDone` re-reads the inventory. */
+function Jobs({ consoleId, onDone }: { consoleId: string; onDone: () => void }) {
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const active = jobs.some((j) => JOB_ACTIVE.includes(j.status));
+
+  useEffect(() => {
+    let wasActive = false;
+    const load = () => api<Job[]>(`/consoles/${consoleId}/jobs`).then((js) => {
+      const now = js.some((j) => JOB_ACTIVE.includes(j.status));
+      if (wasActive && !now) onDone();
+      wasActive = now;
+      setJobs(js);
+    }, () => {});
+    load();
+    const t = setInterval(load, active ? 2000 : 15000);
+    return () => clearInterval(t);
+  }, [consoleId, active]);
+
+  const recent = jobs.filter((j) => JOB_ACTIVE.includes(j.status) || Date.now() - utc(j.created_at).getTime() < 86400e3);
+  if (!recent.length) return null;
+  const cancel = (j: Job) => api<Job>(`/jobs/${j.id}/cancel`, { method: "POST" }).then((nj) => setJobs((js) => js.map((x) => (x.id === nj.id ? nj : x))), () => {});
+
+  return (
+    <section className="card">
+      <h2>Installs</h2>
+      <ul className="jobs">
+        {recent.map((j) => {
+          const [label, cls] = JOB_LABEL[j.status];
+          return (
+            <li key={j.id}>
+              <span className={`badge ${cls}`}>{label}</span>
+              <strong><a href={`#/game/${j.game_id}`}>{j.title}</a></strong>
+              {j.status === "transferring" && (
+                <>
+                  <progress max={1} value={j.progress} />
+                  <span className="muted">
+                    {formatBytes(j.bytes_transferred)} of {formatBytes(j.total_bytes)} · {formatBytes(j.transfer_rate_bps)}/s
+                    {j.eta_seconds != null && ` · ${Math.ceil(j.eta_seconds / 60)} min left`}
+                  </span>
+                </>
+              )}
+              <span className="muted">{j.message}</span>
+              {JOB_ACTIVE.includes(j.status) && <button className="small secondary" onClick={() => cancel(j)}>Cancel</button>}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
 
 // Reuses the library badge colours.
 export const STATE_BADGE: Record<ConsoleState, string> = {
-  online: "ready", degraded: "needs_attention", offline: "incompatible", disabled: "unknown", unknown: "unknown",
+  online: "ready", standby: "unknown", degraded: "needs_attention", offline: "incompatible", disabled: "unknown", unknown: "unknown",
 };
 const STATE_LABEL: Record<ConsoleState, string> = {
-  online: "Online", degraded: "Degraded", offline: "Offline", disabled: "Disabled", unknown: "Not checked yet",
+  online: "Online", standby: "Rest mode", degraded: "Degraded", offline: "Offline", disabled: "Disabled", unknown: "Not checked yet",
 };
 const ROUTE_LABEL = { package_installer: "Package", shadowmountplus: "ShadowMountPlus", unknown: "Unknown" };
 const STATUS = {
@@ -18,7 +75,8 @@ const STATUS = {
 } as const;
 
 // SQLite drops the zone from stored UTC times; without a "Z" the browser would read them as local time.
-const when = (t: string | null) => (t ? new Date(/(Z|[+-]\d\d:\d\d)$/.test(t) ? t : t + "Z").toLocaleString() : "Never");
+const utc = (t: string) => new Date(/(Z|[+-]\d\d:\d\d)$/.test(t) ? t : t + "Z");
+const when = (t: string | null) => (t ? utc(t).toLocaleString() : "Never");
 const bytes = (n: number) => (n ? formatBytes(n) : "Unknown");
 
 export default function Installed() {
@@ -68,6 +126,8 @@ export default function Installed() {
   const updates = games.filter((g) => g.status === "update_available").length;
   const helper = c.helper_status.helper; // "missing", a version, or absent before the first check
   const helperOk = !!version && helper === version;
+  const consoleApp = c.helper_status.console_app; // same: "missing", a version, or absent
+  const consoleAppOk = !!version && consoleApp === version;
 
   async function act(path: string) {
     setBusy(true);
@@ -113,13 +173,23 @@ export default function Installed() {
                 onClick={() => act("helper")}>{!helper || helper === "missing" ? "Install helper" : "Update helper"}</button>
             )}
           </dd>
-          <dt>Connections</dt><dd>{Object.entries(c.helper_status).filter(([k]) => k !== "banner" && k !== "helper").map(([k, v]) => `${k}: ${v}`).join(", ") || "Unknown"}</dd>
+          <dt>PS5 app</dt>
+          <dd>
+            {!consoleApp || consoleApp === "missing" ? "Not installed" : `v${consoleApp}`}
+            {!consoleAppOk && (
+              <button className="small" disabled={busy || c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
+                onClick={() => act("console-app")}>{!consoleApp || consoleApp === "missing" ? "Install PS5 app" : "Update PS5 app"}</button>
+            )}
+          </dd>
+          <dt>Connections</dt><dd>{Object.entries(c.helper_status).filter(([k]) => !["banner", "helper", "console_app"].includes(k)).map(([k, v]) => `${k}: ${v}`).join(", ") || "Unknown"}</dd>
           <dt>Last seen</dt><dd>{when(c.last_seen_at)}</dd>
           <dt>Last inventory</dt><dd>{when(c.last_inventory_scan_at)}</dd>
           <dt>Installed</dt><dd>{games.length} game{games.length === 1 ? "" : "s"}{updates ? ` · ${updates} with a newer version in your library` : ""}</dd>
         </dl>
         {error && <p className="error" role="alert">{error}</p>}
       </section>
+
+      <Jobs consoleId={c.id} onDone={() => loadInventory(c.id)} />
 
       {drives.length > 0 && (
         <ul className="drives">

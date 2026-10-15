@@ -1,6 +1,53 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, formatBytes, formatLabel, SOURCE_LABEL, STATUS_LABEL, type Game } from "./api";
+import { api, formatBytes, formatLabel, SOURCE_LABEL, STATUS_LABEL, type Console, type Drive, type Game, type Job } from "./api";
 import { Cover } from "./Library";
+
+/** Queues an install on a console; the job shows up on the Installed page. */
+function Install({ game }: { game: Game }) {
+  const [consoles, setConsoles] = useState<Console[]>([]);
+  const [cid, setCid] = useState("");
+  const [drives, setDrives] = useState<Drive[]>([]);
+  const [did, setDid] = useState("");
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+
+  useEffect(() => {
+    api<Console[]>("/consoles").then((cs) => {
+      setConsoles(cs);
+      setCid((cs.find((c) => c.enabled) ?? cs[0])?.id ?? "");
+    }, () => {});
+  }, []);
+  useEffect(() => {
+    setDid("");
+    if (cid) api<Drive[]>(`/consoles/${cid}/drives`).then((ds) => setDrives(ds.filter((d) => d.is_install_target)), () => setDrives([]));
+  }, [cid]);
+
+  if (!consoles.length) return null;
+
+  async function install() {
+    try {
+      await api<Job>(`/consoles/${cid}/install`, { json: { game_id: game.id, drive_id: did || null } });
+      setMsg({ text: "Queued. Follow it on the Installed page." });
+    } catch (e) {
+      setMsg({ text: (e as Error).message, error: true });
+    }
+  }
+
+  return (
+    <div className="toolbar">
+      {consoles.length > 1 && (
+        <select aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
+          {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      )}
+      <select aria-label="Drive" value={did} onChange={(e) => setDid(e.target.value)}>
+        <option value="">Drive with the most free space</option>
+        {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
+      </select>
+      <button onClick={install}>Install</button>
+      {msg && <span className={msg.error ? "error" : "muted"} role="status">{msg.text}{!msg.error && <> <a href="#/installed">Open</a></>}</span>}
+    </div>
+  );
+}
 
 const TEXT_FIELDS = [
   ["title", "Title"],
@@ -71,6 +118,7 @@ export default function GameDetail({ id }: { id: string }) {
           <strong>{STATUS_LABEL[game.compatibility_status]}</strong>
           {game.compatibility_reason && <span> — {game.compatibility_reason}</span>}
         </div>
+        <Install game={game} />
 
         {(game.metadata_confidence === "low" || game.metadata_confidence === "unknown") && (
           <div className="panel needs_attention" role="alert">

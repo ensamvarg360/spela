@@ -10,5 +10,6 @@ if (-not (Test-Path $venv)) { python -m venv $venv }
 Push-Location "$PSScriptRoot\backend"
 & "$venv\Scripts\python" -m PyInstaller --noconfirm --onefile --windowed --name "PS5 Local Storefront" `
     --distpath "$PSScriptRoot\dist" --workpath "$PSScriptRoot\build" --specpath "$PSScriptRoot\build" `
-    --add-data "$PSScriptRoot\frontend\dist;app/static" --add-data "$PSScriptRoot\backend\app\payload;app/payload" --collect-submodules uvicorn --collect-submodules pystray launcher.py
+    --add-data "$PSScriptRoot\frontend\dist;app/static" --add-data "$PSScriptRoot\backend\app\payload;app/payload" `
+    --add-data "$PSScriptRoot\backend\app\console_app;app/console_app" --collect-submodules uvicorn --collect-submodules pystray launcher.py
 Pop-Location

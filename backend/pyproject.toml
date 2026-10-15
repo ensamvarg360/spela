@@ -9,6 +9,7 @@ dependencies = [
   "itsdangerous>=2.2",
   "python-multipart>=0.0.9",
   "pystray>=0.19",  # tray icon (launcher.py)
+  "pywebview>=5",  # the app's window, on Windows' built-in WebView2 (launcher.py)
   "pillow>=10",
   "cryptography>=43",  # Fernet for console credentials
 ]
@@ -18,7 +19,7 @@ test = ["pytest>=8", "httpx>=0.27", "pyftpdlib>=2"]
 
 [tool.setuptools]
 packages = ["app"]
-package-data = {app = ["payload/*.elf"]}
+package-data = {app = ["payload/*.elf", "console_app/**/*"]}
 
 [tool.setuptools.dynamic]
 version = {attr = "app.__version__"}

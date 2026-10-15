@@ -61,7 +61,7 @@ export interface Console {
   status_message: string;
 }
 
-export type ConsoleState = "online" | "degraded" | "offline" | "disabled" | "unknown";
+export type ConsoleState = "online" | "standby" | "degraded" | "offline" | "disabled" | "unknown";
 
 export interface Drive {
   id: string;
@@ -91,6 +91,27 @@ export interface InstalledGame {
   size_bytes: number;
   status: "installed" | "update_available" | "partially_installed" | "orphaned_icon" | "unknown";
   last_verified_at: string | null;
+}
+
+export type JobStatus = "queued" | "preflight" | "transferring" | "registering" | "success" | "failed" | "canceled" | "interrupted";
+export const JOB_ACTIVE: JobStatus[] = ["queued", "preflight", "transferring", "registering"];
+
+export interface Job {
+  id: string;
+  console_id: string;
+  game_id: string;
+  title: string;
+  target_drive_id: string | null;
+  status: JobStatus;
+  progress: number; // 0..1
+  bytes_transferred: number;
+  total_bytes: number;
+  transfer_rate_bps: number;
+  eta_seconds: number | null;
+  message: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 export interface ScanStatus {

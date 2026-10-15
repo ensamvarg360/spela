@@ -1,4 +1,5 @@
-"""Entry point for the Windows .exe: serve the app in the background, control it from a tray icon."""
+"""Entry point for the Windows .exe: serve the app in the background and show it in its own window
+(WebView2, built into Windows), with a tray icon. Closing the window hides it; Quit is in the tray menu."""
 import ctypes
 import json
 import logging
@@ -7,11 +8,13 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 import webbrowser
 
 import pystray
 import uvicorn
+import webview
 from PIL import Image, ImageDraw
 
 from app import config
@@ -73,10 +76,20 @@ def _message(text: str, flags: int = 0x40):  # MB_ICONINFORMATION
     ctypes.windll.user32.MessageBoxW(None, text, APP_NAME, flags)
 
 
+def _show_running_window() -> bool:
+    """Brings the window of the copy that's already running to the front, even when it's hidden in the tray."""
+    hwnd = ctypes.windll.user32.FindWindowW(None, APP_NAME)
+    if not hwnd:
+        return False
+    ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE: shows it, un-minimised
+    ctypes.windll.user32.SetForegroundWindow(hwnd)
+    return True
+
+
 def main():
     owner = _port_owner()
     if owner == "us":  # already running: just show it
-        webbrowser.open(URL)
+        _show_running_window() or webbrowser.open(URL)
         return
     if owner == "other":
         ctypes.windll.user32.MessageBoxW(None, f"Port {config.PORT} is already in use by another program, so PS5 Local "
@@ -95,21 +108,38 @@ def main():
             icon.notify(f"Couldn't start. Details are in {config.DATA_DIR / 'app.log'}", "PS5 Local Storefront")
 
     thread = threading.Thread(target=serve)
+    window = webview.create_window(APP_NAME, html="<body style='background:#0b0e1a'></body>",
+                                   width=1280, height=860, min_size=(720, 480))
+    quitting = False
+
+    def on_closing():
+        if quitting:
+            return True
+        window.hide()  # keep running in the tray
+        return False  # cancels the close
+
+    def open_window():
+        window.show()
+        window.restore()
 
     def stop():
+        nonlocal quitting
+        quitting = True
         server.should_exit = True
         thread.join()
 
     def quit_(icon):
         stop()
         icon.stop()
+        window.destroy()  # ends webview.start() below, and with it the program
 
     def restart(icon):
         stop()  # free the port before the new instance checks it
         cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, __file__]
         # A one-file .exe must not reuse this instance's unpacked files, which are deleted when it exits.
-        subprocess.Popen([*cmd, "--no-browser"], env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+        subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
         icon.stop()
+        window.destroy()
 
     def toggle_lan(icon):
         if config.LAN_FILE.exists():
@@ -127,7 +157,7 @@ def main():
 
     lan_url = _lan_url()
     icon = pystray.Icon("ps5sf", _icon_image(), f"{APP_NAME}\n{lan_url or URL}", pystray.Menu(
-        pystray.MenuItem("Open", lambda: webbrowser.open(URL), default=True),
+        pystray.MenuItem("Open", open_window, default=True),
         pystray.MenuItem("Open data folder", lambda: os.startfile(config.DATA_DIR)),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Allow other devices on my network", toggle_lan, checked=lambda _: config.LAN_FILE.exists(),
@@ -138,9 +168,17 @@ def main():
         pystray.MenuItem("Quit", quit_),
     ))
     thread.start()
-    if "--no-browser" not in sys.argv:
-        threading.Timer(1.5, webbrowser.open, [URL]).start()
-    icon.run()
+
+    def load_when_ready():
+        while not server.started and thread.is_alive():
+            time.sleep(0.1)
+        if server.started:
+            window.load_url(URL)
+
+    window.events.closing += on_closing
+    icon.run_detached()
+    # The window must own the main thread. Logins persist in DATA_DIR/webview, as in a browser profile.
+    webview.start(load_when_ready, private_mode=False, storage_path=str(config.DATA_DIR / "webview"))
 
 
 if __name__ == "__main__":

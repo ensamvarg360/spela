@@ -1,0 +1,2 @@
+# build.sh runs in Linux: keep LF even with core.autocrlf=true
+*.sh text eol=lf

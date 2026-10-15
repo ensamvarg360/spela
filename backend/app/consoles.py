@@ -6,7 +6,9 @@ import io
 import json
 import re
 import socket
+import os
 import struct
+import threading
 import time
 import urllib.request
 from dataclasses import dataclass, field, replace
@@ -35,7 +37,7 @@ class UnsupportedConsoleConnectionError(AdapterError):
 
 @dataclass
 class ConsoleStatus:
-    state: Literal["online", "degraded", "offline"]
+    state: Literal["online", "standby", "degraded", "offline"]
     message: str = ""
     helper_status: dict = field(default_factory=dict)
 
@@ -98,11 +100,14 @@ class ConsoleAdapter(Protocol):
     async def scan_installed_games(self) -> list[InstalledGameInfo]: ...
     async def check_space(self, drive_id: str, bytes_needed: int) -> SpaceCheckResult: ...
     async def install_package(self, package_path: str, progress_callback: ProgressCallback) -> InstallResult: ...
-    async def stage_shadowmount_content(self, source_path: str, target_drive: DriveInfo, progress_callback: ProgressCallback) -> InstallResult: ...
+    # `cancel` set = stop between chunks and raise AdapterError("canceled"); the partial upload is removed.
+    async def stage_shadowmount_content(self, source_path: str, target_drive: DriveInfo, progress_callback: ProgressCallback,
+                                        cancel: threading.Event | None = None) -> InstallResult: ...
     async def uninstall_package(self, title_id: str) -> RemovalResult: ...
     async def remove_shadowmount_source(self, installed_game: InstalledGameInfo, progress_callback: ProgressCallback) -> RemovalResult: ...
     async def remove_home_screen_icon(self, title_id: str) -> RemovalResult: ...
     async def install_helper(self) -> str: ...
+    async def install_console_app(self, files: dict[str, bytes]) -> None: ...  # relative path -> content
 
 
 GiB = 1024**3
@@ -183,8 +188,11 @@ class MockConsoleAdapter:
         return self._install(package_path, "package_installer", self._drive("internal"),
                              "/user/app/{title_id}", None, progress_callback)
 
-    async def stage_shadowmount_content(self, source_path: str, target_drive: DriveInfo, progress_callback: ProgressCallback) -> InstallResult:
+    async def stage_shadowmount_content(self, source_path: str, target_drive: DriveInfo, progress_callback: ProgressCallback,
+                                        cancel: threading.Event | None = None) -> InstallResult:
         self._check()
+        if cancel and cancel.is_set():
+            raise AdapterError("canceled", "Canceled.")
         drive = self._drive(target_drive.external_id)
         name = re.split(r"[\\/]", source_path)[-1]
         dest = f"{drive.path}/shadowmount/{name}"
@@ -223,6 +231,10 @@ class MockConsoleAdapter:
         self._check()
         return __version__
 
+    async def install_console_app(self, files: dict[str, bytes]) -> None:
+        self._check()
+        self.console_app = dict(files)
+
 
 # ponytail: PS5 paths from community docs, not yet checked on a real console. Adjust them here after the
 # first hardware test. (external_id, label, mount path, type, user-data root, ShadowMountPlus source folder)
@@ -233,15 +245,20 @@ FTP_DRIVES = [
 ]
 IMAGE_EXTS = (".exfat", ".ffpkg", ".ffpfs", ".ffpfsc")
 HELPER_ELF = Path(__file__).parent / "payload" / "storefront-helper.elf"  # built from payload/ by payload/build.ps1
+# The PS5 app (console-app/, built by console-app/build.ps1). ShadowMountPlus shows it as a home-screen title.
+CONSOLE_APP_TITLE_ID = "PPSA99787"
+CONSOLE_APP_DIR = Path(__file__).parent / "console_app" / CONSOLE_APP_TITLE_ID
+CONSOLE_APP_PATH = f"/data/homebrew/{CONSOLE_APP_TITLE_ID}"
 
 
 class FTPConsoleAdapter:
-    """Talks to an FTP payload on the PS5 (stdlib ftplib, one login per call). Read-only for now:
-    installing and removing come in Phases 4-5 and refuse with `not_implemented` until then."""
+    """Talks to an FTP payload on the PS5 (stdlib ftplib, one login per call). Installs go through
+    ShadowMountPlus only (no package installer on the console); removing comes in Phase 5."""
 
     TIMEOUT = 10
     HELPER_PORT = 7735  # our helper payload (payload/main.c)
     LOADER_PORT = 9021  # the jailbreak's ELF loader
+    DDP_PORT = 9302  # Sony's device discovery (UDP); answers in rest mode too
 
     def __init__(self, console: Console, password: str | None = None):
         self.host, self.port = console.ip_address, console.port
@@ -267,6 +284,8 @@ class FTPConsoleAdapter:
         ftp = self._session()
         try:
             return fn(ftp)
+        except ftplib.error_perm as e:  # the console answered "no" (permissions, full disk, bad path)
+            raise AdapterError("ftp_refused", f"The console refused: {e}")
         except (OSError, EOFError, ftplib.Error) as e:
             raise AdapterError("connection_lost", f"The FTP connection failed: {e}")
         finally:
@@ -356,24 +375,39 @@ class FTPConsoleAdapter:
                 else:
                     continue
                 tid = meta.title_id or (m and m[0])
-                if tid:  # no title ID: other homebrew, not a game
+                if tid and tid != CONSOLE_APP_TITLE_ID:  # no title ID: other homebrew, not a game
                     games.append(InstalledGameInfo(tid, meta.title or name, meta.version, "shadowmountplus",
                                                    drive.external_id, path, path, size))
         return games
 
-    async def _helper_status(self, banner: str) -> tuple[dict, dict | None]:
+    async def _helper_status(self) -> tuple[dict, dict | None]:
+        banner, app = await self._run(lambda f: (f.getwelcome(), self._get(f, f"{CONSOLE_APP_PATH}/assets/version.txt")))
         info = await asyncio.to_thread(self._helper)
-        return {"ftp": "ok", "banner": banner, "helper": info["version"] if info else "missing"}, info
+        return {"ftp": "ok", "banner": banner, "helper": info["version"] if info else "missing",
+                "console_app": app.decode(errors="replace").strip() if app else "missing"}, info
+
+    def _asleep(self) -> bool:
+        """True when the console answers Sony's discovery probe (what Remote Play uses) with "620 Server Standby".
+        Needs "Stay connected to the internet" on in the PS5's rest mode settings; otherwise it just doesn't answer."""
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(1)
+            try:
+                s.sendto(b"SRCH * HTTP/1.1\ndevice-discovery-protocol-version:00030010\n", (self.host, self.DDP_PORT))
+                return b" 620 " in s.recv(2048).split(b"\n", 1)[0]
+            except OSError:
+                return False
 
     async def connect(self) -> ConsoleStatus:
         try:
-            banner = await self._run(lambda f: f.getwelcome())
+            status, _ = await self._helper_status()
         except AdapterError as e:
+            if await asyncio.to_thread(self._asleep):  # payloads don't run in rest mode, so FTP fails too
+                return ConsoleStatus("standby", "The console is in rest mode.", {"ftp": e.code})
             return ConsoleStatus("offline" if e.code == "console_offline" else "degraded", e.message, {"ftp": e.code})
-        return ConsoleStatus("online", "", (await self._helper_status(banner))[0])
+        return ConsoleStatus("online", "", status)
 
     async def get_console_info(self) -> ConsoleInfo:
-        status, info = await self._helper_status(await self._run(lambda f: f.getwelcome()))
+        status, info = await self._helper_status()
         return ConsoleInfo(info and info["firmware"] or None, info and info["model"] or "unknown", status)
 
     def _install_helper(self) -> str:
@@ -406,11 +440,115 @@ class FTPConsoleAdapter:
             raise AdapterError("drive_not_found", f"No drive '{drive_id}' on this console.")
         return SpaceCheckResult(drive.free_bytes >= bytes_needed, drive.free_bytes, bytes_needed)
 
-    async def _not_yet(self, *args, **kwargs):
-        raise AdapterError("not_implemented", "Installing and removing over FTP isn't available yet.")
+    BLOCK = 1 << 20  # upload chunk; progress and cancel are checked once per chunk
 
-    install_package = stage_shadowmount_content = uninstall_package = _not_yet
-    remove_shadowmount_source = remove_home_screen_icon = _not_yet
+    @staticmethod
+    def _rm_partial(ftp: ftplib.FTP, path: str):
+        """Deletes one of our own `.<name>.partial` uploads, files first. Never called on anything else."""
+        if not re.fullmatch(r".*/\.[^/]+\.partial(/.*)?", path):
+            raise ValueError(f"refusing to delete {path}")
+        for name, (is_dir, _) in FTPConsoleAdapter._ls(ftp, path).items():
+            if is_dir:
+                FTPConsoleAdapter._rm_partial(ftp, f"{path}/{name}")
+            else:
+                ftp.delete(f"{path}/{name}")
+        try:
+            ftp.rmd(path)
+        except ftplib.error_perm:  # it was a file (an image upload)
+            ftp.delete(path)
+
+    def _stage(self, ftp: ftplib.FTP, src: Path, drive_id: str, progress: ProgressCallback, cancel: threading.Event) -> InstallResult:
+        homebrew = next((hb for d, _, hb in self._drives(ftp) if d.external_id == drive_id), None)
+        if not homebrew:
+            raise AdapterError("drive_not_found", f"No drive '{drive_id}' on this console.")
+        try:
+            ftp.mkd(homebrew)  # missing on a fresh USB drive
+        except ftplib.error_perm:
+            pass  # already there
+        dest, tmp = f"{homebrew}/{src.name}", f"{homebrew}/.{src.name}.partial"
+        existing = self._ls(ftp, homebrew)
+        if src.name in existing:
+            raise AdapterError("already_installed", f"{dest} already exists on the console.")
+        if f".{src.name}.partial" in existing:  # left over from an interrupted install
+            self._rm_partial(ftp, tmp)
+
+        files = [(src, tmp)] if src.is_file() else []
+        dirs = [] if src.is_file() else [tmp]
+        for root, subdirs, names in os.walk(src):
+            rel = Path(root).relative_to(src).as_posix()
+            base = tmp if rel == "." else f"{tmp}/{rel}"
+            dirs += [f"{base}/{d}" for d in sorted(subdirs)]
+            files += [(Path(root) / n, f"{base}/{n}") for n in sorted(names)]
+        total, done = sum(f.stat().st_size for f, _ in files), 0
+
+        def chunk(block: bytes):
+            nonlocal done
+            if cancel.is_set():
+                raise AdapterError("canceled", "Canceled.")
+            done += len(block)
+            progress(done, total)
+
+        for d in dirs:
+            ftp.mkd(d)
+        for local, remote in files:
+            with open(local, "rb") as f:
+                ftp.storbinary(f"STOR {remote}", f, self.BLOCK, chunk)
+        ftp.rename(tmp, dest)  # only now does ShadowMountPlus see it
+        m = TITLE_ID.search(src.name)
+        return InstallResult(True, "Installed.", InstalledGameInfo(
+            m[0] if m else "", src.name, None, "shadowmountplus", drive_id, dest, dest, total))
+
+    def _stage_or_clean(self, source_path: str, drive_id: str, progress: ProgressCallback, cancel: threading.Event) -> InstallResult:
+        src = Path(source_path)
+        if not src.exists():
+            raise AdapterError("source_missing", f"Can't read {source_path}.")
+        try:
+            return self._call(lambda ftp: self._stage(ftp, src, drive_id, progress, cancel))
+        except AdapterError as e:
+            if e.code == "canceled":  # the aborted session is unusable, so clean up in a new one
+                self._call(lambda ftp: self._rm_partial(ftp, next(
+                    f"{hb}/.{src.name}.partial" for d, _, hb in self._drives(ftp) if d.external_id == drive_id)))
+            raise  # connection_lost leaves the partial; the next attempt removes it
+
+    async def stage_shadowmount_content(self, source_path: str, target_drive: DriveInfo, progress_callback: ProgressCallback,
+                                        cancel: threading.Event | None = None) -> InstallResult:
+        """Uploads a folder dump or image into the drive's homebrew folder, where ShadowMountPlus picks it up.
+        It's uploaded under a hidden `.partial` name and renamed when complete, so a half copy is never mounted."""
+        return await asyncio.to_thread(self._stage_or_clean, source_path, target_drive.external_id,
+                                       progress_callback, cancel or threading.Event())
+
+    def _put_files(self, ftp: ftplib.FTP, files: dict[str, bytes]):
+        made = set()  # subfolders already created this run
+        for rel in sorted(files):
+            parts = rel.split("/")
+            for i in range(1, len(parts)):
+                d = "/".join(parts[:i])
+                if d not in made:
+                    try:
+                        ftp.mkd(f"{CONSOLE_APP_PATH}/{d}")
+                    except ftplib.error_perm:
+                        pass  # already there
+                    made.add(d)
+            ftp.storbinary(f"STOR {CONSOLE_APP_PATH}/{rel}", io.BytesIO(files[rel]), self.BLOCK)
+
+    async def install_console_app(self, files: dict[str, bytes]) -> None:
+        """Writes the PS5 app into /data/homebrew/<its title ID>; ShadowMountPlus adds its tile.
+        ponytail: overwrites in place, so files dropped from a newer build linger. Fine while the file set is stable."""
+        def put(ftp: ftplib.FTP):
+            try:
+                ftp.mkd(CONSOLE_APP_PATH)
+            except ftplib.error_perm:
+                pass  # an update
+            self._put_files(ftp, files)
+        await self._run(put)
+
+    async def install_package(self, *args, **kwargs):
+        raise AdapterError("not_implemented", "This console has no package installer. Install folder dumps or disc images instead.")
+
+    async def _not_yet(self, *args, **kwargs):
+        raise AdapterError("not_implemented", "Removing over FTP isn't available yet.")
+
+    uninstall_package = remove_shadowmount_source = remove_home_screen_icon = _not_yet
 
 
 def get_adapter(console: Console, password: str | None = None) -> ConsoleAdapter:

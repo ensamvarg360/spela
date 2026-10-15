@@ -2,13 +2,15 @@ import asyncio
 import hashlib
 import hmac
 import os
+import socket
 import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from PIL import Image, ImageOps
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress
 from sqlalchemy import select
@@ -16,10 +18,10 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, config, credentials, inventory, scanner
-from .consoles import AdapterError
+from . import __version__, config, credentials, inventory, jobs, scanner
+from .consoles import CONSOLE_APP_DIR, AdapterError
 from .database import Base, SessionLocal, engine, get_db
-from .models import AuditLog, Console, Drive, Game, InstalledGame, LibraryRoot, _id
+from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id
 
 
 @asynccontextmanager
@@ -27,7 +29,7 @@ async def lifespan(app: FastAPI):
     config.COVERS_DIR.mkdir(parents=True, exist_ok=True)
     # ponytail: create_all instead of Alembic; add migrations before the first schema change after v1.
     Base.metadata.create_all(engine)
-    tasks = []
+    tasks = [asyncio.create_task(jobs.worker())]
     if config.SCAN_INTERVAL_MINUTES > 0:
         tasks.append(asyncio.create_task(_scheduled_scans()))
     if config.CONSOLE_CHECK_SECONDS > 0:
@@ -422,7 +424,7 @@ class ConsoleOut(BaseModel):
     last_seen_at: datetime | None
     last_inventory_scan_at: datetime | None
     enabled: bool
-    state: str = "unknown"  # online|degraded|offline|disabled|unknown (not checked yet)
+    state: str = "unknown"  # online|standby|degraded|offline|disabled|unknown (not checked yet)
     status_message: str = ""
 
 
@@ -485,8 +487,9 @@ def get_console(console_id: str, db: Session = Depends(get_db)):
 
 @api.delete("/consoles/{console_id}")
 def delete_console(console_id: str, db: Session = Depends(get_db)):
-    # ponytail: no jobs exist yet; block deleting a console with active jobs once Phase 4 adds them.
     c = db.get(Console, console_id) or _not_found()
+    if db.scalar(select(InstallJob.id).where(InstallJob.console_id == c.id, InstallJob.status.in_(jobs.ACTIVE))):
+        raise HTTPException(409, {"error": "job_active", "message": "Cancel this console's installs first."})
     inventory.forget(db, c.id)
     credentials.set_password(db, c, None)
     _audit_console(db, "console_delete", c, [])
@@ -608,11 +611,180 @@ def list_installed(console_id: str, db: Session = Depends(get_db)):
     return out
 
 
+# ---------------------------------------------------------------- installs
+
+class InstallIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    game_id: str
+    drive_id: str | None = None  # None = the install-target drive with the most free space
+
+
+class JobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    console_id: str
+    game_id: str
+    title: str = ""
+    target_drive_id: str | None
+    status: str
+    progress: float
+    bytes_transferred: int
+    total_bytes: int
+    transfer_rate_bps: int
+    eta_seconds: int | None
+    message: str
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+def _job_out(db: Session, j: InstallJob) -> JobOut:
+    g = db.get(Game, j.game_id)
+    return JobOut.model_validate(j).model_copy(update={"title": g.title if g else ""})
+
+
+def queue_install(db: Session, c: Console, game_id: str, drive_id: str | None = None) -> InstallJob:
+    try:
+        return jobs.queue(db, c, _game(db, game_id), drive_id)
+    except ValueError as e:
+        raise HTTPException(409, {"error": "cannot_install", "message": str(e)})
+
+
+@api.post("/consoles/{console_id}/install", response_model=JobOut, status_code=201)
+def install(console_id: str, body: InstallIn, db: Session = Depends(get_db)):
+    c = db.get(Console, console_id) or _not_found()
+    return _job_out(db, queue_install(db, c, body.game_id, body.drive_id))
+
+
+@api.get("/consoles/{console_id}/jobs", response_model=list[JobOut])
+def list_jobs(console_id: str, db: Session = Depends(get_db)):
+    # ponytail: the latest 50 only; add paging if anyone needs older history (the audit log has it).
+    rows = db.scalars(select(InstallJob).where(InstallJob.console_id == console_id)
+                      .order_by(InstallJob.created_at.desc()).limit(50))
+    return [_job_out(db, j) for j in rows]
+
+
+@api.get("/jobs/{job_id}", response_model=JobOut)
+def get_job(job_id: str, db: Session = Depends(get_db)):
+    return _job_out(db, db.get(InstallJob, job_id) or _not_found())
+
+
+@api.post("/jobs/{job_id}/cancel", response_model=JobOut)
+def cancel_job(job_id: str, db: Session = Depends(get_db)):
+    j = db.get(InstallJob, job_id) or _not_found()
+    if not jobs.cancel(db, j):
+        raise HTTPException(409, {"error": "job_finished", "message": "This install has already ended."})
+    return _job_out(db, j)
+
+
+# ---------------------------------------------------------------- PS5 app
+
+def console_app_token(console_id: str) -> str:
+    """The PS5 app's key: names its console and proves the PC issued it. Nothing is stored; deleting the console revokes it."""
+    sig = hmac.new(config.SECRET_KEY.encode(), f"console-app:{console_id}".encode(), "sha256").hexdigest()
+    return f"{console_id}.{sig}"
+
+
+def console_from_token(request: Request, db: Session = Depends(get_db)) -> Console:
+    token = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    c = db.get(Console, token.split(".")[0]) if token else None
+    if not c or not hmac.compare_digest(token, console_app_token(c.id)):
+        raise HTTPException(401, {"error": "invalid_token", "message": "This PS5 app isn't paired. Install it again from the PC."})
+    return c
+
+
+# The PS5 app's API. A token reaches only its own console: browse the library and queue installs to it, nothing else.
+# Plain text, one game per line, so the console app needs no JSON parser.
+console_api = APIRouter(prefix="/api/v1/console-app")
+COVER_SIZE = (256, 320)  # the console app expects exactly this many RGBA pixels
+
+
+def _field(v) -> str:
+    return str(v if v is not None else "").replace("\t", " ").replace("\n", " ").replace("\r", " ")
+
+
+@console_api.get("/library", response_class=PlainTextResponse)
+def console_library(c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
+    """id, title, title ID, version, size, state, progress (0-1 while installing), has cover (1/0).
+    state: installable | installed | update | queued | installing | blocked:<reason>"""
+    installed = {g.title_id: g.status for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
+    active = {j.game_id: j for j in db.scalars(select(InstallJob).where(
+        InstallJob.console_id == c.id, InstallJob.status.in_(jobs.ACTIVE)))}
+    lines = []
+    for g in db.scalars(select(Game).where(Game.format != "unknown", Game.missing.is_(False)).order_by(Game.title)):
+        j = active.get(g.id)
+        if j:
+            state = "queued" if j.status == "queued" else "installing"
+        elif g.title_id in installed:
+            state = "update" if installed[g.title_id] == "update_available" else "installed"
+        else:
+            reason = jobs.blocker(db, c, g)
+            state = f"blocked:{reason}" if reason else "installable"
+        lines.append("\t".join(map(_field, (g.id, g.title, g.title_id, g.version, g.size_bytes, state,
+                                             f"{j.progress:.3f}" if j else "", int(bool(g.cover_path))))))
+    return "".join(f"{line}\n" for line in lines)
+
+
+@console_api.get("/covers/{game_id}")
+def console_cover(game_id: str, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
+    """The cover as raw RGBA pixels, COVER_SIZE, cropped to fill. The console has no image decoder."""
+    g = _game(db, game_id)
+    if not g.cover_path or not os.path.isfile(g.cover_path):
+        _not_found()
+    # ponytail: resized on every request; cache the bytes in COVERS_DIR if the grid ever loads slowly.
+    with Image.open(g.cover_path) as im:
+        data = ImageOps.fit(im.convert("RGBA"), COVER_SIZE).tobytes()
+    return Response(data, media_type="application/octet-stream")
+
+
+@console_api.post("/install/{game_id}", response_class=PlainTextResponse)
+def console_install(game_id: str, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
+    try:
+        jobs.queue(db, c, _game(db, game_id))
+    except ValueError as e:
+        return PlainTextResponse(str(e), 409)
+    return "Queued."
+
+
+def _address_seen_by(ip: str) -> str:
+    """This PC's address on the network card that reaches `ip`."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect((ip, 9))  # UDP connect sends nothing; it only picks the route
+        return s.getsockname()[0]
+
+
+@api.post("/consoles/{console_id}/console-app", response_model=ConsoleOut)
+async def install_console_app(console_id: str, db: Session = Depends(get_db)):
+    """Puts the PS5 app on the console (or updates it), paired with this PC."""
+    c = db.get(Console, console_id) or _not_found()
+    if config.HOST == "127.0.0.1":
+        raise HTTPException(409, {"error": "lan_off", "message": "The PS5 can't reach this PC yet. Right-click the tray icon, "
+                                  "tick \"Allow other devices on my network\", then try again."})
+    if not CONSOLE_APP_DIR.is_dir():
+        raise HTTPException(409, {"error": "not_bundled", "message": "This build doesn't include the PS5 app."})
+    files = {p.relative_to(CONSOLE_APP_DIR).as_posix(): p.read_bytes() for p in CONSOLE_APP_DIR.rglob("*") if p.is_file()}
+    files["assets/server.txt"] = (f"url=http://{_address_seen_by(c.ip_address)}:{config.PORT}\n"
+                                  f"token={console_app_token(c.id)}\n").encode()
+    files["assets/version.txt"] = __version__.encode()
+    try:
+        await inventory.adapter_for(db, c).install_console_app(files)
+        await inventory.refresh(db, c)
+    except AdapterError as e:
+        db.add(AuditLog(action="console_app_install", console_id=c.id, result="failed", details={"error": e.code}))
+        db.commit()
+        raise HTTPException(502, {"error": e.code, "message": e.message})
+    db.add(AuditLog(action="console_app_install", console_id=c.id, result="success", details={"version": __version__}))
+    db.commit()
+    inventory.record(c.id, "online")
+    return _console_out(c)
+
+
 def _not_found():
     raise HTTPException(404, {"error": "not_found", "message": "Not found."})
 
 
 app.include_router(public)
 app.include_router(api)
+app.include_router(console_api)
 if config.STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=config.STATIC_DIR, html=True), name="frontend")
