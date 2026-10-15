@@ -73,7 +73,7 @@ class Console(Base):
     id: Mapped[str] = _pk()
     name: Mapped[str] = mapped_column(String)
     ip_address: Mapped[str] = mapped_column(String)
-    connection_type: Mapped[str] = mapped_column(String(16))  # ftp|http|custom|mock
+    connection_type: Mapped[str] = mapped_column(String(16))  # helper|ftp|http|custom|mock
     port: Mapped[int] = mapped_column(Integer)
     username: Mapped[str | None] = mapped_column(String)
     credentials_secret_id: Mapped[str | None] = mapped_column(String(36))  # -> secrets.id

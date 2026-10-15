@@ -75,7 +75,7 @@ def test_ftp_adapter_reads_drives_and_games(ps5):
     assert games["PPSA04444"].size_bytes == 99
     assert games["CUSA00009"].drive_external_id == "usb0"
 
-    with pytest.raises(Exception, match="Not available over FTP"):
+    with pytest.raises(Exception, match="Not available yet"):
         asyncio.run(a.uninstall_package("PPSA02222"))
 
 
@@ -85,7 +85,7 @@ class FakeHelper(BaseHTTPRequestHandler):
 
     def do_GET(self):
         G = 1024**3
-        self._send({"version": FakeHelper.version, "firmware": "4.03", "model": "CFI-1216A", "mounts": [
+        self._send({"version": type(self).version, "firmware": "4.03", "model": "CFI-1216A", "mounts": [
             {"mount": "/", "total": 100 * G, "free": 20 * G},
             {"mount": "/user", "total": 800 * G, "free": 200 * G},
             {"mount": "/mnt/usb0", "total": 2000 * G, "free": 612 * G}]})
@@ -94,9 +94,9 @@ class FakeHelper(BaseHTTPRequestHandler):
         FakeHelper.quits += 1
         self._send({"ok": True})
 
-    def _send(self, body):
-        data = json.dumps(body).encode()
-        self.send_response(200)
+    def _send(self, body, status=200):
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        self.send_response(status)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)

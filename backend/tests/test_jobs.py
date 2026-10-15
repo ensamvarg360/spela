@@ -1,7 +1,8 @@
-"""Install engine: FTP staging into ShadowMountPlus folders and the job runner, against a real local FTP server."""
+"""Install engine: FTP and helper staging into ShadowMountPlus folders and the job runner, against a real local FTP server."""
 import asyncio
 import threading
 from http.server import ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from conftest import EXFAT, PARAM_JSON, write
@@ -13,8 +14,8 @@ from sqlalchemy import delete, select
 from test_console_profiles import login
 from test_inventory import FakeHelper
 
-from app import credentials, inventory, jobs
-from app.consoles import AdapterError, DriveInfo, FTPConsoleAdapter, InstalledGameInfo
+from app import __version__, credentials, inventory, jobs
+from app.consoles import AdapterError, DriveInfo, FTPConsoleAdapter, HelperConsoleAdapter, InstalledGameInfo
 from app.database import Base, SessionLocal, engine
 from app.main import app
 from app.models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob
@@ -98,6 +99,79 @@ def test_stage_cancel_and_leftovers(ps5):
 
     with pytest.raises(ValueError):  # the cleanup refuses anything that isn't our own partial upload
         FTPConsoleAdapter._rm_partial(None, "/data/homebrew/Real Game")
+
+
+class FileHelper(FakeHelper):
+    """FakeHelper plus the helper's file API (payload/main.c), over a folder laid out like the PS5."""
+    version, root = __version__, None
+
+    def _target(self):
+        url = urlsplit(self.path)
+        q = parse_qs(url.query)
+        return url.path, self.root / q["p"][0].lstrip("/"), q
+
+    def do_GET(self):
+        if self.path == "/info":
+            return super().do_GET()
+        op, p, _ = self._target()
+        if op == "/ls" and p.is_dir():
+            return self._send([{"name": e.name, "dir": e.is_dir(), "size": e.stat().st_size} for e in p.iterdir()])
+        if op == "/file" and p.is_file():
+            return self._send(p.read_bytes())
+        self._send({"error": "not found"}, 404)
+
+    def do_PUT(self):
+        _, p, _ = self._target()
+        p.write_bytes(self.rfile.read(int(self.headers["Content-Length"])))
+        self._send({"ok": True})
+
+    def do_POST(self):
+        op, p, q = self._target()
+        try:
+            if op == "/mkdir":
+                p.mkdir()
+            elif op == "/rename":
+                p.rename(self.root / q["to"][0].lstrip("/"))
+            elif op == "/rm":
+                p.rmdir() if p.is_dir() else p.unlink()
+            self._send({"ok": True})
+        except OSError as e:
+            self._send({"error": str(e)}, 500)
+
+
+def test_helper_adapter_stages_scans_and_removes(ps5, monkeypatch):
+    root, _, lib = ps5
+    FileHelper.root = root
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FileHelper)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(FTPConsoleAdapter, "HELPER_PORT", server.server_address[1])
+    a = HelperConsoleAdapter(Console(ip_address="127.0.0.1"))
+    try:
+        assert asyncio.run(a.connect()).state == "online"
+        asyncio.run(a.stage_shadowmount_content(str(lib / "Dump PPSA03333"), INTERNAL, lambda d, t: None))
+        assert (root / "data/homebrew/Dump PPSA03333/sce_sys/about/right.sprx").read_bytes() == b"s" * 50
+        asyncio.run(a.stage_shadowmount_content(str(lib / "Racer PPSA04444.exfat"), USB, lambda d, t: None))
+        assert (root / "mnt/usb0/homebrew/Racer PPSA04444.exfat").read_bytes() == EXFAT
+
+        games = {g.title_id: g for g in asyncio.run(a.scan_installed_games())}
+        assert {"PPSA01111", "PPSA03333", "PPSA04444"} <= games.keys()
+        assert asyncio.run(a.remove_shadowmount_source(games["PPSA03333"], lambda d, t: None)).ok
+        assert list((root / "data/homebrew").iterdir()) == []
+
+        stop = threading.Event()
+        with pytest.raises(AdapterError, match="Canceled"):
+            asyncio.run(a.stage_shadowmount_content(str(lib / "Dump PPSA03333"), INTERNAL,
+                                                    lambda d, t: d > 60 and stop.set(), stop))
+        assert list((root / "data/homebrew").iterdir()) == []  # partial cleaned up
+
+        # an older helper has no file API: degraded with a reason, never an empty console
+        monkeypatch.setattr(FileHelper, "version", "0.0.1")
+        status = asyncio.run(a.connect())
+        assert (status.state, status.helper_status["helper"]) == ("degraded", "0.0.1")
+        with pytest.raises(AdapterError, match="needs"):
+            asyncio.run(a.scan_installed_games())
+    finally:
+        server.shutdown()
 
 
 def _setup(db, port, lib, *formats):

@@ -17,12 +17,13 @@ Only this PC can reach it by default. To open it from a phone or another compute
 
 ## Consoles
 
-Add your PS5 under **Settings → Consoles** (connection **FTP**, the port of your FTP payload, often 2121 or 1337), then open **Installed**.
+Add your PS5 under **Settings → Consoles** (connection **Helper payload**, just a name and IP address), then open **Installed** and click **Install helper**. The app sends its own **helper payload** through the console's ELF loader on port 9021, and the console shows a notification when it starts. The helper does everything on port 7735: firmware, model, drive space, reading the installed games, and copying installs. No FTP server is needed. Like any payload, it stops when the console restarts, so install it again after a reboot.
 The app checks each console every 15 seconds and reads its drives and installed games when it comes online; **Refresh inventory** reads them again.
-*Rest mode* means the console is asleep (detected only when the PS5's rest mode setting *Stay connected to the internet* is on); *Degraded* means the console is on but its FTP server isn't running or rejected the password; *Offline* means it doesn't answer at all.
+*Rest mode* means the console is asleep (detected only when the PS5's rest mode setting *Stay connected to the internet* is on); *Degraded* means the console is on but the helper isn't running or is outdated; *Offline* means it doesn't answer at all.
 Installed games are matched to your library by title ID, and marked *Update in library* when your library holds a newer version.
 
-FTP can't report firmware or drive space, so the app also uses its own **helper payload**. When the console is online, click **Install helper** on the **Installed** page. The app sends the helper through the console's ELF loader on port 9021 (the same loader you used for the FTP server), and the console shows a notification when the helper starts. The helper then reports firmware, model, and the size and free space of each drive on port 7735. Like the FTP server, it stops when the console restarts, so install it again after a reboot.
+The helper only changes files inside the `homebrew` folders (`/data/homebrew`, `/mnt/usbN/homebrew`, `/mnt/extN/homebrew`); anything else on the console is read-only to it. It has no password, so keep the console on a network you trust.
+**FTP (fallback)** still works: pick it with the port of an FTP payload (often 2121 or 1337). File access then goes over FTP, and the helper still reports firmware and drive space.
 The helper's version always equals the app's version. If they differ, the button changes to **Update helper**, and clicking it replaces the running copy.
 What the app can't tell yet: the size of folder dumps.
 The console paths it reads (`/user/app`, `/data/homebrew`, `/mnt/usbN`, `/mnt/extN`) are in `FTP_DRIVES` in [backend/app/consoles.py](backend/app/consoles.py) and have been checked against ftpsrv v0.21. A drive shows up only when its mount point has something in it.
@@ -30,7 +31,7 @@ Set `CONSOLE_CHECK_SECONDS=0` to turn the checks off.
 
 ## Installing games
 
-Open a game in the library and click **Install**. The app copies it over FTP into the `homebrew` folder of a drive where **Allow installs here** is ticked (the one with the most free space, unless you pick one). ShadowMountPlus then adds it to the home screen.
+Open a game in the library and click **Install**. The app copies it through the helper (or FTP) into the `homebrew` folder of a drive where **Allow installs here** is ticked (the one with the most free space, unless you pick one). ShadowMountPlus then adds it to the home screen.
 It copies under a hidden `.<name>.partial` name and renames it when the copy is complete, so ShadowMountPlus never sees half a game. Installs run one at a time; follow them, or cancel them, on the **Installed** page.
 Only folder dumps and disc images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) can be installed: the console has no package installer for `.pkg` files, and archives must be extracted first.
 The helper must be running, so the app can check free space first. If the app or the connection stops mid-copy, the install shows *Interrupted*; queue it again, and the leftover partial copy is replaced.

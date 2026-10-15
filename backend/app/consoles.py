@@ -2,6 +2,7 @@
 through a ConsoleAdapter; console-specific paths and endpoints stay in here."""
 import asyncio
 import ftplib
+import http.client
 import io
 import json
 import re
@@ -10,6 +11,7 @@ import os
 import struct
 import threading
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -256,6 +258,32 @@ CONSOLE_APP_DIR = Path(__file__).parent / "console_app" / CONSOLE_APP_TITLE_ID
 CONSOLE_APP_PATH = f"/data/homebrew/{CONSOLE_APP_TITLE_ID}"
 
 
+class _FTP(ftplib.FTP):
+    """ftplib plus the two reads the adapter needs; HelperFS offers the same methods over the helper payload."""
+
+    def ls(self, path: str) -> dict[str, tuple[bool, int]]:
+        """{name: (is_dir, size)} from a Unix-style LIST. ftpsrv on the PS5 has no NLST."""
+        lines = []
+        try:
+            self.retrlines(f"LIST {path}", lines.append)
+        except ftplib.error_perm:  # missing folder
+            return {}
+        entries = {}
+        for line in lines:  # "drwxr-xr-x 2 0 0 512 Oct 07 01:15 name with spaces"
+            parts = line.split(None, 8)
+            if len(parts) == 9 and parts[8] not in (".", ".."):
+                entries[parts[8]] = (parts[0].startswith("d"), int(parts[4]) if parts[4].isdigit() else 0)
+        return entries
+
+    def get(self, path: str) -> bytes | None:
+        buf = io.BytesIO()
+        try:
+            self.retrbinary(f"RETR {path}", buf.write)
+        except ftplib.error_perm:
+            return None
+        return buf.getvalue()
+
+
 class FTPConsoleAdapter:
     """Talks to an FTP payload on the PS5 (stdlib ftplib, one login per call). Installs and removals go through
     ShadowMountPlus only (no package installer on the console)."""
@@ -270,7 +298,7 @@ class FTPConsoleAdapter:
         self.user, self.password = console.username or "anonymous", password or ""
 
     def _session(self) -> ftplib.FTP:
-        ftp = ftplib.FTP(timeout=self.TIMEOUT, encoding="utf-8")
+        ftp = _FTP(timeout=self.TIMEOUT, encoding="utf-8")
         try:
             ftp.connect(self.host, self.port)
         except ConnectionRefusedError:  # the console answered, but nothing listens on the port
@@ -292,36 +320,12 @@ class FTPConsoleAdapter:
         except ftplib.error_perm as e:  # the console answered "no" (permissions, full disk, bad path)
             raise AdapterError("ftp_refused", f"The console refused: {e}")
         except (OSError, EOFError, ftplib.Error) as e:
-            raise AdapterError("connection_lost", f"The FTP connection failed: {e}")
+            raise AdapterError("connection_lost", f"The connection to the console failed: {e}")
         finally:
             ftp.close()
 
     async def _run(self, fn):
         return await asyncio.to_thread(self._call, fn)
-
-    @staticmethod
-    def _ls(ftp: ftplib.FTP, path: str) -> dict[str, tuple[bool, int]]:
-        """{name: (is_dir, size)} from a Unix-style LIST. ftpsrv on the PS5 has no NLST."""
-        lines = []
-        try:
-            ftp.retrlines(f"LIST {path}", lines.append)
-        except ftplib.error_perm:  # missing folder
-            return {}
-        entries = {}
-        for line in lines:  # "drwxr-xr-x 2 0 0 512 Oct 07 01:15 name with spaces"
-            parts = line.split(None, 8)
-            if len(parts) == 9 and parts[8] not in (".", ".."):
-                entries[parts[8]] = (parts[0].startswith("d"), int(parts[4]) if parts[4].isdigit() else 0)
-        return entries
-
-    @staticmethod
-    def _get(ftp: ftplib.FTP, path: str) -> bytes | None:
-        buf = io.BytesIO()
-        try:
-            ftp.retrbinary(f"RETR {path}", buf.write)
-        except ftplib.error_perm:
-            return None
-        return buf.getvalue()
 
     def _helper(self, path: str = "/info", method: str = "GET") -> dict | None:
         """Calls the helper payload; None when it isn't running. It reports what FTP can't: firmware and drive space."""
@@ -338,7 +342,7 @@ class FTPConsoleAdapter:
         drives = []
         for ext, label, path, kind, user, homebrew in FTP_DRIVES:
             # unused mount points exist as empty folders, so a drive counts only if its mount point has contents
-            if self._ls(ftp, path):
+            if ftp.ls(path):
                 # the drive's own mount, or the deepest one above it (never "/": that's not the drive)
                 mount = max((m for m in space if path == m or path.startswith(m + "/")), key=len, default=None)
                 total, free = space.get(mount, (0, 0))
@@ -357,24 +361,24 @@ class FTPConsoleAdapter:
     def _games(self, ftp: ftplib.FTP) -> list[InstalledGameInfo]:
         games = []
         for drive, user, homebrew in self._drives(ftp):
-            for tid in self._ls(ftp, f"{user}/app"):
+            for tid in ftp.ls(f"{user}/app"):
                 if not TITLE_ID.fullmatch(tid) or tid.startswith("NPXS"):  # NPXS = system apps
                     continue
                 path = f"{user}/app/{tid}"
-                files = self._ls(ftp, path)
+                files = ftp.ls(path)
                 # mount.lnk = ShadowMountPlus stub, listed from its homebrew source below; no app.pkg = homebrew launcher
                 if "mount.lnk" in files or "app.pkg" not in files:
                     continue
                 param = "param.sfo" if tid.startswith("CUSA") else "param.json"
-                meta = self._meta(tid, self._get(ftp, f"{user}/appmeta/{tid}/{param}"))
+                meta = self._meta(tid, ftp.get(f"{user}/appmeta/{tid}/{param}"))
                 games.append(InstalledGameInfo(tid, meta.title or tid, meta.version, "package_installer",
                                                drive.external_id, path, None, files["app.pkg"][1]))
-            for name, (is_dir, size) in self._ls(ftp, homebrew).items():
+            for name, (is_dir, size) in ftp.ls(homebrew).items():
                 path, m = f"{homebrew}/{name}", TITLE_ID.search(name)
                 if name.startswith("."):  # hidden, e.g. ".PPSA25381-app0.gc-moving.tmp" mid-copy
                     continue
                 if is_dir:  # folder dump; size stays 0, summing a tree over FTP is too slow
-                    meta, size = self._meta("PPSA", self._get(ftp, f"{path}/sce_sys/param.json")), 0
+                    meta, size = self._meta("PPSA", ftp.get(f"{path}/sce_sys/param.json")), 0
                 elif name.lower().endswith(IMAGE_EXTS):
                     meta = PkgMetadata()
                 else:
@@ -386,21 +390,24 @@ class FTPConsoleAdapter:
         return games
 
     async def _helper_status(self) -> tuple[dict, dict | None]:
-        banner, app = await self._run(lambda f: (f.getwelcome(), self._get(f, f"{CONSOLE_APP_PATH}/assets/version.txt")))
+        banner, app = await self._run(lambda f: (f.getwelcome(), f.get(f"{CONSOLE_APP_PATH}/assets/version.txt")))
         info = await asyncio.to_thread(self._helper)
         return {"ftp": "ok", "banner": banner, "helper": info["version"] if info else "missing",
                 "console_app": app.decode(errors="replace").strip() if app else "missing"}, info
 
-    def _asleep(self) -> bool:
-        """True when the console answers Sony's discovery probe (what Remote Play uses) with "620 Server Standby".
-        Needs "Stay connected to the internet" on in the PS5's rest mode settings; otherwise it just doesn't answer."""
+    def _ddp(self) -> bytes:
+        """Status line of Sony's discovery probe (what Remote Play uses): "... 200 Ok" awake, "... 620 Server Standby"
+        in rest mode, b"" for no answer. In rest mode it needs "Stay connected to the internet" on in the PS5's settings."""
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.settimeout(1)
             try:
                 s.sendto(b"SRCH * HTTP/1.1\ndevice-discovery-protocol-version:00030010\n", (self.host, self.DDP_PORT))
-                return b" 620 " in s.recv(2048).split(b"\n", 1)[0]
+                return s.recv(2048).split(b"\n", 1)[0]
             except OSError:
-                return False
+                return b""
+
+    def _asleep(self) -> bool:
+        return b" 620 " in self._ddp()
 
     async def connect(self) -> ConsoleStatus:
         try:
@@ -447,7 +454,7 @@ class FTPConsoleAdapter:
             for g in games:
                 user = g.installed_path.split("/app/")[0] if g.install_route == "package_installer" else "/user"
                 for path in (f"{g.installed_path}/sce_sys/icon0.png", f"{user}/appmeta/{g.title_id}/icon0.png"):
-                    if data := self._get(ftp, path):
+                    if data := ftp.get(path):
                         icons[g.title_id] = data
                         break
             return icons
@@ -466,7 +473,7 @@ class FTPConsoleAdapter:
         """Deletes one of our own `.<name>.partial` uploads, files first. Never called on anything else."""
         if not re.fullmatch(r".*/\.[^/]+\.partial(/.*)?", path):
             raise ValueError(f"refusing to delete {path}")
-        for name, (is_dir, _) in FTPConsoleAdapter._ls(ftp, path).items():
+        for name, (is_dir, _) in ftp.ls(path).items():
             if is_dir:
                 FTPConsoleAdapter._rm_partial(ftp, f"{path}/{name}")
             else:
@@ -485,7 +492,7 @@ class FTPConsoleAdapter:
         except ftplib.error_perm:
             pass  # already there
         dest, tmp = f"{homebrew}/{src.name}", f"{homebrew}/.{src.name}.partial"
-        existing = self._ls(ftp, homebrew)
+        existing = ftp.ls(homebrew)
         if src.name in existing:
             raise AdapterError("already_installed", f"{dest} already exists on the console.")
         if f".{src.name}.partial" in existing:  # left over from an interrupted install
@@ -571,7 +578,7 @@ class FTPConsoleAdapter:
             raise AdapterError("path_outside_allowlist", f"Won't delete {path}: it isn't a game in a homebrew folder.")
         if not any(g.source_path == path and g.title_id == game.title_id for g in self._games(ftp)):
             raise AdapterError("not_found", f"{path} isn't on the console any more, or holds a different game.")
-        entries = self._ls(ftp, homebrew)
+        entries = ftp.ls(homebrew)
         is_dir, size = entries[name]
         tmp = f"{homebrew}/.{name}.partial"
         if f".{name}.partial" in entries:  # left over from an interrupted install
@@ -594,16 +601,120 @@ class FTPConsoleAdapter:
         raise AdapterError("not_implemented", "This console has no package installer. Install folder dumps or disc images instead.")
 
     async def _not_yet(self, *args, **kwargs):
-        raise AdapterError("not_implemented", "Not available over FTP. Delete it on the PS5 instead.")
+        raise AdapterError("not_implemented", "Not available yet. Delete it on the PS5 instead.")
 
     # The home-screen tile stays after the source is gone; deleting it on the PS5 then removes it for good.
     uninstall_package = remove_home_screen_icon = _not_yet
+
+
+class HelperFS:
+    """The helper payload's file API (payload/main.c), with the methods of _FTP the adapter uses, so both
+    connections share the adapter code. The console saying no raises ftplib.error_perm, as over FTP."""
+
+    def __init__(self, host: str, port: int, timeout: float, info: dict):
+        self.host, self.port, self.timeout, self.info = host, port, timeout, info
+
+    def _req(self, method: str, op: str, path: str, to: str | None = None, f=None, block: int = 0, callback=None) -> bytes:
+        query = urllib.parse.urlencode({"p": path, **({"to": to} if to else {})}, quote_via=urllib.parse.quote)
+        conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
+        try:
+            conn.putrequest(method, f"/{op}?{query}", skip_accept_encoding=True)
+            size = f.seek(0, 2) if f else 0
+            if f:
+                f.seek(0)
+            conn.putheader("Content-Length", str(size))
+            conn.endheaders()
+            while f and (chunk := f.read(block)):
+                conn.send(chunk)
+                if callback:
+                    callback(chunk)
+            r = conn.getresponse()
+            data = r.read()
+        finally:
+            conn.close()
+        if r.status >= 400:
+            try:
+                why = json.loads(data)["error"]
+            except (ValueError, KeyError, TypeError):
+                why = r.reason
+            raise ftplib.error_perm(f"{r.status} {why}")
+        return data
+
+    def ls(self, path: str) -> dict[str, tuple[bool, int]]:
+        try:
+            entries = json.loads(self._req("GET", "ls", path).decode(errors="replace"))
+        except ftplib.error_perm:  # missing folder
+            return {}
+        return {e["name"]: (e["dir"], e["size"]) for e in entries}
+
+    def get(self, path: str) -> bytes | None:
+        try:
+            return self._req("GET", "file", path)
+        except ftplib.error_perm:
+            return None
+
+    def storbinary(self, cmd: str, f, block: int, callback=None):
+        self._req("PUT", "file", cmd.removeprefix("STOR "), f=f, block=block, callback=callback)
+
+    def mkd(self, path: str):
+        self._req("POST", "mkdir", path)
+
+    def rename(self, src: str, dest: str):
+        self._req("POST", "rename", src, to=dest)
+
+    def delete(self, path: str):
+        self._req("POST", "rm", path)
+
+    rmd = delete
+
+    def close(self):
+        pass  # one HTTP connection per request
+
+
+class HelperConsoleAdapter(FTPConsoleAdapter):
+    """Talks only to our helper payload, no FTP server needed. install_helper goes through the ELF loader,
+    so it works before the helper runs."""
+
+    def __init__(self, console: Console, password: str | None = None):
+        self.host = console.ip_address
+
+    def _session(self) -> HelperFS:
+        info = self._helper()
+        if not info:
+            raise AdapterError("helper_unreachable", "The helper payload isn't running. Install it on the Installed page.")
+        if info.get("version") != __version__:  # an older helper has no file API; its 404s would read as an empty console
+            raise AdapterError("helper_outdated", f"The console runs helper v{info.get('version')}; this app needs "
+                                                  f"v{__version__}. Update it on the Installed page.")
+        return HelperFS(self.host, self.HELPER_PORT, self.TIMEOUT, info)
+
+    async def _helper_status(self) -> tuple[dict, dict | None]:
+        info, app = await self._run(lambda fs: (fs.info, fs.get(f"{CONSOLE_APP_PATH}/assets/version.txt")))
+        return {"helper": info["version"], "console_app": app.decode(errors="replace").strip() if app else "missing"}, info
+
+    async def connect(self) -> ConsoleStatus:
+        try:
+            status, _ = await self._helper_status()
+            return ConsoleStatus("online", "", status)
+        except AdapterError as e:
+            error = e
+        info = await asyncio.to_thread(self._helper)
+        helper = {"helper": info["version"] if info else "missing"}
+        if info:  # running, but outdated
+            return ConsoleStatus("degraded", error.message, helper)
+        ddp = await asyncio.to_thread(self._ddp)
+        if b" 620 " in ddp:  # payloads don't run in rest mode
+            return ConsoleStatus("standby", "The console is in rest mode.", helper)
+        if b" 200 " in ddp:
+            return ConsoleStatus("degraded", "The console is on, but the helper isn't running.", helper)
+        return ConsoleStatus("offline", "The console doesn't answer. If it's on, install the helper.", helper)
 
 
 def get_adapter(console: Console, password: str | None = None) -> ConsoleAdapter:
     match console.connection_type:
         case "mock":
             return MockConsoleAdapter(console)
+        case "helper":
+            return HelperConsoleAdapter(console)
         case "ftp":
             return FTPConsoleAdapter(console, password)
         case _:  # http/custom land here until their adapters exist

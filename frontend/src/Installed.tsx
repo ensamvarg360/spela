@@ -227,7 +227,7 @@ export default function Installed() {
             {!helper || helper === "missing" ? "Not running" : `v${helper}`}
             {helper && helper !== "missing" && !helperOk && version && ` (this app needs v${version})`}
             {!helperOk && (
-              <button className="small" disabled={busy || c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
+              <button className="small" disabled={busy || c.state === "standby"} title={c.state === "standby" ? "Wake the console first." : undefined}
                 onClick={() => act("helper")}>{!helper || helper === "missing" ? "Install helper" : "Update helper"}</button>
             )}
           </dd>
@@ -239,7 +239,7 @@ export default function Installed() {
                 onClick={() => act("console-app")}>{!consoleApp || consoleApp === "missing" ? "Install PS5 app" : "Update PS5 app"}</button>
             )}
           </dd>
-          <dt>Connections</dt><dd>{Object.entries(c.helper_status).filter(([k]) => !["banner", "helper", "console_app"].includes(k)).map(([k, v]) => `${k}: ${v}`).join(", ") || "Unknown"}</dd>
+          <dt>Connections</dt><dd>{Object.entries(c.helper_status).filter(([k]) => !["banner", "helper", "console_app"].includes(k)).map(([k, v]) => `${k}: ${v}`).join(", ") || c.connection_type}</dd>
           <dt>Last seen</dt><dd>{when(c.last_seen_at)}</dd>
           <dt>Last inventory</dt><dd>{when(c.last_inventory_scan_at)}</dd>
           <dt>Installed</dt><dd>{games.length} game{games.length === 1 ? "" : "s"}{updates ? ` · ${updates} with a newer version in your library` : ""}</dd>

@@ -42,7 +42,7 @@ export interface Root {
   reachable: boolean;
 }
 
-export type ConnectionType = "ftp" | "http" | "custom" | "mock";
+export type ConnectionType = "helper" | "ftp" | "http" | "custom" | "mock";
 
 export interface Console {
   id: string;

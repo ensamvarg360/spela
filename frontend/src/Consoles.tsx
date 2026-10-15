@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, type Console } from "./api";
 import { STATE_BADGE } from "./Installed";
 
-const EMPTY = { name: "", ip_address: "", connection_type: "ftp", port: "2121", username: "", password: "" };
+const EMPTY = { name: "", ip_address: "", connection_type: "helper", port: "7735", username: "", password: "" };
 type Draft = typeof EMPTY;
 
 function ConsoleForm({ console: c, onDone }: { console?: Console; onDone: () => void }) {
@@ -16,7 +16,7 @@ function ConsoleForm({ console: c, onDone }: { console?: Console; onDone: () => 
   async function save(e: FormEvent) {
     e.preventDefault();
     const { password, ...rest } = d;
-    const body: Record<string, unknown> = { ...rest, port: Number(d.port), username: d.username || null };
+    const body: Record<string, unknown> = { ...rest, port: d.connection_type === "helper" ? 7735 : Number(d.port), username: d.username || null };
     if (password) body.password = password; // blank = keep the saved one
     else if (forget || !c) body.password = null;
     try {
@@ -35,21 +35,24 @@ function ConsoleForm({ console: c, onDone }: { console?: Console; onDone: () => 
         <label>
           Connection
           <select {...field("connection_type")}>
-            <option value="ftp">FTP</option>
+            <option value="helper">Helper payload</option>
+            <option value="ftp">FTP (fallback)</option>
             <option value="http">HTTP</option>
             <option value="custom">Custom</option>
             <option value="mock">Mock (testing)</option>
           </select>
         </label>
-        <label>Port<input required type="number" min={1} max={65535} {...field("port")} /></label>
-        <label>Username<input autoComplete="off" placeholder="Optional" {...field("username")} /></label>
-        <label>
-          Password
-          <input type="password" autoComplete="new-password" disabled={forget}
-            placeholder={c?.has_password ? "Saved. Leave blank to keep it" : "Optional"} {...field("password")} />
-        </label>
+        {d.connection_type !== "helper" && <>
+          <label>Port<input required type="number" min={1} max={65535} {...field("port")} /></label>
+          <label>Username<input autoComplete="off" placeholder="Optional" {...field("username")} /></label>
+          <label>
+            Password
+            <input type="password" autoComplete="new-password" disabled={forget}
+              placeholder={c?.has_password ? "Saved. Leave blank to keep it" : "Optional"} {...field("password")} />
+          </label>
+        </>}
       </div>
-      {c?.has_password && (
+      {c?.has_password && d.connection_type !== "helper" && (
         <label className="check"><input type="checkbox" checked={forget} onChange={(e) => setForget(e.target.checked)} /> Forget saved password</label>
       )}
       <div className="actions">

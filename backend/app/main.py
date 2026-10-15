@@ -383,7 +383,7 @@ def browse(path: str = ""):
 
 # ---------------------------------------------------------------- consoles
 
-ConnectionType = Literal["ftp", "http", "custom", "mock"]
+ConnectionType = Literal["helper", "ftp", "http", "custom", "mock"]
 
 
 class ConsoleIn(BaseModel):
