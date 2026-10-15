@@ -1,6 +1,6 @@
 /* PS5 Local Storefront helper: a small HTTP server the PC app loads through the console's ELF loader.
  *   GET  /info  {"version", "firmware", "model", "mounts": [{"mount", "total", "free"}]}
- *   POST /quit  stops the helper, so a newer copy can take the port
+ *   POST /quit  stops the helper, so a newer copy can take the port (a new copy sends it to an old one itself)
  * Read-only for now. Build with ./build.ps1; VERSION comes from backend/app/__init__.py. */
 #include <signal.h>
 #include <stdarg.h>
@@ -9,10 +9,12 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/mount.h>
 #include <sys/param.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/time.h>
 
 #define PORT 7735
@@ -74,8 +76,10 @@ static void info(void) {
   int n = getfsstat(NULL, 0, MNT_NOWAIT);
   struct statfs *m = n > 0 ? calloc(n, sizeof *m) : NULL;
   if (m) n = getfsstat(m, n * sizeof *m, MNT_NOWAIT);
-  for (int i = 0; m && i < n; i++) {
-    put(i ? ",{\"mount\":" : "{\"mount\":");
+  for (int i = 0, first = 1; m && i < n; i++) {
+    if (!strncmp(m[i].f_mntonname, "/mnt/sandbox/", 13)) continue;  /* hundreds of per-app sandboxes, not drives */
+    put(first ? "{\"mount\":" : ",{\"mount\":");
+    first = 0;
     put_str(m[i].f_mntonname);
     put(",\"total\":%llu,\"free\":%llu}", (unsigned long long)m[i].f_blocks * m[i].f_bsize,
         (unsigned long long)m[i].f_bavail * m[i].f_bsize);
@@ -110,7 +114,13 @@ static int handle(int c) {
   int quit = 0;
   if (!strcmp(method, "GET") && !strcmp(path, "/info")) {
     info();
-    reply(c, "200 OK");
+    if (len < sizeof out) {
+      reply(c, "200 OK");
+    } else {  /* cut-off JSON would read as "no helper"; say what went wrong instead */
+      len = 0;
+      put("{\"error\":\"too_many_mounts\"}");
+      reply(c, "500 Internal Server Error");
+    }
   } else if (!strcmp(method, "POST") && !strcmp(path, "/quit")) {
     put("{\"ok\":true}");
     reply(c, "200 OK");
@@ -130,7 +140,27 @@ static void notify(const char *msg) {
   sceKernelSendNotificationRequest(0, &req, sizeof req, 0);
 }
 
+/* Asks a helper that's already running (an older copy) to stop, so this one can take the port. */
+static void stop_old_copy(void) {
+  int s = socket(AF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof addr);
+  addr.sin_len = sizeof addr;
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(PORT);
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  if (!connect(s, (struct sockaddr *)&addr, sizeof addr)) {
+    const char *req = "POST /quit HTTP/1.0\r\n\r\n";
+    send(s, req, strlen(req), 0);
+    char buf[256];
+    while (recv(s, buf, sizeof buf, 0) > 0);
+  }
+  close(s);
+}
+
 int main(void) {
+  /* the kernel keeps 19 characters; Payload Manager lists processes whose name ends in .elf */
+  syscall(SYS_thr_set_name, -1, "storefront.elf");
   signal(SIGPIPE, SIG_IGN);
   int srv = socket(AF_INET, SOCK_STREAM, 0), one = 1;
   setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
@@ -141,7 +171,8 @@ int main(void) {
   addr.sin_port = htons(PORT);
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
   for (int tries = 0; bind(srv, (struct sockaddr *)&addr, sizeof addr); tries++) {
-    if (tries == 20) {  /* an older copy that won't quit holds the port */
+    if (tries == 0) stop_old_copy();
+    if (tries == 20) {  /* something that isn't our helper holds the port */
       notify("PS5 Local Storefront helper couldn't start: port 7735 is in use.");
       return 1;
     }
