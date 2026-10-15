@@ -3,7 +3,7 @@ values are listed in comments and validated at the API boundary."""
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, TypeDecorator
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -15,6 +15,18 @@ def _id() -> str:
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UTCDateTime(TypeDecorator):
+    """SQLite drops the timezone; store UTC and hand it back marked as UTC so the browser doesn't read it as local time."""
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        return value.astimezone(timezone.utc).replace(tzinfo=None) if value and value.tzinfo else value
+
+    def process_result_value(self, value, dialect):
+        return value.replace(tzinfo=timezone.utc) if value and not value.tzinfo else value
 
 
 def _pk():
@@ -31,7 +43,7 @@ class LibraryRoot(Base):
     path: Mapped[str] = mapped_column(String, unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     exclude_patterns: Mapped[list] = mapped_column(JSON, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now)
 
 
 class Game(Base):
@@ -64,8 +76,8 @@ class Game(Base):
     compatibility_status: Mapped[str] = mapped_column(String(16), default="unknown")  # ready|needs_attention|incompatible|unknown
     compatibility_reason: Mapped[str] = mapped_column(Text, default="")
     detection_evidence: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now, onupdate=now)
 
 
 class Console(Base):
@@ -79,8 +91,8 @@ class Console(Base):
     credentials_secret_id: Mapped[str | None] = mapped_column(String(36))  # -> secrets.id
     firmware: Mapped[str | None] = mapped_column(String)
     helper_status: Mapped[dict] = mapped_column(JSON, default=dict)
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_inventory_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_inventory_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -89,7 +101,7 @@ class Secret(Base):
     __tablename__ = "secrets"
     id: Mapped[str] = _pk()
     ciphertext: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now)
 
 
 class Drive(Base):
@@ -103,7 +115,7 @@ class Drive(Base):
     total_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     free_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     is_install_target: Mapped[bool] = mapped_column(Boolean, default=False)
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class InstalledGame(Base):
@@ -120,9 +132,9 @@ class InstalledGame(Base):
     source_path: Mapped[str | None] = mapped_column(String)
     size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     status: Mapped[str] = mapped_column(String(32), default="unknown")  # installed|update_available|partially_installed|orphaned_icon|unknown
-    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+    last_verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now, onupdate=now)
 
 
 class InstallJob(Base):
@@ -139,9 +151,9 @@ class InstallJob(Base):
     eta_seconds: Mapped[int | None] = mapped_column(Integer)
     message: Mapped[str] = mapped_column(Text, default="")
     error_detail: Mapped[dict | None] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class RemovalJob(Base):
@@ -154,8 +166,8 @@ class RemovalJob(Base):
     bytes_freed: Mapped[int] = mapped_column(BigInteger, default=0)
     save_data_retained: Mapped[bool] = mapped_column(Boolean, default=True)
     message: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class AuditLog(Base):
@@ -168,4 +180,4 @@ class AuditLog(Base):
     target_path: Mapped[str | None] = mapped_column(String)
     result: Mapped[str] = mapped_column(String(16))  # success|failed|blocked|canceled
     details: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now, index=True)

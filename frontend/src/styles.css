@@ -138,3 +138,12 @@ dialog.remove code { display: block; overflow-wrap: anywhere; }
 dialog.remove form { display: flex; flex-direction: column; gap: 0.5rem; }
 dialog.remove form .danger { margin-top: 0.5rem; }
 dialog.remove > .secondary { margin-top: 1rem; }
+dialog.remove progress { width: 100%; }
+.callout { border-left: 3px solid var(--attention); background: var(--surface-2); padding: 0.6rem 0.8rem; border-radius: 6px; }
+
+.table-wrap { overflow-x: auto; }
+.audit { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.audit th { text-align: left; color: var(--muted); font-weight: 600; }
+.audit th, .audit td { padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.audit td:first-child { white-space: nowrap; }
+.table-wrap + p, .table-wrap ~ button { margin-top: 0.75rem; }

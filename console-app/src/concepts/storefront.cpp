@@ -4,8 +4,9 @@
 // A grid of covers on the left and the focused game on the right. Cross asks
 // the PC to install it; the PC does the copying and this screen follows its
 // progress. Square asks the PC what removing an installed game would delete,
-// shows it, and Square again removes it. All network traffic goes through
-// store::Client on its own thread.
+// shows it, and Square again removes it; a dialog says how it ended, and
+// whether its home-screen tile still has to be deleted by hand. All network
+// traffic goes through store::Client on its own thread.
 
 #include "concepts/concepts.hpp"
 
@@ -68,6 +69,10 @@ constexpr app::TourStep kTour[] = {
     {0.3f, 0, Direction::right},
     {0.8f, action_bit(Action::west), Direction::none},
     {0.8f, 0, Direction::none, "remove"},
+    {0.2f, action_bit(Action::west), Direction::none},
+    {0.6f, 0, Direction::none, "removing"},
+    {0.2f, action_bit(Action::north), Direction::none}, // the preview outruns the poll timer
+    {0.8f, 0, Direction::none, "removed"},
 };
 
 struct StateLook
@@ -168,10 +173,32 @@ class Storefront final : public app::Concept
             }
         }
 
+        store::RemovalResult result;
+        while (done_.id.empty() && client_.take_removal_result(&result))
+        {
+            done_ = result;
+            done_title_ = removal_titles_[result.id];
+            removal_titles_.erase(result.id);
+            client_.refresh(); // the game's new state
+            feedback.play(!result.ok ? audio::Cue::error : result.tile_left ? audio::Cue::notify : audio::Cue::complete);
+        }
+
         if (!confirm_.id.empty())
+        {
             update_confirm(input, feedback);
+        }
+        else if (!done_.id.empty())
+        {
+            if (input.is_pressed(Action::confirm) || input.is_pressed(Action::back))
+            {
+                done_ = {};
+                feedback.play(audio::Cue::modal_close);
+            }
+        }
         else
+        {
             update_grid(input, feedback, static_cast<int>(games_.size()));
+        }
 
         request_covers();
         const Rect card = card_rect(focus_);
@@ -190,7 +217,9 @@ class Storefront final : public app::Concept
                 if (g.id == confirm_.game_id)
                 {
                     client_.remove(confirm_.id, g.title_id);
+                    removal_titles_[confirm_.id] = g.title;
                     g.state = "removing"; // until the PC's list says otherwise
+                    g.progress = 0.0f;
                 }
             confirm_ = {};
             feedback.play(audio::Cue::select);
@@ -305,6 +334,8 @@ class Storefront final : public app::Concept
         }
         if (!confirm_.id.empty())
             return draw_confirm(list);
+        if (!done_.id.empty())
+            return draw_done(list);
         const bool can_remove = removable(games_[static_cast<std::size_t>(focus_)]);
         const ui::Hint hints[] = {{ui::Button::cross, "Install"},
                                   {ui::Button::triangle, "Refresh"},
@@ -396,6 +427,23 @@ class Storefront final : public app::Concept
         ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 2, 1824, true);
     }
 
+    void draw_done(gfx::DrawList &list) const
+    {
+        const ui::Fonts &fonts = context_.fonts;
+        const std::string title = done_title_.empty() ? std::string("the game") : done_title_;
+        list.rounded_rect({0, 0, 1920, 1080}, 0, Color::rgb(0x05070d, 0.75f));
+        const Rect box{960 - 520, 340, 1040, 400};
+        list.rounded_rect(box, 24, Color::rgb(0x161a2b));
+        const float x = box.x + 48;
+        const float width = box.w - 96;
+        const float y = ui::paragraph(list, fonts.semibold, (done_.ok ? "Removed " : "Couldn't remove ") + title,
+                                      x, box.y + 76, 36, width, 46, done_.ok ? kInk : kBad, 2);
+        ui::paragraph(list, fonts.regular, done_.message, x, y + 12, 26, width, 38,
+                      done_.ok && !done_.tile_left ? kMuted : done_.ok ? kWarn : kBad, 6);
+        const ui::Hint hints[] = {{ui::Button::cross, "OK"}};
+        ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 1, 1824, true);
+    }
+
     void draw_grid(gfx::DrawList &list) const
     {
         const ui::Fonts &fonts = context_.fonts;
@@ -426,7 +474,7 @@ class Storefront final : public app::Concept
                 list.rounded_rect(badge, 16, Color::rgb(0x0b0e1a, 0.85f));
                 ui::text(list, fonts.semibold, state.label, badge.x + 12, badge.y + 22, 18, state.color);
             }
-            if (g.state == "installing")
+            if (g.state == "installing" || g.state == "removing")
             {
                 const Rect bar{r.x + 12, r.y + r.h - 22, r.w - 24, 10};
                 list.rounded_rect(bar, 5, Color::rgb(0x0b0e1a, 0.85f));
@@ -467,21 +515,21 @@ class Storefront final : public app::Concept
         const StateLook state = look(g);
         ui::text(list, fonts.semibold, state.label, x, y, 28, state.color);
         y += 44;
-        if (g.state == "installing")
+        if (g.state == "installing" || g.state == "removing")
         {
             const Rect bar{x, y - 16, width, 14};
             list.rounded_rect(bar, 7, Color::rgb(0x0b0e1a));
             list.rounded_rect({bar.x, bar.y, std::max(14.0f, bar.w * g.progress), bar.h}, 7, kWarn);
             char percent[16];
             std::snprintf(percent, sizeof(percent), "%d%%", static_cast<int>(g.progress * 100.0f + 0.5f));
-            ui::text(list, fonts.mono, percent, x + width, y + 30, 22, kMuted, gfx::Align::right);
+            ui::text(list, fonts.mono, percent, x + width, y - 44, 22, kMuted, gfx::Align::right);
         }
         const char *detail = g.state == "installable"  ? "Press Cross to copy it from your PC to this console."
                              : g.state == "installed"  ? "It's on the home screen. Press Square to remove it."
                              : g.state == "update"     ? "Your PC has a newer version than the one installed."
                              : g.state == "queued"     ? "Your PC will start copying it soon."
                              : g.state == "installing" ? ""
-                             : g.state == "removing"   ? "Your PC is deleting it from this console."
+                             : g.state == "removing"   ? "Your PC is deleting it from this console, then its tile."
                                                        : nullptr;
         ui::paragraph(list, fonts.regular, detail != nullptr ? std::string(detail) : g.reason, x, y + 40,
                       24, width, 34, kMuted, 6);
@@ -499,6 +547,9 @@ class Storefront final : public app::Concept
     float message_age_ = kMessageSeconds;
     std::string awaiting_;   // the game whose removal preview was asked for
     store::Removal confirm_; // shown while its id is set
+    store::RemovalResult done_; // how a removal ended; shown while its id is set
+    std::string done_title_;
+    std::unordered_map<std::string, std::string> removal_titles_; // removal id -> game title
     int focus_ = 0;
     float age_ = 0.0f;
     float clock_ = 0.0f;

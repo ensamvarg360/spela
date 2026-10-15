@@ -11,6 +11,7 @@ import os
 import struct
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field, replace
@@ -568,7 +569,7 @@ class FTPConsoleAdapter:
             self._put_files(ftp, files)
         await self._run(put)
 
-    def _remove_source(self, ftp: ftplib.FTP, game: InstalledGameInfo) -> RemovalResult:
+    def _remove_source(self, ftp: ftplib.FTP, game: InstalledGameInfo, progress: ProgressCallback) -> RemovalResult:
         """Deletes one game's folder or image. Only a direct entry of a homebrew folder (project.md §13 allowlist),
         and only while the console still lists exactly that path with that title ID."""
         path = game.source_path or ""
@@ -586,25 +587,51 @@ class FTPConsoleAdapter:
         # Hidden first, so ShadowMountPlus never mounts a half-deleted game. A symlink is renamed, never followed.
         # ponytail: a connection lost mid-delete leaves the hidden .partial; reinstalling the game clears it.
         ftp.rename(path, tmp)
-        if is_dir:
-            self._rm_partial(ftp, tmp)
-        else:
-            ftp.delete(tmp)
-        return RemovalResult(True, "Removed.", [path], size)
+        files, dirs, todo = ([] if is_dir else [(tmp, size)]), [], ([tmp] if is_dir else [])
+        while todo:  # list everything first, so progress knows the total
+            d = todo.pop()
+            dirs.append(d)
+            for n, (sub, sz) in ftp.ls(d).items():
+                if sub:
+                    todo.append(f"{d}/{n}")
+                else:
+                    files.append((f"{d}/{n}", sz))
+        total, done = sum(sz for _, sz in files), 0
+        progress(0, total)
+        for f, sz in files:
+            ftp.delete(f)
+            done += sz
+            progress(done, total)
+        for d in reversed(dirs):  # children were listed after their parent
+            ftp.rmd(d)
+        return RemovalResult(True, "Removed.", [path], total)
 
     async def remove_shadowmount_source(self, installed_game: InstalledGameInfo, progress_callback: ProgressCallback) -> RemovalResult:
-        result = await self._run(lambda ftp: self._remove_source(ftp, installed_game))
-        progress_callback(1, 1)
-        return result
+        return await self._run(lambda ftp: self._remove_source(ftp, installed_game, progress_callback))
+
+    def _remove_tile(self, title_id: str) -> RemovalResult:
+        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/uninstall?id={title_id}", method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30):
+                return RemovalResult(True, "Tile removed.")
+        except urllib.error.HTTPError as e:
+            try:
+                why = json.loads(e.read())["error"]
+            except (ValueError, KeyError, TypeError):
+                why = e.reason
+            return RemovalResult(False, "The helper is too old to do it." if e.code == 404 else str(why))
+        except OSError:
+            return RemovalResult(False, "The helper isn't running.")
+
+    async def remove_home_screen_icon(self, title_id: str) -> RemovalResult:
+        """Asks the helper to remove a ShadowMountPlus tile whose game files are gone (payload/main.c, uninstall_tile)."""
+        return await asyncio.to_thread(self._remove_tile, title_id)
 
     async def install_package(self, *args, **kwargs):
         raise AdapterError("not_implemented", "This console has no package installer. Install folder dumps or disc images instead.")
 
-    async def _not_yet(self, *args, **kwargs):
+    async def uninstall_package(self, title_id: str) -> RemovalResult:
         raise AdapterError("not_implemented", "Not available yet. Delete it on the PS5 instead.")
-
-    # The home-screen tile stays after the source is gone; deleting it on the PS5 then removes it for good.
-    uninstall_package = remove_home_screen_icon = _not_yet
 
 
 class HelperFS:

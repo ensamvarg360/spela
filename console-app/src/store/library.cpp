@@ -79,6 +79,17 @@ bool parse_removal(std::string_view text, Removal *out)
     return true;
 }
 
+bool parse_removal_result(std::string_view text, RemovalResult *out)
+{
+    const std::vector<std::string_view> f = split(trim(split(text, '\n')[0]), '\t');
+    if (f.size() < 3 || f[0] == "removing")
+        return false;
+    out->ok = f[0] == "success";
+    out->tile_left = f[1] == "1";
+    out->message = f[2];
+    return true;
+}
+
 bool parse_server(std::string_view text, Server *out)
 {
     Server s;

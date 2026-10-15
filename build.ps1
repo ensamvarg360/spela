@@ -6,6 +6,8 @@ npm ci --no-fund --no-audit; npm run build
 Pop-Location
 $venv = "$PSScriptRoot\build\venv"
 if (-not (Test-Path $venv)) { python -m venv $venv }
+# setuptools reuses backend\build\lib and skips files whose source looks older, which shipped stale code
+Remove-Item -Recurse -Force "$PSScriptRoot\backend\build" -ErrorAction SilentlyContinue
 & "$venv\Scripts\python" -m pip install --quiet "$PSScriptRoot\backend" pyinstaller
 Push-Location "$PSScriptRoot\backend"
 & "$venv\Scripts\python" -m PyInstaller --noconfirm --onefile --windowed --name "PS5 Local Storefront" `

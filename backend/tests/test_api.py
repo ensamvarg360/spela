@@ -77,3 +77,13 @@ def test_browse_and_drive_root_layout(tmp_path):
         assert not report["errors"] and not any("RECYCLE" in p for p in report["added"])
         dump = next(g for g in c.get("/api/v1/games").json() if g["format"] == "folder_dump" and g["title_id"] == "PPSA06666")
         assert "Duplicate" not in dump["compatibility_reason"]
+
+
+def test_audit_log():
+    with TestClient(app) as c:
+        c.post("/api/v1/auth/login", json={"password": "nope"})
+        c.post("/api/v1/auth/login", json={"password": "password1"})  # set up in test_flow
+        rows = c.get("/api/v1/maintenance/audit-logs").json()
+        assert [r["result"] for r in rows[:2]] == ["success", "failed"] and rows[0]["action"] == "login"
+        older = c.get("/api/v1/maintenance/audit-logs", params={"before": rows[0]["created_at"]}).json()
+        assert older[0]["id"] == rows[1]["id"]

@@ -632,6 +632,10 @@ class RemovalOut(BaseModel):
     reason: str  # why not, when allowed is false
     status: str  # blocked|awaiting_confirmation|removing|success|failed
     message: str
+    progress: float  # 0-1 while deleting files
+    bytes_done: int
+    bytes_total: int
+    tile_left: bool  # done, but its home-screen tile must be deleted on the PS5
 
 
 class PreviewIn(BaseModel):
@@ -743,6 +747,31 @@ def cancel_job(job_id: str, db: Session = Depends(get_db)):
     return _job_out(db, j)
 
 
+# ---------------------------------------------------------------- audit log
+
+class AuditOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    action: str
+    result: str
+    console_id: str | None
+    console_name: str | None = None
+    title_id: str | None
+    target_path: str | None
+    details: dict
+    created_at: datetime
+
+
+@api.get("/maintenance/audit-logs", response_model=list[AuditOut])
+def audit_logs(before: datetime | None = None, db: Session = Depends(get_db)):
+    """Newest first, 100 per page; pass the last row's created_at as `before` for the next page."""
+    q = select(AuditLog, Console.name).outerjoin(Console, Console.id == AuditLog.console_id)
+    if before:
+        q = q.where(AuditLog.created_at < before)
+    rows = db.execute(q.order_by(AuditLog.created_at.desc()).limit(100))
+    return [AuditOut.model_validate(a).model_copy(update={"console_name": name}) for a, name in rows]
+
+
 # ---------------------------------------------------------------- PS5 app
 
 def console_app_token(console_id: str) -> str:
@@ -771,24 +800,27 @@ def _field(v) -> str:
 
 @console_api.get("/library", response_class=PlainTextResponse)
 def console_library(c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
-    """id, title, title ID, version, size, state, progress (0-1 while installing), has cover (1/0).
+    """id, title, title ID, version, size, state, progress (0-1 while installing or removing), has cover (1/0).
     state: installable | installed | update | queued | installing | removing | blocked:<reason>"""
     installed = {g.title_id: g for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
     active = {j.game_id: j for j in db.scalars(select(InstallJob).where(
         InstallJob.console_id == c.id, InstallJob.status.in_(jobs.ACTIVE)))}
     lines = []
     for g in db.scalars(select(Game).where(Game.format != "unknown", Game.missing.is_(False)).order_by(Game.title)):
-        j = active.get(g.id)
+        j, progress = active.get(g.id), None
         if j:
-            state = "queued" if j.status == "queued" else "installing"
+            state, progress = "queued" if j.status == "queued" else "installing", j.progress
         elif g.title_id in installed:
             row = installed[g.title_id]
-            state = "removing" if jobs.removing(row.id) else "update" if row.status == "update_available" else "installed"
+            r = jobs.active_removal(row.id)
+            state = "removing" if r else "update" if row.status == "update_available" else "installed"
+            progress = r and r["progress"]
         else:
             reason = jobs.blocker(db, c, g)
             state = f"blocked:{reason}" if reason else "installable"
         lines.append("\t".join(map(_field, (g.id, g.title, g.title_id, g.version, g.size_bytes, state,
-                                             f"{j.progress:.3f}" if j else "", int(bool(g.cover_path))))))
+                                             f"{progress:.3f}" if progress is not None else "",
+                                             int(bool(g.cover_path))))))
     return "".join(f"{line}\n" for line in lines)
 
 
@@ -836,6 +868,15 @@ async def console_uninstall(removal_id: str, title_id: str, c: Console = Depends
     except ValueError as e:
         return PlainTextResponse(str(e), 409)
     return "Removing."
+
+
+@console_api.get("/removals/{removal_id}", response_class=PlainTextResponse)
+def console_removal(removal_id: str, c: Console = Depends(console_from_token)):
+    """status (removing|success|failed), tile left on the home screen (1/0), message. For the app's done dialog."""
+    r = jobs.removals.get(removal_id)
+    if not r or r["console_id"] != c.id:
+        _not_found()
+    return "\t".join(map(_field, (r["status"], int(r["tile_left"]), r["message"]))) + "\n"
 
 
 def _address_seen_by(ip: str) -> str:

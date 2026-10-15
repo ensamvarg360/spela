@@ -12,6 +12,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -213,6 +214,11 @@ bool Client::step()
                                                    : r.body;
         pthread_mutex_lock(&lock_);
         messages_.emplace_back(text, r.status == 200);
+        if (job.kind == Job::remove && r.status == 200)
+        {
+            watching_.push_back(job.game_id);
+            busy_ = true;
+        }
         pthread_mutex_unlock(&lock_);
         refresh_ = true; // show it as queued or removing straight away
         return true;
@@ -232,6 +238,7 @@ bool Client::step()
     if (refresh_.exchange(false) || sys::monotonic_us() >= next_poll_)
     {
         fetch_library();
+        check_removals();
         next_poll_ = sys::monotonic_us() + (busy ? kPollBusy : kPollIdle);
         return true;
     }
@@ -249,6 +256,7 @@ void Client::fetch_library()
         busy_ = false;
         for (const Game &g : games_)
             busy_ = busy_ || g.state == "queued" || g.state == "installing" || g.state == "removing";
+        busy_ = busy_ || !watching_.empty();
     }
     else if (r.status == 401)
     {
@@ -265,6 +273,41 @@ void Client::fetch_library()
     }
     library_new_ = true;
     pthread_mutex_unlock(&lock_);
+}
+
+void Client::check_removals()
+{
+    pthread_mutex_lock(&lock_);
+    const std::vector<std::string> ids = watching_;
+    pthread_mutex_unlock(&lock_);
+    for (const std::string &id : ids)
+    {
+        const Response r = request(server_, "GET", "/api/v1/console-app/removals/" + id, 8192);
+        RemovalResult result;
+        result.id = id;
+        if (r.status == 404) // the PC was restarted and forgot it
+            result.message = "Your PC lost track of this removal. Check the game on the PC's Installed page.";
+        else if (r.status != 200 || !parse_removal_result(r.body, &result))
+            continue; // still running, or no answer this time
+        pthread_mutex_lock(&lock_);
+        watching_.erase(std::find(watching_.begin(), watching_.end(), id));
+        results_.push_back(std::move(result));
+        pthread_mutex_unlock(&lock_);
+    }
+}
+
+bool Client::take_removal_result(RemovalResult *result)
+{
+    drain();
+    pthread_mutex_lock(&lock_);
+    const bool have = !results_.empty();
+    if (have)
+    {
+        *result = std::move(results_.front());
+        results_.pop_front();
+    }
+    pthread_mutex_unlock(&lock_);
+    return have;
 }
 
 bool Client::take_library(std::vector<Game> *games, std::string *error)

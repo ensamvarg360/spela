@@ -5,10 +5,12 @@
  *   PUT  /file?p=<file>        writes the request body (needs Content-Length) to the file
  *   POST /mkdir?p=<dir>  /rename?p=<from>&to=<to>  /rm?p=<file or empty folder>
  *   POST /quit                 stops the helper, so a newer copy can take the port (a new copy sends it to an old one itself)
+ *   POST /uninstall?id=<title ID>  removes a ShadowMountPlus tile whose game files are gone (uninstall_tile())
  * Paths are percent-encoded. Anyone on the network can reach this port, so writes are refused outside the
  * homebrew folders (writable()). One thread per connection: /info still answers during a long upload.
  * Build with ./build.ps1; VERSION comes from backend/app/__init__.py. */
 #include <dirent.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -29,6 +31,8 @@
 #include <sys/syscall.h>
 #include <sys/time.h>
 
+#include <ps5/kernel.h>
+
 #define PORT 7735
 #define BLOCK (1 << 20)
 
@@ -47,6 +51,9 @@ typedef struct {
 int sceKernelGetProsperoSystemSwVersion(sce_version_t *);
 int sceKernelGetHwModelName(char *);
 int sceKernelSendNotificationRequest(int, notify_request_t *, size_t, int);
+
+#define SMP_API_PORT 10101                   /* ShadowMountPlus 1.7+ HTTP API, on 127.0.0.1 by default */
+#define AUTHID_SHELLCORE 0x4800000000000006ull /* what ShadowMountPlus runs as to use AppInstUtil */
 
 /* The PC app finds the bundled helper's version by searching the .elf for this string. */
 __attribute__((used)) static const char VERSION_MARKER[] = "storefront-helper-version:" VERSION;
@@ -153,7 +160,7 @@ static int hexval(char h) {
   return h >= '0' && h <= '9' ? h - '0' : h >= 'a' && h <= 'f' ? h - 'a' + 10 : h >= 'A' && h <= 'F' ? h - 'A' + 10 : -1;
 }
 
-/* Decodes query parameter `key` into `out`; 1 for an absolute path that fit, else 0. */
+/* Decodes query parameter `key` into `out`; 1 when it was there and fit, else 0. */
 static int param(const char *q, const char *key, char *out, size_t n) {
   size_t k = strlen(key), o = 0;
   for (; q; q = strchr(q, '&') ? strchr(q, '&') + 1 : NULL) {
@@ -169,7 +176,7 @@ static int param(const char *q, const char *key, char *out, size_t n) {
       out[o++] = ch;
     }
     out[o] = 0;
-    return out[0] == '/';
+    return 1;
   }
   return 0;
 }
@@ -264,6 +271,114 @@ static void upload(int c, const char *path, const char *head, const char *body, 
   else ok(c);
 }
 
+/* Asks ShadowMountPlus's API to uninstall `id`. Returns the HTTP status (its body in `out`), or 0 when nothing
+ * answers on the port: an older ShadowMountPlus, or its API turned off. */
+static int smp_uninstall(const char *id, char *out, size_t n) {
+  int s = socket(AF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in addr;
+  struct timeval timeout = {20, 0};
+  memset(&addr, 0, sizeof addr);
+  addr.sin_len = sizeof addr;
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(SMP_API_PORT);
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
+  if (connect(s, (struct sockaddr *)&addr, sizeof addr)) {
+    close(s);
+    return 0;
+  }
+  char req[512], resp[4096];
+  char body[64];
+  int blen = snprintf(body, sizeof body, "{\"title_id\":\"%s\"}", id);
+  int rlen = snprintf(req, sizeof req,
+                      "POST /api/v1/games/uninstall HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                      "Content-Length: %d\r\nConnection: close\r\n\r\n%s", blen, body);
+  size_t got = 0;
+  ssize_t r;
+  if (!send_all(s, req, rlen))
+    while (got < sizeof resp - 1 && (r = recv(s, resp + got, sizeof resp - 1 - got, 0)) > 0) got += r;
+  close(s);
+  resp[got] = 0;
+  int status = 0;
+  char *b = strstr(resp, "\r\n\r\n");
+  if (sscanf(resp, "HTTP/%*s %d", &status) != 1 || !b) return 502;
+  snprintf(out, n, "%s", b + 4);
+  return status;
+}
+
+/* Without ShadowMountPlus's API: the console's own uninstall, the call ShadowMountPlus makes itself. The library is
+ * opened on first use, so a console without it still runs every other endpoint. */
+static int appinstutil_uninstall(const char *id) {
+  static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+  static int (*uninstall)(const char *) = NULL;
+  static int tried = 0;
+  pthread_mutex_lock(&lock);
+  if (!tried) {
+    tried = 1;
+    void *lib = dlopen("/system/common/lib/libSceAppInstUtil.sprx", RTLD_LAZY);
+    int (*init)(void) = lib ? (int (*)(void))dlsym(lib, "sceAppInstUtilInitialize") : NULL;
+    uninstall = lib ? (int (*)(const char *))dlsym(lib, "sceAppInstUtilAppUnInstall") : NULL;
+    if (init && uninstall) {
+      kernel_set_ucred_authid(-1, AUTHID_SHELLCORE);
+      init();
+    } else {
+      uninstall = NULL;
+    }
+  }
+  pthread_mutex_unlock(&lock);
+  return uninstall ? uninstall(id) : -1;
+}
+
+/* Removes the home-screen tile of a ShadowMountPlus game whose files were deleted. Only such tiles: the title must
+ * have ShadowMountPlus's /user/app/<id>/mount.lnk, and the source it names (mount_img.lnk for a disc image) must be
+ * gone, so nothing on the network can remove a game that's still there. No tile at all counts as done. */
+static void uninstall_tile(int c, const char *query) {
+  char id[16] = "", lnk[PATH_MAX], source[PATH_MAX] = "", msg[4096];
+  if (!query || !param(query, "id", id, sizeof id) || strlen(id) != 9) {
+    fail(c, "400 Bad Request", "id must be a title ID");
+    return;
+  }
+  for (int i = 0; i < 9; i++)
+    if (i < 4 ? id[i] < 'A' || id[i] > 'Z' : id[i] < '0' || id[i] > '9') {
+      fail(c, "400 Bad Request", "id must be a title ID");
+      return;
+    }
+  FILE *f = NULL;
+  snprintf(lnk, sizeof lnk, "/user/app/%s/mount_img.lnk", id);
+  if (!(f = fopen(lnk, "r"))) {
+    snprintf(lnk, sizeof lnk, "/user/app/%s/mount.lnk", id);
+    f = fopen(lnk, "r");
+  }
+  if (!f) {
+    ok(c);  /* not a ShadowMountPlus title, or its tile is already gone */
+    return;
+  }
+  if (!fgets(source, sizeof source, f)) source[0] = 0;
+  fclose(f);
+  source[strcspn(source, "\r\n")] = 0;
+  struct stat st;
+  if (!source[0] || !lstat(source, &st)) {
+    fail(c, "409 Conflict", "the game's files are still on the console");
+    return;
+  }
+  int status = smp_uninstall(id, msg, sizeof msg);
+  if (status == 200) {
+    ok(c);
+  } else if (status) {
+    buf_t b = {0};  /* pass on ShadowMountPlus's answer: {"status", "error", "error_reason"} */
+    put(&b, "%s", msg);
+    char line[32];
+    snprintf(line, sizeof line, "%d ShadowMountPlus", status);
+    reply(c, line, &b);
+    free(b.s);
+  } else if ((status = appinstutil_uninstall(id))) {
+    snprintf(msg, sizeof msg, "the console refused (0x%08X)", (unsigned)status);
+    fail(c, "500 Internal Server Error", msg);
+  } else {
+    ok(c);
+  }
+}
+
 static int is_dir(const char *path) {
   struct stat st;
   return !lstat(path, &st) && S_ISDIR(st.st_mode);
@@ -284,7 +399,7 @@ static void handle(int c) {
   sscanf(head, "%7s %4095s", method, target);
   char *query = strchr(target, '?');
   if (query) *query++ = 0;
-  int get = !strcmp(method, "GET"), post = !strcmp(method, "POST"), has_path = query && param(query, "p", path, sizeof path);
+  int get = !strcmp(method, "GET"), post = !strcmp(method, "POST"), has_path = query && param(query, "p", path, sizeof path) && path[0] == '/';
 
   if (get && !strcmp(target, "/info")) {
     buf_t b = {0};
@@ -295,6 +410,8 @@ static void handle(int c) {
     ok(c);
     close(c);
     exit(0);
+  } else if (post && !strcmp(target, "/uninstall")) {
+    uninstall_tile(c, query);
   } else if (!has_path && (get || post || !strcmp(method, "PUT"))) {
     fail(c, "400 Bad Request", "p must be an absolute path");
   } else if (get && !strcmp(target, "/ls")) {

@@ -61,6 +61,8 @@ class Client
     void preview_removal(const std::string &game_id);
     bool take_removal(Removal *removal);
     void remove(const std::string &removal_id, const std::string &title_id);
+    // A removal this app started has ended.
+    bool take_removal_result(RemovalResult *result);
     // The answer to an install or removal: "Queued.", "Removing." or why not.
     bool take_message(std::string *message, bool *ok);
     void request_cover(const std::string &game_id);
@@ -85,6 +87,7 @@ class Client
     bool step(); // one request, if one is due; false when idle
     void drain();
     void fetch_library();
+    void check_removals();
 
     Server server_;
     bool paired_ = false;
@@ -104,6 +107,8 @@ class Client
     std::deque<std::pair<std::string, std::vector<std::uint8_t>>> covers_;
     std::deque<std::pair<std::string, bool>> messages_;
     std::deque<Removal> removals_;
+    std::vector<std::string> watching_; // removal ids started here and not ended yet
+    std::deque<RemovalResult> results_;
 };
 
 } // namespace hui::store

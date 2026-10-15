@@ -44,6 +44,18 @@ struct Removal
 
 bool parse_removal(std::string_view text, Removal *out);
 
+// How a removal this app started ended (console_removal in backend/app/main.py).
+struct RemovalResult
+{
+    std::string id;
+    bool ok = false;
+    bool tile_left = false; // its home-screen tile must still be deleted by hand
+    std::string message;
+};
+
+// False while it's still running.
+bool parse_removal_result(std::string_view text, RemovalResult *out);
+
 // Where the PC app is: assets/server.txt, written by the PC when it installs
 // this app ("url=http://192.168.0.40:8787" and "token=..." lines).
 struct Server

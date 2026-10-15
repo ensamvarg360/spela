@@ -15,9 +15,9 @@ from test_console_profiles import login
 from test_inventory import FakeHelper
 
 from app import __version__, credentials, inventory, jobs
-from app.consoles import AdapterError, DriveInfo, FTPConsoleAdapter, HelperConsoleAdapter, InstalledGameInfo
+from app.consoles import AdapterError, DriveInfo, FTPConsoleAdapter, HelperConsoleAdapter, InstalledGameInfo, RemovalResult
 from app.database import Base, SessionLocal, engine
-from app.main import app
+from app.main import app, console_app_token
 from app.models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob
 
 
@@ -266,11 +266,11 @@ def test_remove_source_allowlist(ps5):
     write(root / "data/homebrew/Dump PPSA03333/sce_sys/param.json", PARAM_JSON.replace(b"PPSA02222", b"PPSA03333"))
     write(root / "data/homebrew/Dump PPSA03333/sce_sys/about/right.sprx", b"s")
     write(root / "mnt/usb0/homebrew/Racer PPSA04444.exfat", EXFAT)
-    a = adapter(port)
+    a, progress = adapter(port), []
 
     def remove(path, tid):
         return asyncio.run(a.remove_shadowmount_source(InstalledGameInfo(tid, "", None, "shadowmountplus", None, path, path, 0),
-                                                       lambda d, t: None))
+                                                       lambda d, t: progress.append((d, t))))
 
     for path in ("/user/app/PPSA01111", "/data/homebrew", "/data/homebrew/../homebrew/Dump PPSA03333",
                  "/data/homebrew/*", "/data/homebrew/PPSA99787", "/data/homebrew/.Dump PPSA03333.partial"):
@@ -281,7 +281,9 @@ def test_remove_source_allowlist(ps5):
         remove("/data/homebrew/Dump PPSA03333", "PPSA09999")
     assert e.value.code == "not_found"
 
-    assert remove("/data/homebrew/Dump PPSA03333", "PPSA03333").ok
+    dump = len(PARAM_JSON) + 1
+    assert remove("/data/homebrew/Dump PPSA03333", "PPSA03333").bytes_freed == dump
+    assert progress[0] == (0, dump) and progress[-1] == (dump, dump) and len(progress) == 3  # one step per file
     assert remove("/mnt/usb0/homebrew/Racer PPSA04444.exfat", "PPSA04444").ok
     assert list((root / "data/homebrew").iterdir()) == [] and list((root / "mnt/usb0/homebrew").iterdir()) == []
     assert (root / "user/app/PPSA01111/app.pkg").exists()
@@ -315,9 +317,34 @@ def test_uninstall_api(ps5):
                 break
             asyncio.run(asyncio.sleep(0.1))
         assert j["status"] == "success", j
+        assert (j["progress"], j["bytes_total"], j["tile_left"]) == (1.0, len(EXFAT), False)
+        assert "tile is gone" in j["message"]
         assert not (root / "mnt/usb0/homebrew/Racer PPSA04444.exfat").exists()
         assert [g["title_id"] for g in client.get(f"/api/v1/consoles/{c.id}/installed").json()] == ["PPSA01111"]
         assert client.post(url, json={"removal_id": p["id"], "confirm_title_id": "PPSA04444"}).status_code == 409  # used up
         with SessionLocal() as db:
             results = [a.result for a in db.scalars(select(AuditLog).where(AuditLog.action == "uninstall").order_by(AuditLog.created_at))]
         assert results[-4:] == ["blocked", "blocked", "success", "blocked"]
+
+
+def test_uninstall_tile_left(ps5, monkeypatch):
+    """When the helper can't remove the tile, both the PC and the PS5 app are told to delete it on the PS5."""
+    root, port, lib = ps5
+    write(root / "data/homebrew/Racer PPSA04444.exfat", EXFAT)
+    monkeypatch.setattr(FTPConsoleAdapter, "_remove_tile", lambda self, tid: RemovalResult(False, "The helper is too old to do it."))
+    with TestClient(app) as client:
+        login(client)
+        with SessionLocal() as db:
+            c, _ = _setup(db, port, lib)
+            row = db.scalar(select(InstalledGame).where(InstalledGame.console_id == c.id, InstalledGame.title_id == "PPSA04444"))
+        p = client.post(f"/api/v1/consoles/{c.id}/uninstall/preview", json={"installed_game_id": row.id}).json()
+        assert client.post(f"/api/v1/consoles/{c.id}/uninstall", json={"removal_id": p["id"], "confirm_title_id": "PPSA04444"}).status_code == 202
+        auth = {"Authorization": f"Bearer {console_app_token(c.id)}"}
+        for _ in range(50):
+            text = client.get(f"/api/v1/console-app/removals/{p['id']}", headers=auth).text
+            if not text.startswith("removing"):
+                break
+            asyncio.run(asyncio.sleep(0.1))
+        status, tile_left, message = text.rstrip("\n").split("\t")
+        assert (status, tile_left) == ("success", "1") and "delete it there" in message and "too old" in message
+        assert client.get(f"/api/v1/console-app/removals/{p['id']}").status_code == 401

@@ -189,8 +189,12 @@ _tasks: set[asyncio.Task] = set()  # keeps running removals from being garbage c
 PREVIEW_SECONDS = 600  # a preview older than this must be made again
 
 
+def active_removal(installed_game_id: str) -> dict | None:
+    return next((r for r in removals.values() if r["installed_game_id"] == installed_game_id and r["status"] == "removing"), None)
+
+
 def removing(installed_game_id: str) -> bool:
-    return any(r["installed_game_id"] == installed_game_id and r["status"] == "removing" for r in removals.values())
+    return active_removal(installed_game_id) is not None
 
 
 def removal_blocker(db: Session, row: InstalledGame) -> str | None:
@@ -210,13 +214,14 @@ def preview(db: Session, row: InstalledGame) -> dict:
     reason = removal_blocker(db, row)
     warnings = ["If the game is running on the PS5, close it first."]
     if (row.source_path or "").lower().endswith(IMAGE_EXTS):
-        warnings.append("ShadowMountPlus keeps disc images mounted, so the space may only come back after the PS5 restarts.")
+        warnings.append("If ShadowMountPlus has the disc image mounted, the space may only come back after the PS5 restarts.")
     p = {"id": _id(), "console_id": row.console_id, "installed_game_id": row.id, "title_id": row.title_id,
          "title": row.title, "install_route": row.install_route, "source_path": row.source_path,
          "icon_removal_required": True, "estimated_bytes_freed": row.size_bytes or (lib.size_bytes if lib else 0),
          "save_data_retained": True, "library_backup_retained": True, "warnings": warnings,
          "allowed": reason is None, "reason": reason or "",
-         "status": "awaiting_confirmation" if reason is None else "blocked", "message": "", "created": time.monotonic()}
+         "status": "awaiting_confirmation" if reason is None else "blocked", "message": "", "created": time.monotonic(),
+         "progress": 0.0, "bytes_done": 0, "bytes_total": 0, "tile_left": False}
     if reason is None:
         removals[p["id"]] = p
     return p
@@ -254,18 +259,27 @@ async def _remove(removal_id: str):
         console = db.get(Console, r["console_id"])
         game = InstalledGameInfo(r["title_id"], r["title"], None, "shadowmountplus", None,
                                  r["source_path"], r["source_path"], 0)
+        def progress(done: int, total: int):  # called from the transfer thread; plain assignments
+            r["bytes_done"], r["bytes_total"], r["progress"] = done, total, done / total if total else 1.0
+
         try:
             if not console:
                 raise AdapterError("not_found", "The console was deleted.")
-            result = await inventory.adapter_for(db, console).remove_shadowmount_source(game, lambda done, total: None)
+            adapter = inventory.adapter_for(db, console)
+            result = await adapter.remove_shadowmount_source(game, progress)
             if not result.ok:
                 raise AdapterError("failed", result.message)
+            r["message"] = "Removing its tile from the home screen."
+            tile = await adapter.remove_home_screen_icon(r["title_id"])
             try:
                 await inventory.refresh(db, console)
             except AdapterError:
                 pass  # the files are gone; the next inventory read drops the game
-            r["status"] = "success"
-            r["message"] = "Removed. Its tile stays on the PS5 home screen until you delete it there, and won't come back."
+            freed = f"Freed {result.bytes_freed / 1e9:.1f} GB. " if result.bytes_freed else ""
+            r["status"], r["tile_left"] = "success", not tile.ok
+            r["message"] = (f"Removed. {freed}Its tile is gone from the home screen too." if tile.ok else
+                            f"Removed. {freed}Its tile is still on the PS5 home screen: delete it there (Options, then "
+                            f"Delete). It won't come back. ({tile.message})")
         except AdapterError as e:
             r["status"], r["message"] = "failed", e.message
         except Exception as e:  # a bug must fail the removal, not leave it "removing"
@@ -273,6 +287,6 @@ async def _remove(removal_id: str):
             r["status"], r["message"] = "failed", f"Unexpected error: {e}"
         db.add(AuditLog(action="uninstall", console_id=r["console_id"], title_id=r["title_id"], target_path=r["source_path"],
                         result="success" if r["status"] == "success" else "failed",
-                        details={"removal": removal_id, "message": r["message"],
-                                 "estimated_bytes_freed": r["estimated_bytes_freed"]}))
+                        details={"removal": removal_id, "message": r["message"], "bytes_freed": r["bytes_total"],
+                                 "tile_left": r["tile_left"]}))
         db.commit()

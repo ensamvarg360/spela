@@ -107,6 +107,10 @@ export interface Removal {
   reason: string;
   status: "blocked" | "awaiting_confirmation" | "removing" | "success" | "failed";
   message: string;
+  progress: number; // 0..1 while deleting files
+  bytes_done: number;
+  bytes_total: number;
+  tile_left: boolean; // removed, but its home-screen tile must still be deleted on the PS5
 }
 
 export type JobStatus = "queued" | "preflight" | "transferring" | "registering" | "success" | "failed" | "canceled" | "interrupted";
@@ -128,6 +132,18 @@ export interface Job {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+}
+
+export interface AuditEntry {
+  id: string;
+  action: string;
+  result: "success" | "failed" | "blocked" | "canceled";
+  console_id: string | null;
+  console_name: string | null; // null with a console_id = console since deleted
+  title_id: string | null;
+  target_path: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface ScanStatus {

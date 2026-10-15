@@ -35,6 +35,7 @@ def cover(seed: int) -> bytes:
 
 
 class Handler(BaseHTTPRequestHandler):
+    removal_asks = 0
     def _send(self, status: int, body: bytes, kind="text/plain; charset=utf-8"):
         self.send_response(status)
         self.send_header("Content-Type", kind)
@@ -59,6 +60,16 @@ class Handler(BaseHTTPRequestHandler):
             idx = next((i for i, g in enumerate(GAMES) if g[0] == gid), None)
             if idx is not None and GAMES[idx][7] == "1":
                 return self._send(200, cover(idx + 3), "application/octet-stream")
+        if self.path.startswith("/api/v1/console-app/removals/"):  # still running on the first ask, then done
+            game = next((g for g in GAMES if g[0] == self.path.rsplit("/", 1)[1].removeprefix("rm-")), None)
+            if game:
+                Handler.removal_asks += 1
+                if Handler.removal_asks == 1:
+                    return self._send(200, b"removing\t0\tDeleting the game's files from the console.\n")
+                game[5], game[6] = "installable", ""
+                return self._send(200, b"success\t1\tRemoved. Freed 88.9 GB. Its tile is still on the PS5 home screen: "
+                                       b"delete it there (Options, then Delete). It won't come back. "
+                                       b"(The helper is too old to do it.)\n")
         self._send(404, b"not found")
 
     def do_POST(self):
@@ -72,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
             if parts[6] == "preview":
                 line = f"rm-{game[0]}\t/data/homebrew/{game[1]} {game[2]}\t{game[4]}\tIf the game is running on the PS5, close it first.\n"
                 return self._send(200, line.encode())
-            game[5] = "removing"
+            game[5], game[6] = "removing", "0.400"
             return self._send(200, b"Removing.")
         gid = self.path.rsplit("/", 1)[1]
         game = next((g for g in GAMES if g[0] == gid), None)

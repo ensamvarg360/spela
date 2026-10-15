@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, type Root, type ScanStatus } from "./api";
+import AuditLog from "./AuditLog";
 import Consoles from "./Consoles";
 
 interface Listing { path: string; parent: string | null; dirs: string[] }
@@ -125,6 +126,7 @@ export default function Settings() {
       </section>
 
       <Consoles />
+      <AuditLog />
     </div>
   );
 }

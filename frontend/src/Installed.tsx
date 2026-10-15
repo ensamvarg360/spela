@@ -90,7 +90,7 @@ function RemoveDialog({ consoleId, game, onClose }: { consoleId: string; game: I
           <p>This deletes the game's ShadowMountPlus files from the console:</p>
           <code>{p.source_path}</code>
           <p>Space freed: {p.estimated_bytes_freed ? `about ${formatBytes(p.estimated_bytes_freed)}` : "unknown"}. Save data and the copy in your PC library are kept.</p>
-          <p className="muted">Its tile stays on the PS5 home screen until you delete it there. After that it won't come back.</p>
+          <p className="muted">Its home-screen tile is removed too. If that fails, you'll be told to delete it on the PS5.</p>
           {p.warnings.map((w) => <p className="muted" key={w}>{w}</p>)}
           {p.status === "awaiting_confirmation" && (
             <form onSubmit={confirm}>
@@ -100,8 +100,13 @@ function RemoveDialog({ consoleId, game, onClose }: { consoleId: string; game: I
               <button className="danger" disabled={typed.trim().toUpperCase() !== p.title_id}>Remove from console</button>
             </form>
           )}
-          {p.status === "removing" && <p role="status">Removing… This can take a few minutes for a folder with many files.</p>}
-          {ended && <p className={p.status === "failed" ? "error" : ""} role="status">{p.message}</p>}
+          {p.status === "removing" && (
+            <div role="status">
+              <progress max={1} value={p.progress} aria-label="Deleting" />
+              <p className="muted">{p.bytes_total ? `${formatBytes(p.bytes_done)} of ${formatBytes(p.bytes_total)} · ` : ""}{p.message}</p>
+            </div>
+          )}
+          {ended && <p className={p.status === "failed" ? "error" : p.tile_left ? "callout" : ""} role="status">{p.message}</p>}
         </>
       )}
       {error && p && <p className="error" role="alert">{error}</p>}
