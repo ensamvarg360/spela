@@ -91,6 +91,22 @@ export interface InstalledGame {
   size_bytes: number;
   status: "installed" | "update_available" | "partially_installed" | "orphaned_icon" | "unknown";
   last_verified_at: string | null;
+  removing: boolean;
+}
+
+/** An uninstall preview, then the removal's progress (project.md §13). */
+export interface Removal {
+  id: string;
+  installed_game_id: string;
+  title_id: string;
+  title: string;
+  source_path: string | null;
+  estimated_bytes_freed: number; // 0 = unknown
+  warnings: string[];
+  allowed: boolean;
+  reason: string;
+  status: "blocked" | "awaiting_confirmation" | "removing" | "success" | "failed";
+  message: string;
 }
 
 export type JobStatus = "queued" | "preflight" | "transferring" | "registering" | "success" | "failed" | "canceled" | "interrupted";

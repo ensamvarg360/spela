@@ -598,6 +598,7 @@ class InstalledOut(BaseModel):
     size_bytes: int
     status: str
     last_verified_at: datetime | None
+    removing: bool = False
 
 
 @api.get("/consoles/{console_id}/installed", response_model=list[InstalledOut])
@@ -609,8 +610,62 @@ def list_installed(console_id: str, db: Session = Depends(get_db)):
         cover = (f"/api/v1/games/{lib.id}/cover" if lib and lib.cover_path
                  else f"/api/v1/icons/{g.title_id}" if inventory.icon_path(g.title_id).is_file() else None)
         out.append(InstalledOut.model_validate(g).model_copy(update={
-            "cover_url": cover, "library_version": lib and lib.version}))
+            "cover_url": cover, "library_version": lib and lib.version, "removing": jobs.removing(g.id)}))
     return out
+
+
+# ---------------------------------------------------------------- removal
+
+class RemovalOut(BaseModel):
+    id: str
+    installed_game_id: str
+    title_id: str
+    title: str
+    install_route: str
+    source_path: str | None
+    icon_removal_required: bool
+    estimated_bytes_freed: int
+    save_data_retained: bool
+    library_backup_retained: bool
+    warnings: list[str]
+    allowed: bool
+    reason: str  # why not, when allowed is false
+    status: str  # blocked|awaiting_confirmation|removing|success|failed
+    message: str
+
+
+class PreviewIn(BaseModel):
+    installed_game_id: str
+
+
+class UninstallIn(BaseModel):
+    removal_id: str
+    confirm_title_id: str
+
+
+def _installed(db: Session, console_id: str, installed_game_id: str) -> InstalledGame:
+    row = db.get(InstalledGame, installed_game_id)
+    if not row or row.console_id != console_id:
+        _not_found()
+    return row
+
+
+@api.post("/consoles/{console_id}/uninstall/preview", response_model=RemovalOut)
+def uninstall_preview(console_id: str, body: PreviewIn, db: Session = Depends(get_db)):
+    return jobs.preview(db, _installed(db, console_id, body.installed_game_id))
+
+
+@api.post("/consoles/{console_id}/uninstall", response_model=RemovalOut, status_code=202)
+async def uninstall(console_id: str, body: UninstallIn, db: Session = Depends(get_db)):
+    try:
+        return jobs.start_removal(db, db.get(Console, console_id) or _not_found(), body.removal_id, body.confirm_title_id)
+    except ValueError as e:
+        raise HTTPException(409, {"error": "cannot_remove", "message": str(e)})
+
+
+@api.get("/removal-jobs/{removal_id}", response_model=RemovalOut)
+def get_removal(removal_id: str):
+    return jobs.removals.get(removal_id) or _not_found()
 
 
 @api.get("/icons/{title_id}")
@@ -717,8 +772,8 @@ def _field(v) -> str:
 @console_api.get("/library", response_class=PlainTextResponse)
 def console_library(c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
     """id, title, title ID, version, size, state, progress (0-1 while installing), has cover (1/0).
-    state: installable | installed | update | queued | installing | blocked:<reason>"""
-    installed = {g.title_id: g.status for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
+    state: installable | installed | update | queued | installing | removing | blocked:<reason>"""
+    installed = {g.title_id: g for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
     active = {j.game_id: j for j in db.scalars(select(InstallJob).where(
         InstallJob.console_id == c.id, InstallJob.status.in_(jobs.ACTIVE)))}
     lines = []
@@ -727,7 +782,8 @@ def console_library(c: Console = Depends(console_from_token), db: Session = Depe
         if j:
             state = "queued" if j.status == "queued" else "installing"
         elif g.title_id in installed:
-            state = "update" if installed[g.title_id] == "update_available" else "installed"
+            row = installed[g.title_id]
+            state = "removing" if jobs.removing(row.id) else "update" if row.status == "update_available" else "installed"
         else:
             reason = jobs.blocker(db, c, g)
             state = f"blocked:{reason}" if reason else "installable"
@@ -755,6 +811,31 @@ def console_install(game_id: str, c: Console = Depends(console_from_token), db: 
     except ValueError as e:
         return PlainTextResponse(str(e), 409)
     return "Queued."
+
+
+@console_api.post("/uninstall/{game_id}/preview", response_class=PlainTextResponse)
+def console_uninstall_preview(game_id: str, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
+    """removal id, path to delete, estimated bytes freed, warnings (joined by spaces). 409 with the reason when it can't."""
+    g = _game(db, game_id)
+    rows = db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id, InstalledGame.title_id == g.title_id)
+                      .order_by(InstalledGame.install_route.desc()))  # shadowmountplus before package_installer
+    row = next(iter(rows), None)
+    if not g.title_id or not row:
+        return PlainTextResponse("It isn't installed on this console.", 409)
+    p = jobs.preview(db, row)
+    if not p["allowed"]:
+        return PlainTextResponse(p["reason"], 409)
+    return "\t".join(map(_field, (p["id"], p["source_path"], p["estimated_bytes_freed"], " ".join(p["warnings"])))) + "\n"
+
+
+@console_api.post("/uninstall/{removal_id}/confirm/{title_id}", response_class=PlainTextResponse)
+async def console_uninstall(removal_id: str, title_id: str, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
+    """The console's confirm dialog stands in for typing: it sends the title ID it showed."""
+    try:
+        jobs.start_removal(db, c, removal_id, title_id)
+    except ValueError as e:
+        return PlainTextResponse(str(e), 409)
+    return "Removing."
 
 
 def _address_seen_by(ip: str) -> str:

@@ -64,6 +64,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._authorized():
             return
+        parts = self.path.split("/")  # "", api, v1, console-app, uninstall, <id>, preview | confirm, <title ID>
+        if len(parts) > 6 and parts[4] == "uninstall":
+            game = next((g for g in GAMES if g[0] == parts[5].removeprefix("rm-")), None)
+            if not game or game[5] not in ("installed", "update"):
+                return self._send(409, b"It isn't installed on this console.")
+            if parts[6] == "preview":
+                line = f"rm-{game[0]}\t/data/homebrew/{game[1]} {game[2]}\t{game[4]}\tIf the game is running on the PS5, close it first.\n"
+                return self._send(200, line.encode())
+            game[5] = "removing"
+            return self._send(200, b"Removing.")
         gid = self.path.rsplit("/", 1)[1]
         game = next((g for g in GAMES if g[0] == gid), None)
         if not game or game[5] != "installable":

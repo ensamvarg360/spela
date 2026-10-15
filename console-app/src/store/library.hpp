@@ -21,7 +21,7 @@ struct Game
     std::string title_id;
     std::string version;
     std::uint64_t size_bytes = 0;
-    // installable | installed | update | queued | installing | blocked
+    // installable | installed | update | queued | installing | removing | blocked
     std::string state;
     std::string reason; // why it's blocked
     float progress = 0.0f;
@@ -29,6 +29,20 @@ struct Game
 };
 
 std::vector<Game> parse_library(std::string_view text);
+
+// What removing a game would delete, as the PC previews it (console_uninstall_preview
+// in backend/app/main.py): one tab-separated line.
+struct Removal
+{
+    std::string game_id;
+    std::string id; // the PC's preview id; empty when it can't be removed (error says why)
+    std::string path;
+    std::uint64_t bytes = 0; // estimated space freed; 0: unknown
+    std::string warnings;
+    std::string error;
+};
+
+bool parse_removal(std::string_view text, Removal *out);
 
 // Where the PC app is: assets/server.txt, written by the PC when it installs
 // this app ("url=http://192.168.0.40:8787" and "token=..." lines).

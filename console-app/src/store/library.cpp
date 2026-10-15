@@ -67,6 +67,18 @@ std::vector<Game> parse_library(std::string_view text)
     return games;
 }
 
+bool parse_removal(std::string_view text, Removal *out)
+{
+    const std::vector<std::string_view> f = split(trim(split(text, '\n')[0]), '\t');
+    if (f.size() < 4 || f[0].empty())
+        return false;
+    out->id = f[0];
+    out->path = f[1];
+    out->bytes = std::strtoull(std::string(f[2]).c_str(), nullptr, 10);
+    out->warnings = f[3];
+    return true;
+}
+
 bool parse_server(std::string_view text, Server *out)
 {
     Server s;

@@ -75,7 +75,7 @@ def test_ftp_adapter_reads_drives_and_games(ps5):
     assert games["PPSA04444"].size_bytes == 99
     assert games["CUSA00009"].drive_external_id == "usb0"
 
-    with pytest.raises(Exception, match="isn't available yet"):
+    with pytest.raises(Exception, match="Not available over FTP"):
         asyncio.run(a.uninstall_package("PPSA02222"))
 
 

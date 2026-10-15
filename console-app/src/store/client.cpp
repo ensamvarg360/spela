@@ -186,16 +186,35 @@ bool Client::step()
     const bool busy = busy_;
     pthread_mutex_unlock(&lock_);
 
-    if (have_job && job.kind == Job::install)
+    if (have_job && job.kind == Job::preview)
     {
-        const Response r = request(server_, "POST", "/api/v1/console-app/install/" + job.game_id, 4096);
+        const Response r =
+            request(server_, "POST", "/api/v1/console-app/uninstall/" + job.game_id + "/preview", 8192);
+        Removal removal;
+        removal.game_id = job.game_id;
+        if (r.status != 200 || !parse_removal(r.body, &removal))
+            removal.error = r.status == 0     ? "Can't reach the PC."
+                            : r.status == 401 ? unpaired_message()
+                            : r.status == 200 ? "The PC's answer didn't make sense. Update the PS5 app."
+                                              : r.body;
+        pthread_mutex_lock(&lock_);
+        removals_.push_back(std::move(removal));
+        pthread_mutex_unlock(&lock_);
+        return true;
+    }
+    if (have_job && (job.kind == Job::install || job.kind == Job::remove))
+    {
+        const std::string path = job.kind == Job::install
+                                     ? "/api/v1/console-app/install/" + job.game_id
+                                     : "/api/v1/console-app/uninstall/" + job.game_id + "/confirm/" + job.title_id;
+        const Response r = request(server_, "POST", path, 4096);
         const std::string text = r.status == 0     ? "Can't reach the PC."
                                  : r.status == 401 ? unpaired_message()
                                                    : r.body;
         pthread_mutex_lock(&lock_);
         messages_.emplace_back(text, r.status == 200);
         pthread_mutex_unlock(&lock_);
-        refresh_ = true; // show it as queued straight away
+        refresh_ = true; // show it as queued or removing straight away
         return true;
     }
     if (have_job)
@@ -229,7 +248,7 @@ void Client::fetch_library()
         error_.clear();
         busy_ = false;
         for (const Game &g : games_)
-            busy_ = busy_ || g.state == "queued" || g.state == "installing";
+            busy_ = busy_ || g.state == "queued" || g.state == "installing" || g.state == "removing";
     }
     else if (r.status == 401)
     {
@@ -273,6 +292,34 @@ void Client::install(const std::string &game_id)
 {
     pthread_mutex_lock(&lock_);
     jobs_.push_front({Job::install, game_id}); // ahead of any covers still loading
+    pthread_mutex_unlock(&lock_);
+}
+
+void Client::preview_removal(const std::string &game_id)
+{
+    pthread_mutex_lock(&lock_);
+    jobs_.push_front({Job::preview, game_id});
+    pthread_mutex_unlock(&lock_);
+}
+
+bool Client::take_removal(Removal *removal)
+{
+    drain();
+    pthread_mutex_lock(&lock_);
+    const bool have = !removals_.empty();
+    if (have)
+    {
+        *removal = std::move(removals_.front());
+        removals_.pop_front();
+    }
+    pthread_mutex_unlock(&lock_);
+    return have;
+}
+
+void Client::remove(const std::string &removal_id, const std::string &title_id)
+{
+    pthread_mutex_lock(&lock_);
+    jobs_.push_front({Job::remove, removal_id, title_id});
     pthread_mutex_unlock(&lock_);
 }
 

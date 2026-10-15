@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { api, appVersion, formatBytes, JOB_ACTIVE, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus } from "./api";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { api, appVersion, formatBytes, JOB_ACTIVE, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Removal } from "./api";
 
 const JOB_LABEL: Record<JobStatus, [string, string]> = {
   queued: ["Waiting", "unknown"], preflight: ["Checking", "unknown"], transferring: ["Copying", "needs_attention"],
@@ -58,6 +58,58 @@ function Jobs({ consoleId, onDone }: { consoleId: string; onDone: () => void }) 
   );
 }
 
+/** Preview, typed title ID, then follows the removal until it ends. Closing early doesn't stop it. */
+function RemoveDialog({ consoleId, game, onClose }: { consoleId: string; game: InstalledGame; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [p, setP] = useState<Removal | null>(null);
+  const [typed, setTyped] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    ref.current?.showModal();
+    api<Removal>(`/consoles/${consoleId}/uninstall/preview`, { json: { installed_game_id: game.id } }).then(setP, (e) => setError(e.message));
+  }, []);
+  useEffect(() => {
+    if (p?.status !== "removing") return;
+    const t = setInterval(() => api<Removal>(`/removal-jobs/${p.id}`).then(setP, () => {}), 1000);
+    return () => clearInterval(t);
+  }, [p?.id, p?.status]);
+
+  function confirm(e: FormEvent) {
+    e.preventDefault();
+    setError("");
+    api<Removal>(`/consoles/${consoleId}/uninstall`, { json: { removal_id: p!.id, confirm_title_id: typed } }).then(setP, (e) => setError(e.message));
+  }
+  const ended = p?.status === "success" || p?.status === "failed";
+
+  return (
+    <dialog ref={ref} className="card remove" onClose={onClose} aria-labelledby="remove-title">
+      <h2 id="remove-title">Remove {game.title} ({game.title_id})?</h2>
+      {!p ? <p className="muted">{error || "Checking…"}</p> : !p.allowed ? <p>{p.reason}</p> : (
+        <>
+          <p>This deletes the game's ShadowMountPlus files from the console:</p>
+          <code>{p.source_path}</code>
+          <p>Space freed: {p.estimated_bytes_freed ? `about ${formatBytes(p.estimated_bytes_freed)}` : "unknown"}. Save data and the copy in your PC library are kept.</p>
+          <p className="muted">Its tile stays on the PS5 home screen until you delete it there. After that it won't come back.</p>
+          {p.warnings.map((w) => <p className="muted" key={w}>{w}</p>)}
+          {p.status === "awaiting_confirmation" && (
+            <form onSubmit={confirm}>
+              <label>Type {p.title_id} to confirm
+                <input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoComplete="off" spellCheck={false} />
+              </label>
+              <button className="danger" disabled={typed.trim().toUpperCase() !== p.title_id}>Remove from console</button>
+            </form>
+          )}
+          {p.status === "removing" && <p role="status">Removing… This can take a few minutes for a folder with many files.</p>}
+          {ended && <p className={p.status === "failed" ? "error" : ""} role="status">{p.message}</p>}
+        </>
+      )}
+      {error && p && <p className="error" role="alert">{error}</p>}
+      <button className="secondary" onClick={() => ref.current?.close()}>{ended || !p?.allowed ? "Close" : "Cancel"}</button>
+    </dialog>
+  );
+}
+
 // Reuses the library badge colours.
 export const STATE_BADGE: Record<ConsoleState, string> = {
   online: "ready", standby: "unknown", degraded: "needs_attention", offline: "incompatible", disabled: "unknown", unknown: "unknown",
@@ -88,6 +140,7 @@ export default function Installed() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [version, setVersion] = useState("");
+  const [removing, setRemoving] = useState<InstalledGame | null>(null);
   useEffect(() => { appVersion.then(setVersion); }, []);
 
   const loadConsoles = () => api<Console[]>("/consoles").then((cs) => {
@@ -105,6 +158,11 @@ export default function Installed() {
     return () => clearInterval(t);
   }, []);
   useEffect(() => { if (id) loadInventory(id); }, [id]);
+  useEffect(() => { // a removal still running after its dialog closed
+    if (!id || !games.some((g) => g.removing)) return;
+    const t = setInterval(() => loadInventory(id), 3000);
+    return () => clearInterval(t);
+  }, [id, games]);
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -219,7 +277,7 @@ export default function Installed() {
           </div>
           <ul className="grid">
             {shown.map((g) => {
-              const [label, cls] = STATUS[g.status];
+              const [label, cls] = g.removing ? ["Removing", "needs_attention"] : STATUS[g.status];
               return (
                 <li key={g.id} className="tile">
                   {g.cover_url
@@ -232,6 +290,10 @@ export default function Installed() {
                   </span>
                   <span className="muted">{(g.drive_id && driveLabel[g.drive_id]) || "Unknown drive"} · {bytes(g.size_bytes)}</span>
                   <code className="muted" title={`Verified ${when(g.last_verified_at)}`}>{g.installed_path}</code>
+                  {g.install_route === "shadowmountplus" && !g.removing && (
+                    <button className="link" disabled={c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
+                      onClick={() => setRemoving(g)}>Remove from console</button>
+                  )}
                 </li>
               );
             })}
@@ -240,6 +302,7 @@ export default function Installed() {
       ) : (
         <p className="muted">{c.last_inventory_scan_at ? "No games found on this console." : "Inventory not read yet. Click Refresh inventory."}</p>
       )}
+      {removing && <RemoveDialog consoleId={c.id} game={removing} onClose={() => { setRemoving(null); loadInventory(c.id); }} />}
     </div>
   );
 }

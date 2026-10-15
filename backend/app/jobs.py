@@ -1,5 +1,6 @@
 """Install jobs (project.md §10): a queue in the install_jobs table and one worker that runs them.
-Only the ShadowMountPlus route exists: folder dumps and disc images are copied into a drive's homebrew folder."""
+Only the ShadowMountPlus route exists: folder dumps and disc images are copied into a drive's homebrew folder.
+Removals (project.md §13) delete that copy again, after a preview and the title ID typed back."""
 import asyncio
 import logging
 import os
@@ -10,9 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import inventory
-from .consoles import AdapterError, DriveInfo
+from .consoles import IMAGE_EXTS, AdapterError, DriveInfo, InstalledGameInfo
 from .database import SessionLocal
-from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, now
+from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, _id, now
 
 ACTIVE = ("queued", "preflight", "transferring", "registering")
 RUNNING = ACTIVE[1:]
@@ -177,3 +178,101 @@ async def worker():
             await run(job_id)
         else:
             await asyncio.sleep(1)
+
+
+# ---------------------------------------------------------------- removal (project.md §13)
+
+# ponytail: removals live in memory, with the audit log as the lasting record. The removal_jobs table's foreign key
+# would block dropping the installed_games row once the game is gone. A restart forgets previews and progress.
+removals: dict[str, dict] = {}  # removal id -> preview, then status: awaiting_confirmation|removing|success|failed
+_tasks: set[asyncio.Task] = set()  # keeps running removals from being garbage collected
+PREVIEW_SECONDS = 600  # a preview older than this must be made again
+
+
+def removing(installed_game_id: str) -> bool:
+    return any(r["installed_game_id"] == installed_game_id and r["status"] == "removing" for r in removals.values())
+
+
+def removal_blocker(db: Session, row: InstalledGame) -> str | None:
+    if row.install_route != "shadowmountplus" or not row.source_path:
+        return "Only games installed through ShadowMountPlus can be removed from here. Delete this one on the PS5."
+    if db.scalar(select(InstallJob.id).join(Game, Game.id == InstallJob.game_id).where(
+            InstallJob.console_id == row.console_id, InstallJob.status.in_(ACTIVE), Game.title_id == row.title_id)):
+        return "An install of this game is queued or running. Cancel it first."
+    if removing(row.id):
+        return "It's already being removed."
+    return None
+
+
+def preview(db: Session, row: InstalledGame) -> dict:
+    """Exactly what removing would delete. Removing then needs this preview's id and the title ID typed back."""
+    lib = db.get(Game, row.game_id) if row.game_id else None
+    reason = removal_blocker(db, row)
+    warnings = ["If the game is running on the PS5, close it first."]
+    if (row.source_path or "").lower().endswith(IMAGE_EXTS):
+        warnings.append("ShadowMountPlus keeps disc images mounted, so the space may only come back after the PS5 restarts.")
+    p = {"id": _id(), "console_id": row.console_id, "installed_game_id": row.id, "title_id": row.title_id,
+         "title": row.title, "install_route": row.install_route, "source_path": row.source_path,
+         "icon_removal_required": True, "estimated_bytes_freed": row.size_bytes or (lib.size_bytes if lib else 0),
+         "save_data_retained": True, "library_backup_retained": True, "warnings": warnings,
+         "allowed": reason is None, "reason": reason or "",
+         "status": "awaiting_confirmation" if reason is None else "blocked", "message": "", "created": time.monotonic()}
+    if reason is None:
+        removals[p["id"]] = p
+    return p
+
+
+def start_removal(db: Session, console: Console, removal_id: str, confirm_title_id: str) -> dict:
+    """Checks the preview still holds, then deletes in the background. Raises ValueError with the reason (audited)."""
+    r = removals.get(removal_id)
+    try:
+        if not r or r["console_id"] != console.id or r["status"] != "awaiting_confirmation" \
+                or time.monotonic() - r["created"] > PREVIEW_SECONDS:
+            raise ValueError("This preview has expired. Choose Remove again.")
+        if confirm_title_id.strip().upper() != r["title_id"]:
+            raise ValueError(f"Type {r['title_id']} to confirm.")
+        row = db.get(InstalledGame, r["installed_game_id"])
+        if not row or (row.source_path, row.title_id) != (r["source_path"], r["title_id"]):
+            raise ValueError("The game changed on the console since the preview. Choose Remove again.")
+        if reason := removal_blocker(db, row):
+            raise ValueError(reason)
+    except ValueError as e:
+        db.add(AuditLog(action="uninstall", console_id=console.id, title_id=r and r["title_id"],
+                        target_path=r and r["source_path"], result="blocked", details={"removal": removal_id, "reason": str(e)}))
+        db.commit()
+        raise
+    r["status"], r["message"] = "removing", "Deleting the game's files from the console."
+    task = asyncio.create_task(_remove(removal_id))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+    return r
+
+
+async def _remove(removal_id: str):
+    r = removals[removal_id]
+    with SessionLocal() as db:
+        console = db.get(Console, r["console_id"])
+        game = InstalledGameInfo(r["title_id"], r["title"], None, "shadowmountplus", None,
+                                 r["source_path"], r["source_path"], 0)
+        try:
+            if not console:
+                raise AdapterError("not_found", "The console was deleted.")
+            result = await inventory.adapter_for(db, console).remove_shadowmount_source(game, lambda done, total: None)
+            if not result.ok:
+                raise AdapterError("failed", result.message)
+            try:
+                await inventory.refresh(db, console)
+            except AdapterError:
+                pass  # the files are gone; the next inventory read drops the game
+            r["status"] = "success"
+            r["message"] = "Removed. Its tile stays on the PS5 home screen until you delete it there, and won't come back."
+        except AdapterError as e:
+            r["status"], r["message"] = "failed", e.message
+        except Exception as e:  # a bug must fail the removal, not leave it "removing"
+            log.exception("removal %s", removal_id)
+            r["status"], r["message"] = "failed", f"Unexpected error: {e}"
+        db.add(AuditLog(action="uninstall", console_id=r["console_id"], title_id=r["title_id"], target_path=r["source_path"],
+                        result="success" if r["status"] == "success" else "failed",
+                        details={"removal": removal_id, "message": r["message"],
+                                 "estimated_bytes_freed": r["estimated_bytes_freed"]}))
+        db.commit()

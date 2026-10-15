@@ -257,8 +257,8 @@ CONSOLE_APP_PATH = f"/data/homebrew/{CONSOLE_APP_TITLE_ID}"
 
 
 class FTPConsoleAdapter:
-    """Talks to an FTP payload on the PS5 (stdlib ftplib, one login per call). Installs go through
-    ShadowMountPlus only (no package installer on the console); removing comes in Phase 5."""
+    """Talks to an FTP payload on the PS5 (stdlib ftplib, one login per call). Installs and removals go through
+    ShadowMountPlus only (no package installer on the console)."""
 
     TIMEOUT = 10
     HELPER_PORT = 7735  # our helper payload (payload/main.c)
@@ -561,13 +561,43 @@ class FTPConsoleAdapter:
             self._put_files(ftp, files)
         await self._run(put)
 
+    def _remove_source(self, ftp: ftplib.FTP, game: InstalledGameInfo) -> RemovalResult:
+        """Deletes one game's folder or image. Only a direct entry of a homebrew folder (project.md §13 allowlist),
+        and only while the console still lists exactly that path with that title ID."""
+        path = game.source_path or ""
+        homebrew, _, name = path.rpartition("/")
+        if (homebrew not in {hb for *_, hb in FTP_DRIVES} or not name or name.startswith(".")
+                or any(ch in name for ch in "*?[]") or name == CONSOLE_APP_TITLE_ID):
+            raise AdapterError("path_outside_allowlist", f"Won't delete {path}: it isn't a game in a homebrew folder.")
+        if not any(g.source_path == path and g.title_id == game.title_id for g in self._games(ftp)):
+            raise AdapterError("not_found", f"{path} isn't on the console any more, or holds a different game.")
+        entries = self._ls(ftp, homebrew)
+        is_dir, size = entries[name]
+        tmp = f"{homebrew}/.{name}.partial"
+        if f".{name}.partial" in entries:  # left over from an interrupted install
+            self._rm_partial(ftp, tmp)
+        # Hidden first, so ShadowMountPlus never mounts a half-deleted game. A symlink is renamed, never followed.
+        # ponytail: a connection lost mid-delete leaves the hidden .partial; reinstalling the game clears it.
+        ftp.rename(path, tmp)
+        if is_dir:
+            self._rm_partial(ftp, tmp)
+        else:
+            ftp.delete(tmp)
+        return RemovalResult(True, "Removed.", [path], size)
+
+    async def remove_shadowmount_source(self, installed_game: InstalledGameInfo, progress_callback: ProgressCallback) -> RemovalResult:
+        result = await self._run(lambda ftp: self._remove_source(ftp, installed_game))
+        progress_callback(1, 1)
+        return result
+
     async def install_package(self, *args, **kwargs):
         raise AdapterError("not_implemented", "This console has no package installer. Install folder dumps or disc images instead.")
 
     async def _not_yet(self, *args, **kwargs):
-        raise AdapterError("not_implemented", "Removing over FTP isn't available yet.")
+        raise AdapterError("not_implemented", "Not available over FTP. Delete it on the PS5 instead.")
 
-    uninstall_package = remove_shadowmount_source = remove_home_screen_icon = _not_yet
+    # The home-screen tile stays after the source is gone; deleting it on the PS5 then removes it for good.
+    uninstall_package = remove_home_screen_icon = _not_yet
 
 
 def get_adapter(console: Console, password: str | None = None) -> ConsoleAdapter:

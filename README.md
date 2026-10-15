@@ -1,7 +1,7 @@
 # PS5 Local Storefront
 
 Self-hosted, single-user catalog for your own PS5 game backups. LAN-only; never expose it to the internet.
-Full spec: [project.md](project.md). **Status:** Phases 1–3 plus installing through ShadowMountPlus, and a PS5 app. The app can copy folder dumps and disc images to a PS5, but can't install `.pkg` files or remove anything yet.
+Full spec: [project.md](project.md). **Status:** Phases 1–3 plus installing through ShadowMountPlus, and a PS5 app. The app can copy folder dumps and disc images to a PS5, and remove them again (from the Installed page or the PS5 app), but can't install `.pkg` files yet.
 
 ## Run (Windows)
 
@@ -35,10 +35,16 @@ It copies under a hidden `.<name>.partial` name and renames it when the copy is 
 Only folder dumps and disc images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) can be installed: the console has no package installer for `.pkg` files, and archives must be extracted first.
 The helper must be running, so the app can check free space first. If the app or the connection stops mid-copy, the install shows *Interrupted*; queue it again, and the leftover partial copy is replaced.
 
+## Removing games
+
+Deleting a ShadowMountPlus game on the PS5 only removes its home-screen tile. Its files stay in the `homebrew` folder, so ShadowMountPlus adds it back and no space is freed. Remove it from the app instead: **Remove from console** on the **Installed** page (type the title ID to confirm), or Square on an installed game in the PS5 app.
+The app shows exactly which folder or image it will delete first, then deletes only that. It must be directly inside a drive's `homebrew` folder, and the console must still list it under that title ID. It's renamed to a hidden name first, so ShadowMountPlus never mounts a half-deleted game. Save data and the copy in your PC library are kept, and every attempt is written to the audit log.
+The tile stays on the home screen afterwards: delete it on the PS5, and this time it won't come back. Space from a disc image may only come back after the PS5 restarts, if ShadowMountPlus still has it mounted. Games installed as packages can't be removed from the app; delete those on the PS5.
+
 ## PS5 app
 
-**Install PS5 app** on the **Installed** page puts *PS5 Local Storefront* on the console's home screen (in `/data/homebrew/PPSA99787`, where ShadowMountPlus finds it). It shows the games on your PC, and Cross queues an install, the same as clicking Install on the PC.
-The PS5 must be able to reach this PC, so tick **Allow other devices on my network** in the tray menu first. The app is paired with this PC: the PC writes its address and a key into the app's `assets/server.txt`. The key only lets that console see the library and queue installs to itself. If the PC's address changes, click **Update PS5 app** again. Deleting the console on the PC revokes the key.
+**Install PS5 app** on the **Installed** page puts *PS5 Local Storefront* on the console's home screen (in `/data/homebrew/PPSA99787`, where ShadowMountPlus finds it). It shows the games on your PC: Cross queues an install, the same as clicking Install on the PC, and Square removes an installed one.
+The PS5 must be able to reach this PC, so tick **Allow other devices on my network** in the tray menu first. The app is paired with this PC: the PC writes its address and a key into the app's `assets/server.txt`. The key only lets that console see the library, queue installs to itself and remove games from itself. If the PC's address changes, click **Update PS5 app** again. Deleting the console on the PC revokes the key.
 The app is built from [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) (GPL-3.0-or-later) with our screen in [console-app/](console-app/). Run `./console-app/build.ps1` (needs Docker Desktop) after changing it: it rebuilds `backend/app/console_app/PPSA99787`, which is committed. `./console-app/build.ps1 -Preview` renders the screen on the PC into `console-app/preview/`, against a fake PC app.
 
 ## Versions
@@ -91,3 +97,4 @@ If a root or subfolder can't be read, the scan reports an error and leaves exist
 - **No Alembic yet.** Tables are created with `create_all`. Add migrations before the first schema change on a live install.
 - **Interval rescans, no watchdog.** Filesystem events aren't reliable on SMB/NFS mounts.
 - Login is rate-limited to 5 failures per minute per IP. Read-only users aren't built yet.
+- **Removals are tracked in memory**, not in the `removal_jobs` table: its foreign key would block dropping the installed game once it's gone. The audit log keeps the record; a restart forgets previews and progress. Previews expire after 10 minutes. No orphan detection yet.

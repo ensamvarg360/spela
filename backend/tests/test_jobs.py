@@ -14,10 +14,10 @@ from test_console_profiles import login
 from test_inventory import FakeHelper
 
 from app import credentials, inventory, jobs
-from app.consoles import AdapterError, DriveInfo, FTPConsoleAdapter
+from app.consoles import AdapterError, DriveInfo, FTPConsoleAdapter, InstalledGameInfo
 from app.database import Base, SessionLocal, engine
 from app.main import app
-from app.models import Console, Drive, Game, InstalledGame, InstallJob
+from app.models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob
 
 
 @pytest.fixture(autouse=True)
@@ -185,3 +185,65 @@ def test_install_api(ps5):
         assert j["status"] == "success", j
         assert client.get(f"/api/v1/consoles/{c.id}/jobs").json()[0]["title"] == "Racer PPSA04444.exfat"
         assert client.post(f"/api/v1/jobs/{job_id}/cancel").status_code == 409
+
+
+def test_remove_source_allowlist(ps5):
+    root, port, lib = ps5
+    write(root / "data/homebrew/Dump PPSA03333/sce_sys/param.json", PARAM_JSON.replace(b"PPSA02222", b"PPSA03333"))
+    write(root / "data/homebrew/Dump PPSA03333/sce_sys/about/right.sprx", b"s")
+    write(root / "mnt/usb0/homebrew/Racer PPSA04444.exfat", EXFAT)
+    a = adapter(port)
+
+    def remove(path, tid):
+        return asyncio.run(a.remove_shadowmount_source(InstalledGameInfo(tid, "", None, "shadowmountplus", None, path, path, 0),
+                                                       lambda d, t: None))
+
+    for path in ("/user/app/PPSA01111", "/data/homebrew", "/data/homebrew/../homebrew/Dump PPSA03333",
+                 "/data/homebrew/*", "/data/homebrew/PPSA99787", "/data/homebrew/.Dump PPSA03333.partial"):
+        with pytest.raises(AdapterError) as e:
+            remove(path, "PPSA03333")
+        assert e.value.code == "path_outside_allowlist", path
+    with pytest.raises(AdapterError) as e:  # right path, different game
+        remove("/data/homebrew/Dump PPSA03333", "PPSA09999")
+    assert e.value.code == "not_found"
+
+    assert remove("/data/homebrew/Dump PPSA03333", "PPSA03333").ok
+    assert remove("/mnt/usb0/homebrew/Racer PPSA04444.exfat", "PPSA04444").ok
+    assert list((root / "data/homebrew").iterdir()) == [] and list((root / "mnt/usb0/homebrew").iterdir()) == []
+    assert (root / "user/app/PPSA01111/app.pkg").exists()
+
+
+def test_uninstall_api(ps5):
+    root, port, lib = ps5
+    write(root / "mnt/usb0/homebrew/Racer PPSA04444.exfat", EXFAT)
+    with TestClient(app) as client:
+        login(client)
+        with SessionLocal() as db:
+            c, _ = _setup(db, port, lib)
+            rows = {g.title_id: g.id for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
+        url = f"/api/v1/consoles/{c.id}/uninstall"
+
+        p = client.post(f"{url}/preview", json={"installed_game_id": rows["PPSA01111"]}).json()  # package install
+        assert not p["allowed"] and "ShadowMountPlus" in p["reason"]
+        p = client.post(f"{url}/preview", json={"installed_game_id": rows["PPSA04444"]}).json()
+        assert p["allowed"] and p["source_path"] == "/mnt/usb0/homebrew/Racer PPSA04444.exfat" and len(p["warnings"]) == 2
+
+        r = client.post(url, json={"removal_id": p["id"], "confirm_title_id": "PPSA00000"})
+        assert r.status_code == 409 and "Type PPSA04444" in r.json()["message"]
+        assert (root / "mnt/usb0/homebrew/Racer PPSA04444.exfat").exists()
+        assert client.post(url, json={"removal_id": "made-up", "confirm_title_id": "PPSA04444"}).status_code == 409
+
+        r = client.post(url, json={"removal_id": p["id"], "confirm_title_id": "ppsa04444"})
+        assert r.status_code == 202, r.text
+        for _ in range(50):
+            j = client.get(f"/api/v1/removal-jobs/{p['id']}").json()
+            if j["status"] != "removing":
+                break
+            asyncio.run(asyncio.sleep(0.1))
+        assert j["status"] == "success", j
+        assert not (root / "mnt/usb0/homebrew/Racer PPSA04444.exfat").exists()
+        assert [g["title_id"] for g in client.get(f"/api/v1/consoles/{c.id}/installed").json()] == ["PPSA01111"]
+        assert client.post(url, json={"removal_id": p["id"], "confirm_title_id": "PPSA04444"}).status_code == 409  # used up
+        with SessionLocal() as db:
+            results = [a.result for a in db.scalars(select(AuditLog).where(AuditLog.action == "uninstall").order_by(AuditLog.created_at))]
+        assert results[-4:] == ["blocked", "blocked", "success", "blocked"]

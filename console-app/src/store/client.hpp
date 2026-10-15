@@ -56,7 +56,12 @@ class Client
     bool take_library(std::vector<Game> *games, std::string *error);
     void refresh();
     void install(const std::string &game_id);
-    // The answer to an install: "Queued." or why not.
+    // Asks the PC what removing a game would delete; the answer comes back
+    // through take_removal. remove() then deletes it, answering via take_message.
+    void preview_removal(const std::string &game_id);
+    bool take_removal(Removal *removal);
+    void remove(const std::string &removal_id, const std::string &title_id);
+    // The answer to an install or removal: "Queued.", "Removing." or why not.
     bool take_message(std::string *message, bool *ok);
     void request_cover(const std::string &game_id);
     bool take_cover(std::string *game_id, std::vector<std::uint8_t> *rgba);
@@ -67,9 +72,12 @@ class Client
         enum Kind
         {
             cover,
-            install
+            install,
+            preview,
+            remove
         } kind;
-        std::string game_id;
+        std::string game_id; // the removal id for remove
+        std::string title_id = {};
     };
 
     static void *thread_main(void *self);
@@ -91,10 +99,11 @@ class Client
     std::vector<Game> games_;
     std::string error_;
     bool library_new_ = false;
-    bool busy_ = false; // something installing: poll faster
+    bool busy_ = false; // something installing or being removed: poll faster
     std::deque<Job> jobs_;
     std::deque<std::pair<std::string, std::vector<std::uint8_t>>> covers_;
     std::deque<std::pair<std::string, bool>> messages_;
+    std::deque<Removal> removals_;
 };
 
 } // namespace hui::store

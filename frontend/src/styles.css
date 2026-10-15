@@ -131,3 +131,10 @@ summary { cursor: pointer; color: var(--muted); }
 .jobs { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.6rem; }
 .jobs li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
 .jobs progress { flex: 1 1 200px; }
+
+dialog.remove { color: var(--text); max-width: min(34rem, calc(100vw - 2rem)); }
+dialog.remove::backdrop { background: rgb(0 0 0 / 0.6); }
+dialog.remove code { display: block; overflow-wrap: anywhere; }
+dialog.remove form { display: flex; flex-direction: column; gap: 0.5rem; }
+dialog.remove form .danger { margin-top: 0.5rem; }
+dialog.remove > .secondary { margin-top: 1rem; }
