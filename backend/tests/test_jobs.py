@@ -1,6 +1,8 @@
 """Install engine: FTP and helper staging into ShadowMountPlus folders and the job runner, against a real local FTP server."""
 import asyncio
+import subprocess
 import threading
+import zipfile
 from http.server import ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -14,7 +16,7 @@ from sqlalchemy import delete, select
 from test_console_profiles import login
 from test_inventory import FakeHelper
 
-from app import __version__, credentials, inventory, jobs
+from app import __version__, archives, config, credentials, inventory, jobs
 from app.consoles import AdapterError, DriveInfo, FTPConsoleAdapter, HelperConsoleAdapter, InstalledGameInfo, RemovalResult
 from app.database import Base, SessionLocal, engine
 from app.main import app, console_app_token
@@ -238,6 +240,65 @@ def test_job_failures(ps5, monkeypatch):
         jobs.recover()
         db.expire_all()
         assert job.status == "interrupted"
+
+
+@pytest.mark.skipif(not archives.TAR, reason="needs bsdtar (Windows' tar.exe)")
+def test_archive_jobs(ps5, tmp_path):
+    root, port, lib = ps5
+    dump = lib / "Dump PPSA03333"
+    with zipfile.ZipFile(lib / "Packed PPSA09999.zip", "w") as z:  # filename guesses the wrong title ID
+        for f in dump.rglob("*"):
+            if f.is_file():
+                z.write(f, f.relative_to(lib))
+    staged = tmp_path / "7z"
+    subprocess.run([archives.TAR, "-cf", str(staged), "--format", "7zip", "-C", str(dump), "."], check=True)
+    data = staged.read_bytes()  # a byte-split set; the dump sits at the archive's top level
+    write(lib / "Split.7z.001", data[:100])
+    write(lib / "Split.7z.002", data[100:])
+    with zipfile.ZipFile(lib / "Evil.zip", "w") as z:
+        z.writestr("../escaped.txt", "x")
+        z.writestr("Dump/sce_sys/param.json", PARAM_JSON)
+    with zipfile.ZipFile(lib / "Two.zip", "w") as z:
+        z.writestr("A/sce_sys/param.json", PARAM_JSON)
+        z.writestr("B.exfat", EXFAT)
+
+    with SessionLocal() as db:
+        c, (zipped, split, evil, two) = _setup(db, port, lib, *[(lib / n, "archive") for n in
+                                                                ("Packed PPSA09999.zip", "Split.7z.001", "Evil.zip", "Two.zip")])
+        zipped.title_id, zipped.metadata_source = "PPSA09999", "filename"
+        db.commit()
+        job = jobs.queue(db, c, zipped)
+        asyncio.run(jobs.run(job.id))
+        db.expire_all()
+        assert job.status == "success", job.message
+        assert (root / "mnt/usb0/homebrew/Dump PPSA03333/sce_sys/about/right.sprx").read_bytes() == b"s" * 50
+        assert (zipped.title_id, zipped.metadata_source) == ("PPSA03333", "ps5_param_json")  # read from inside
+        assert jobs.blocker(db, c, zipped) == "Already installed on this console."
+
+        job = jobs.queue(db, c, split)
+        asyncio.run(jobs.run(job.id))
+        db.expire_all()
+        assert (job.status, job.error_detail["error"]) == ("failed", "already_installed")  # same game inside
+        db.execute(delete(InstalledGame))
+        db.commit()
+        job = jobs.queue(db, c, split)
+        asyncio.run(jobs.run(job.id))
+        db.expire_all()
+        assert job.status == "success", job.message
+        drive = {"internal": "data", "usb0": "mnt/usb0"}[db.get(Drive, job.target_drive_id).external_id]
+        assert (root / drive / "homebrew/Split/eboot.bin").read_bytes() == b"e" * 100  # named after the archive
+
+        for game, error in ((evil, "archive_extraction_failed"), (two, "archive_contents")):
+            job = jobs.queue(db, c, game)
+            asyncio.run(jobs.run(job.id))
+            db.expire_all()
+            assert (job.status, job.error_detail["error"]) == ("failed", error), job.message
+        assert not (config.STAGING_DIR.parent / "escaped.txt").exists()
+        assert not list(config.STAGING_DIR.iterdir())  # every job's staging folder is gone
+
+        (lib / "Old.part1.rar").write_bytes(b"Rar!\x1a\x07")
+        two.source_path = str(lib / "Old.part1.rar")
+        assert "Multi-part RAR" in jobs.blocker(db, c, two)
 
 
 def test_install_api(ps5):

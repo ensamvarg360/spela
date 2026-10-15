@@ -1,5 +1,6 @@
 """Install jobs (project.md §10): a queue in the install_jobs table and one worker that runs them.
 Only the ShadowMountPlus route exists: folder dumps and disc images are copied into a drive's homebrew folder.
+Archives are extracted on this PC first (archives.py) and the dump or image inside is copied the same way.
 Removals (project.md §13) delete that copy again, after a preview and the title ID typed back."""
 import asyncio
 import logging
@@ -10,12 +11,12 @@ import time
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import inventory
+from . import archives, inventory, scanner
 from .consoles import IMAGE_EXTS, AdapterError, DriveInfo, InstalledGameInfo, RemovalResult
 from .database import SessionLocal
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, _id, now
 
-ACTIVE = ("queued", "preflight", "transferring", "registering")
+ACTIVE = ("queued", "preflight", "extracting", "transferring", "registering")
 RUNNING = ACTIVE[1:]
 _cancel: dict[str, threading.Event] = {}  # job id -> set to stop its transfer
 log = logging.getLogger(__name__)
@@ -25,9 +26,9 @@ def blocker(db: Session, console: Console, game: Game) -> str | None:
     """Why this game can't be queued for this console, or None. Console-side checks (online, space) run at preflight."""
     if game.format in ("ps4_pkg", "ps5_pkg"):
         return "This console has no package installer. Only folder dumps and disc images can be installed."
-    if game.format == "archive":
-        return "Extract the archive first, then scan again."
-    if game.format not in ("folder_dump", "image"):
+    if game.format == "archive" and (reason := archives.blocker(game.source_path)):
+        return reason
+    if game.format not in ("folder_dump", "image", "archive"):
         return "Format not recognized."
     if game.compatibility_status == "incompatible":
         return game.compatibility_reason
@@ -131,13 +132,27 @@ async def run(job_id: str):
             if inventory.status.get(console.id, {}).get("state") != "online":
                 raise AdapterError("console_offline", "The console isn't online.")
             adapter = inventory.adapter_for(db, console)
-            drive = _pick_drive(db, console, job, await adapter.list_drives(), game.size_bytes)
+            source, needed = game.source_path, game.size_bytes
+            if game.format == "archive":
+                job.status, job.message = "extracting", "Reading the archive."
+                db.commit()
+                archive, needed = await asyncio.to_thread(archives.prepare, source, job.id, stop)
+            drive = _pick_drive(db, console, job, await adapter.list_drives(), needed)
             job.target_drive_id = db.scalar(select(Drive.id).where(Drive.console_id == console.id,
                                                                    Drive.external_id == drive.external_id))
+            if game.format == "archive":
+                job.message = "Extracting on this PC."
+                db.commit()
+                name = scanner.VOLUME_KEY_RE.sub("", os.path.basename(source)) or "game"
+                item = await asyncio.to_thread(archives.extract, archive, needed, name, job.id,
+                                               _progress(job.id, time.monotonic()), stop)
+                db.refresh(job)
+                _check_contents(db, console, game, item)
+                source = item.source_path
             job.status, job.message = "transferring", f"Copying to {drive.label}."
             db.commit()
 
-            await adapter.stage_shadowmount_content(game.source_path, drive, _progress(job.id, time.monotonic()), stop)
+            await adapter.stage_shadowmount_content(source, drive, _progress(job.id, time.monotonic()), stop)
 
             db.refresh(job)
             job.status, job.message = "registering", "Reading the console's games."
@@ -158,10 +173,24 @@ async def run(job_id: str):
             _finish(db, db.get(InstallJob, job_id), "failed", f"Unexpected error: {e}", {"error": "internal"})
         finally:
             _cancel.pop(job_id, None)
+            await asyncio.to_thread(archives.clean, job_id)
+
+
+def _check_contents(db: Session, console: Console, game: Game, item: scanner.Item):
+    """What the archive really holds: its param.json title ID replaces one guessed from the file name."""
+    tid = item.title_id
+    if game.metadata_source == "manual" and game.title_id and tid and tid != game.title_id:
+        raise AdapterError("title_mismatch", f"The archive holds {tid}, but this game is set to {game.title_id}.")
+    if tid and item.metadata_confidence == "high" and game.metadata_source != "manual":
+        game.title_id, game.metadata_source, game.metadata_confidence = tid, item.metadata_source, "high"
+        game.version = item.version or game.version
+    if tid and db.scalar(select(InstalledGame.id).where(InstalledGame.console_id == console.id, InstalledGame.title_id == tid)):
+        raise AdapterError("already_installed", f"{tid} is already installed on this console.")
 
 
 def recover():
-    """Jobs that were running when the app stopped can't be resumed: mark them interrupted."""
+    """Jobs that were running when the app stopped can't be resumed: mark them interrupted, and drop their staging."""
+    archives.clean()
     with SessionLocal() as db:
         for job in db.scalars(select(InstallJob).where(InstallJob.status.in_(RUNNING))):
             _finish(db, job, "interrupted", "The app was closed during the install. Queue it again to retry.",

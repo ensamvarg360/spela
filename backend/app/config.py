@@ -7,6 +7,8 @@ DATA_DIR = Path(os.environ.get("DATA_DIR") or _appdata / "PS5 Local Storefront")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DATA_DIR / 'app.db'}")
 COVERS_DIR = DATA_DIR / "covers"
+# Archives are extracted here before they're sent to the console; it needs room for the unpacked game.
+STAGING_DIR = Path(os.environ.get("STAGING_DIR") or DATA_DIR / "staging")
 STATIC_DIR = Path(os.environ.get("STATIC_DIR", Path(__file__).parent / "static"))
 PASSWORD_FILE = DATA_DIR / "admin_password"  # delete it to reset the password
 

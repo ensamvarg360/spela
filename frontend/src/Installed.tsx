@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { api, appVersion, formatBytes, JOB_ACTIVE, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Removal } from "./api";
 
 const JOB_LABEL: Record<JobStatus, [string, string]> = {
-  queued: ["Waiting", "unknown"], preflight: ["Checking", "unknown"], transferring: ["Copying", "needs_attention"],
+  queued: ["Waiting", "unknown"], preflight: ["Checking", "unknown"], extracting: ["Extracting", "needs_attention"], transferring: ["Copying", "needs_attention"],
   registering: ["Finishing", "needs_attention"], success: ["Installed", "ready"], failed: ["Failed", "incompatible"],
   canceled: ["Canceled", "unknown"], interrupted: ["Interrupted", "incompatible"],
 };
@@ -39,7 +39,7 @@ function Jobs({ consoleId, onDone }: { consoleId: string; onDone: () => void }) 
             <li key={j.id}>
               <span className={`badge ${cls}`}>{label}</span>
               <strong><a href={`#/game/${j.game_id}`}>{j.title}</a></strong>
-              {j.status === "transferring" && (
+              {(j.status === "transferring" || (j.status === "extracting" && j.bytes_transferred > 0)) && (
                 <>
                   <progress max={1} value={j.progress} />
                   <span className="muted">

@@ -33,7 +33,7 @@ Set `CONSOLE_CHECK_SECONDS=0` to turn the checks off.
 
 Open a game in the library and click **Install**. The app copies it through the helper (or FTP) into the `homebrew` folder of a drive where **Allow installs here** is ticked (the one with the most free space, unless you pick one). ShadowMountPlus then adds it to the home screen.
 It copies under a hidden `.<name>.partial` name and renames it when the copy is complete, so ShadowMountPlus never sees half a game. Installs run one at a time; follow them, or cancel them, on the **Installed** page.
-Only folder dumps and disc images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) can be installed: the console has no package installer for `.pkg` files, and archives must be extracted first.
+Folder dumps and disc images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) can be installed, and so can `.zip`, `.7z` and `.rar` archives (also split sets like `.7z.001`) that hold one of them. `.pkg` files can't: the console has no package installer. An archive is first extracted on this PC, with Windows' own `tar.exe`, into a private staging folder (`staging` in the data folder, or `STAGING_DIR`), so the PC needs room for the unpacked game. The game's title ID is then read from its own `param.json`, and the staging copy is deleted when the install ends, also when it fails or is canceled. Multi-part RAR (`.part1.rar`) and spanned ZIP (`.z01`) sets, password-protected archives and archives with links in them can't be installed: extract those yourself.
 The helper must be running, so the app can check free space first. If the app or the connection stops mid-copy, the install shows *Interrupted*; queue it again, and the leftover partial copy is replaced.
 
 ## Removing games

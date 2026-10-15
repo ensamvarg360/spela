@@ -315,7 +315,7 @@ def evaluate(game: Game, duplicate_ids: set[str]) -> tuple[str, str]:
     if game.detection_evidence.get("partial"):
         reasons.append("Source looks like an incomplete transfer.")
     if game.format == "archive":
-        reasons.append("Archive must be extracted to staging before install.")
+        reasons.append("Archive: it is extracted on this PC before it is installed.")
     if game.format in ("ps4_pkg", "ps5_pkg"):
         reasons.append("Package install requires confirmation.")
     prefix = PLATFORM_PREFIX.get(game.format)

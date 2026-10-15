@@ -115,8 +115,8 @@ export interface Removal {
   tile_left: boolean; // removed, but its home-screen tile must still be deleted on the PS5
 }
 
-export type JobStatus = "queued" | "preflight" | "transferring" | "registering" | "success" | "failed" | "canceled" | "interrupted";
-export const JOB_ACTIVE: JobStatus[] = ["queued", "preflight", "transferring", "registering"];
+export type JobStatus = "queued" | "preflight" | "extracting" | "transferring" | "registering" | "success" | "failed" | "canceled" | "interrupted";
+export const JOB_ACTIVE: JobStatus[] = ["queued", "preflight", "extracting", "transferring", "registering"];
 
 export interface Job {
   id: string;

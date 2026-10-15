@@ -143,7 +143,7 @@ class InstallJob(Base):
     console_id: Mapped[str] = _fk("consoles")
     game_id: Mapped[str] = _fk("games")
     target_drive_id: Mapped[str | None] = _fk("drives", nullable=True)
-    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued|preflight|transferring|registering|success|failed|canceled|interrupted
+    status: Mapped[str] = mapped_column(String(16), default="queued")  # queued|preflight|extracting|transferring|registering|success|failed|canceled|interrupted
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     bytes_transferred: Mapped[int] = mapped_column(BigInteger, default=0)
     total_bytes: Mapped[int] = mapped_column(BigInteger, default=0)

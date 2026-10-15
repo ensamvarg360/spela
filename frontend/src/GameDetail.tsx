@@ -24,6 +24,7 @@ function Install({ game }: { game: Game }) {
   if (!consoles.length) return null;
 
   async function install() {
+    if (game.format === "archive" && !confirm("This archive will be extracted to the private staging folder on this PC before it's installed. Make sure the PC has room for the unpacked game.")) return;
     try {
       await api<Job>(`/consoles/${cid}/install`, { json: { game_id: game.id, drive_id: did || null } });
       setMsg({ text: "Queued. Follow it on the Installed page." });
