@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, coverUrl, formatBytes, formatLabel, STATUS_LABEL, type Game, type Status } from "./api";
+import { api, coverUrl, formatLabel, STATUS_LABEL, type Game, type Status } from "./api";
 
 type Sort = "title" | "recent" | "size" | "version";
 
@@ -84,13 +84,23 @@ export default function Library() {
               {g.installed
                 ? <span className="badge installed">Installed</span>
                 : <span className={`badge ${g.compatibility_status}`}>{STATUS_LABEL[g.compatibility_status]}</span>}
-              <strong>{g.favorite && "★ "}{g.title}</strong>
-              <span className="muted">{g.title_id ?? "No title ID"} · {formatLabel(g)} · {formatBytes(g.size_bytes)}</span>
+              <Title game={g} />
             </a>
           </li>
         ))}
       </ul>
     </>
+  );
+}
+
+/** The game's logo from PlayStation Store; its title as text when the store has none. */
+function Title({ game }: { game: Game }) {
+  const [noLogo, setNoLogo] = useState(!game.content_id);
+  return (
+    <strong className="title">
+      {game.favorite && "★ "}
+      {noLogo ? game.title : <img className="logo" src={`/api/v1/games/${game.id}/logo`} alt={game.title} loading="lazy" onError={() => setNoLogo(true)} />}
+    </strong>
   );
 }
 

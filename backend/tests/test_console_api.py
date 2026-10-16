@@ -1,7 +1,10 @@
 """The PS5 app's API (token auth, plain-text library, raw covers) and putting the app on the console."""
 import asyncio
+import io
 import json
+import urllib.error
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from test_console_profiles import login
@@ -112,6 +115,42 @@ def test_home_logo(tmp_path, monkeypatch):
         assert not r[0]["ok"] and "isn't a usable PNG" in r[0]["message"] and fetched[-1].endswith("/concepts/5678?country=US&language=en-US&age=99")
         catalog["media"]["images"].pop()
         assert "no logo" in client.post(f"/api/v1/games/{on.id}/home-logo").json()[0]["message"]
+
+
+def test_library_logo(tmp_path, monkeypatch):
+    big = io.BytesIO()
+    Image.new("RGBA", (1440, 592), (255, 255, 255, 0)).save(big, "PNG")
+    asked = []
+
+    def get(url):
+        asked.append(url)
+        if "country=US" in url:  # a European content ID isn't sold in the US store
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+        if "/products/" in url:
+            return json.dumps({"media": {"images": [{"type": "LOGO", "url": "https://image.api.playstation.com/l.png"}]}}).encode()
+        return big.getvalue()
+    monkeypatch.setattr(logos, "_get", get)
+    monkeypatch.setattr(logos, "LOGOS_DIR", tmp_path / "logos")
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        with SessionLocal() as db:
+            g = Game(title="Euro", title_id="PPSA01111", content_id="EP0001-PPSA01111_00-EUROGAME00000000", format="image",
+                     source_path=str(tmp_path / "e.exfat"), source_fingerprint="x", size_bytes=1, compatibility_status="ready")
+            none = Game(title="No ID", format="image", source_path=str(tmp_path / "n.exfat"), source_fingerprint="x",
+                        size_bytes=1, compatibility_status="ready")
+            db.add_all([g, none])
+            db.commit()
+        r = client.get(f"/api/v1/games/{g.id}/logo")
+        assert r.status_code == 200 and Image.open(io.BytesIO(r.content)).size == (389, 160)  # shrunk to tile size
+        assert [u.split("country=")[1][:2] for u in asked[:2]] == ["US", "GB"]
+        client.get(f"/api/v1/games/{g.id}/logo")
+        assert len(asked) == 3  # cached
+        assert client.get(f"/api/v1/games/{none.id}/logo").status_code == 404
+
+        monkeypatch.setattr(logos, "_get", lambda url: json.dumps({"media": {"images": []}}).encode())
+        assert logos.library_logo("UP0001-PPSA02222_00-NOLOGO0000000000") is None
+        monkeypatch.setattr(logos, "_get", lambda url: pytest.fail("a store without a logo is asked only once a week"))
+        assert logos.library_logo("UP0001-PPSA02222_00-NOLOGO0000000000") is None
 
 
 def test_ftp_console_app_upload(ps5):  # noqa: F811

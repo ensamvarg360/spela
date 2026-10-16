@@ -312,6 +312,15 @@ def get_cover(game_id: str, db: Session = Depends(get_db)):
     return FileResponse(_cover_file(_game(db, game_id)))
 
 
+@api.get("/games/{game_id}/logo")
+def get_logo(game_id: str, db: Session = Depends(get_db)):
+    """The game's title logo from PlayStation Store, fetched on first use (logos.library_logo)."""
+    g = _game(db, game_id)
+    if not (path := g.content_id and logos.library_logo(g.content_id)):
+        raise HTTPException(404, {"error": "not_found", "message": "No logo."})
+    return FileResponse(path)
+
+
 COVER_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
 
