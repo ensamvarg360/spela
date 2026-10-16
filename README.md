@@ -22,7 +22,7 @@ The app checks each console every 15 seconds and reads its drives and installed 
 *Rest mode* means the console is asleep (detected only when the PS5's rest mode setting *Stay connected to the internet* is on); *Degraded* means the console is on but the helper isn't running or is outdated; *Offline* means it doesn't answer at all.
 Installed games are matched to your library by title ID, and marked *Update in library* when your library holds a newer version.
 
-The helper only changes files inside the `homebrew` folders (`/data/homebrew`, `/mnt/usbN/homebrew`, `/mnt/extN/homebrew`); anything else on the console is read-only to it. It has no password, so keep the console on a network you trust.
+The helper only changes files inside the `homebrew` folders (`/data/homebrew`, `/mnt/usbN/homebrew`, `/mnt/extN/homebrew`), plus one exception for [home-screen logos](#home-screen-logos); anything else on the console is read-only to it. It has no password, so keep the console on a network you trust.
 **FTP (fallback)** still works: pick it with the port of an FTP payload (often 2121 or 1337). File access then goes over FTP, and the helper still reports firmware and drive space.
 The helper's version always equals the app's version. If they differ, the button changes to **Update helper**, and clicking it replaces the running copy.
 What the app can't tell yet: the size of folder dumps.
@@ -43,6 +43,12 @@ The app shows exactly which folder or image it will delete first, then deletes o
 Both show a progress bar while the files are deleted. Then the helper removes the game's home-screen tile. It asks ShadowMountPlus's API to do it (1.7 and later, on `127.0.0.1:10101`, which is on by default). Without that API, it calls the console's own uninstall (`sceAppInstUtilAppUnInstall`), as ShadowMountPlus does. The helper only removes a tile whose `/user/app/<title ID>/mount.lnk` (or `mount_img.lnk`) points at files that are gone, so nobody on the network can remove a game that's still there.
 When it's done, the PC dialog and the PS5 app both say whether the tile is gone. If it isn't (an older helper, or the console refused), they tell you to delete it on the PS5: that removes it for good. Space from a disc image may only come back after the PS5 restarts, if ShadowMountPlus still has it mounted.
 A tile whose files were deleted some other way shows as *Icon only*. **Remove from console** then removes just the tile. A game on a USB drive that isn't plugged in isn't marked, because its files may come back. Games installed as packages can't be removed from the app; delete those on the PS5.
+
+## Home-screen logos
+
+A game you install shows its name in plain text on its PS5 home-screen page, where a store-bought game shows its logo: the console gets logos from PlayStation Network, which a jailbroken console doesn't reach. Open the game in the library and click **Show logo on PS5 home screen** to fix that, on every console the game is installed on. It shows right away, with no restart.
+This PC looks the logo up in PlayStation Store's catalog (no account needed), by the game's concept ID from the console's home-screen database, so this PC needs internet access; the console doesn't. Some games have no logo there. The helper writes it to `/user/appmeta/<title ID>/logo.png` and sets the game's `logoImageInfo` in `/system_data/priv/mms/app.db` with SQLite, in place, the way the home screen itself writes it. Those are the only two things outside the `homebrew` folders the helper ever changes, and only for a game the console already has.
+Before each change, the app saves a copy of that database as `console-backups/<console id>-app.db` in the data folder. If the home screen ever acts up afterwards, put that copy back over `/system_data/priv/mms/app.db` with an FTP payload while the PS5 shows its Settings page, and restart the console.
 
 ## PS5 app
 

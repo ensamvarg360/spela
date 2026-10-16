@@ -6,8 +6,9 @@
  *   POST /mkdir?p=<dir>  /rename?p=<from>&to=<to>  /rm?p=<file or empty folder>
  *   POST /quit                 stops the helper, so a newer copy can take the port (a new copy sends it to an old one itself)
  *   POST /uninstall?id=<title ID>  removes a ShadowMountPlus tile whose game files are gone (uninstall_tile())
+ *   POST /logo?id=<title ID>   PNG body: the title logo on the game's home-screen page (set_logo())
  * Paths are percent-encoded. Anyone on the network can reach this port, so writes are refused outside the
- * homebrew folders (writable()). One thread per connection: /info still answers during a long upload.
+ * homebrew folders (writable()); /logo changes only the one file and database column it names. One thread per connection: /info still answers during a long upload.
  * Build with ./build.ps1; VERSION comes from backend/app/__init__.py. */
 #include <dirent.h>
 #include <dlfcn.h>
@@ -20,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <arpa/inet.h>
@@ -33,8 +35,12 @@
 
 #include <ps5/kernel.h>
 
+#include "sqlite3.h"  /* the amalgamation build.ps1 downloads; compiled in, the console has no SQLite to link */
+
 #define PORT 7735
 #define BLOCK (1 << 20)
+#define LOGO_MAX (16 << 20)
+#define APP_DB "/system_data/priv/mms/app.db" /* the home screen's database */
 
 typedef struct {
   unsigned long unknown1;
@@ -238,19 +244,17 @@ static void download(int c, const char *path) {
   close(fd);
 }
 
-/* `body`/`have`: the part of the body that arrived with the headers. */
-static void upload(int c, const char *path, const char *head, const char *body, size_t have) {
+/* The request's Content-Length, or -1 without one. */
+static long long content_length(const char *head) {
   const char *cl = strstr(head, "\r\nContent-Length:");  /* the PC app is the only client; it sends this spelling */
-  if (!cl) {
-    fail(c, "411 Length Required", "Content-Length missing");
-    return;
-  }
-  unsigned long long left = strtoull(cl + 17, NULL, 10);
+  return cl ? (long long)strtoull(cl + 17, NULL, 10) : -1;
+}
+
+/* Writes the request body (`left` bytes) to `path`. `body`/`have`: the part of it that arrived with the headers.
+ * NULL when it's all written, else what went wrong. */
+static const char *receive(int c, const char *path, unsigned long long left, const char *body, size_t have) {
   int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-  if (fd < 0) {
-    fail(c, "500 Internal Server Error", strerror(errno));
-    return;
-  }
+  if (fd < 0) return strerror(errno);
   char *chunk = malloc(BLOCK);
   const char *err = chunk ? NULL : "out of memory";
   if (have > left) have = left;
@@ -267,8 +271,23 @@ static void upload(int c, const char *path, const char *head, const char *body, 
   }
   free(chunk);
   if (close(fd) && !err) err = strerror(errno);
-  if (err) fail(c, "500 Internal Server Error", err);
+  return err;
+}
+
+static void upload(int c, const char *path, const char *head, const char *body, size_t have) {
+  long long len = content_length(head);
+  const char *err = len < 0 ? NULL : receive(c, path, len, body, have);
+  if (len < 0) fail(c, "411 Length Required", "Content-Length missing");
+  else if (err) fail(c, "500 Internal Server Error", err);
   else ok(c);
+}
+
+/* Query parameter "id" as a title ID (4 capital letters, 5 digits) into `id` (16 bytes); 0 when it isn't one. */
+static int title_id(const char *query, char *id) {
+  if (!query || !param(query, "id", id, 16) || strlen(id) != 9) return 0;
+  for (int i = 0; i < 9; i++)
+    if (i < 4 ? id[i] < 'A' || id[i] > 'Z' : id[i] < '0' || id[i] > '9') return 0;
+  return 1;
 }
 
 /* Asks ShadowMountPlus's API to uninstall `id`. Returns the HTTP status (its body in `out`), or 0 when nothing
@@ -334,15 +353,10 @@ static int appinstutil_uninstall(const char *id) {
  * gone, so nothing on the network can remove a game that's still there. No tile at all counts as done. */
 static void uninstall_tile(int c, const char *query) {
   char id[16] = "", lnk[PATH_MAX], source[PATH_MAX] = "", msg[4096];
-  if (!query || !param(query, "id", id, sizeof id) || strlen(id) != 9) {
+  if (!title_id(query, id)) {
     fail(c, "400 Bad Request", "id must be a title ID");
     return;
   }
-  for (int i = 0; i < 9; i++)
-    if (i < 4 ? id[i] < 'A' || id[i] > 'Z' : id[i] < '0' || id[i] > '9') {
-      fail(c, "400 Bad Request", "id must be a title ID");
-      return;
-    }
   FILE *f = NULL;
   snprintf(lnk, sizeof lnk, "/user/app/%s/mount_img.lnk", id);
   if (!(f = fopen(lnk, "r"))) {
@@ -384,6 +398,66 @@ static int is_dir(const char *path) {
   return !lstat(path, &st) && S_ISDIR(st.st_mode);
 }
 
+/* Shows a title logo on `id`'s home-screen page instead of its name in plain text: writes the PNG body to
+ * /user/appmeta/<id>/logo.png and points the title's logoImageInfo in the home screen's database at it. The home
+ * screen can't read files under /data/homebrew, hence appmeta. Only that one file and that one column change, and
+ * only for a title the console already has. SQLite edits the database in place, honouring the home screen's locks. */
+static void set_logo(int c, const char *query, const char *head, const char *body, size_t have) {
+  static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+  static const char not_png[] = "not a PNG";
+  char id[16], dir[64], tmp[96], dest[96], info[128];
+  unsigned char sig[8] = {0};
+  long long len = content_length(head);
+  if (!title_id(query, id)) {
+    fail(c, "400 Bad Request", "id must be a title ID");
+    return;
+  }
+  if (len < 8 || len > LOGO_MAX) {
+    fail(c, "413 Content Too Large", "the logo must be a PNG of at most 16 MB");
+    return;
+  }
+  snprintf(dir, sizeof dir, "/user/appmeta/%s", id);
+  if (!is_dir(dir)) {
+    fail(c, "404 Not Found", "this game isn't on the console");
+    return;
+  }
+  snprintf(tmp, sizeof tmp, "%s/.logo.png.partial", dir);
+  snprintf(dest, sizeof dest, "%s/logo.png", dir);
+  snprintf(info, sizeof info, "%s?ts=%lld", dest, (long long)time(NULL));  /* ts: the home screen reloads the image */
+
+  pthread_mutex_lock(&lock);
+  const char *err = receive(c, tmp, len, body, have);
+  int fd = err ? -1 : open(tmp, O_RDONLY);
+  if (!err && (fd < 0 || read(fd, sig, 8) != 8 || memcmp(sig, "\x89PNG\r\n\x1a\n", 8))) err = not_png;
+  if (fd >= 0) close(fd);
+  if (!err && rename(tmp, dest)) err = strerror(errno);
+  if (err) unlink(tmp);
+
+  sqlite3 *db = NULL;
+  sqlite3_stmt *st = NULL;
+  int changed = 0;
+  if (!err) {
+    if (sqlite3_open_v2(APP_DB, &db, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK) {
+      sqlite3_busy_timeout(db, 10000);  /* the home screen holds its lock only briefly */
+      if (sqlite3_prepare_v2(db, "UPDATE tbl_conceptmetadata SET logoImageInfo = ?1 WHERE localConceptId = "
+                                 "(SELECT localConceptId FROM tbl_contentinfo WHERE titleId = ?2)", -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(st, 1, info, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 2, id, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(st) == SQLITE_DONE) changed = sqlite3_changes(db);
+      }
+      if (!changed && sqlite3_errcode(db) != SQLITE_OK && sqlite3_errcode(db) != SQLITE_DONE) err = sqlite3_errmsg(db);
+    } else {
+      err = "can't open the home screen's database";
+    }
+  }
+  if (err) fail(c, err == not_png ? "400 Bad Request" : "500 Internal Server Error", err);
+  else if (!changed) fail(c, "404 Not Found", "the home screen has no entry for this game");
+  else ok(c);
+  sqlite3_finalize(st);
+  sqlite3_close(db);  /* after fail(): err may point into db */
+  pthread_mutex_unlock(&lock);
+}
+
 /* Answers one request on connection `c`. */
 static void handle(int c) {
   char head[8192], method[8] = "", target[4096] = "", path[PATH_MAX], to[PATH_MAX], *end = NULL;
@@ -412,6 +486,8 @@ static void handle(int c) {
     exit(0);
   } else if (post && !strcmp(target, "/uninstall")) {
     uninstall_tile(c, query);
+  } else if (post && !strcmp(target, "/logo")) {
+    set_logo(c, query, head, end + 4, got - (end + 4 - head));
   } else if (!has_path && (get || post || !strcmp(method, "PUT"))) {
     fail(c, "400 Bad Request", "p must be an absolute path");
   } else if (get && !strcmp(target, "/ls")) {

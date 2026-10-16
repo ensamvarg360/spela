@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, config, credentials, inventory, jobs, scanner
+from . import __version__, config, credentials, inventory, jobs, logos, scanner
 from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError
 from .database import Base, SessionLocal, engine, get_db
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id
@@ -719,6 +719,27 @@ async def uninstall(console_id: str, body: UninstallIn, db: Session = Depends(ge
 @api.get("/removal-jobs/{removal_id}", response_model=RemovalOut)
 def get_removal(removal_id: str):
     return jobs.removals.get(removal_id) or _not_found()
+
+
+@api.post("/games/{game_id}/home-logo")
+async def set_home_logo(game_id: str, db: Session = Depends(get_db)):
+    """Puts the game's title logo from PlayStation Store on its home-screen page, on each console it's installed on."""
+    g = _game(db, game_id)
+    console_ids = set(db.scalars(select(InstalledGame.console_id).where(InstalledGame.title_id == g.title_id))) if g.title_id else set()
+    if not console_ids:
+        raise HTTPException(409, {"error": "not_installed", "message": "Install the game on a console first."})
+    results = []
+    for c in db.scalars(select(Console).where(Console.id.in_(console_ids)).order_by(Console.name)):
+        ok, message = True, "Logo set."
+        try:
+            await logos.apply(db, c, g.title_id)
+        except AdapterError as e:
+            ok, message = False, e.message
+        results.append({"console": c.name, "ok": ok, "message": message})
+        db.add(AuditLog(action="home_logo", console_id=c.id, result="success" if ok else "failed",
+                        details={"title_id": g.title_id, "message": message}))
+    db.commit()
+    return results
 
 
 @api.get("/icons/{title_id}")

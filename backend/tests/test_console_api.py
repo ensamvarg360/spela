@@ -1,12 +1,13 @@
 """The PS5 app's API (token auth, plain-text library, raw covers) and putting the app on the console."""
 import asyncio
+import json
 
 from fastapi.testclient import TestClient
 from PIL import Image
 from test_console_profiles import login
 from test_jobs import adapter, forget_consoles, ps5  # noqa: F401  (fixtures)
 
-from app import config, consoles, main
+from app import config, consoles, inventory, logos, main
 from app.database import SessionLocal
 from app.main import app, console_app_token
 from app.models import Console, Game, InstalledGame
@@ -73,6 +74,44 @@ def test_install_console_app_endpoint(tmp_path, monkeypatch):
         assert client.post(f"/api/v1/consoles/{cid}/console-app").json()["error"] == "lan_off"
         monkeypatch.setattr(config, "HOST", "0.0.0.0")
         assert client.post(f"/api/v1/consoles/{cid}/console-app").status_code == 200
+
+
+def test_home_logo(tmp_path, monkeypatch):
+    png = logos.PNG + b"logo"
+    catalog = {"media": {"images": [{"type": "MASTER", "url": "https://image.api.playstation.com/m.png"},
+                                    {"type": "LOGO", "url": "https://image.api.playstation.com/l.png"}]}}
+    fetched = []
+
+    def get(url):
+        fetched.append(url)
+        return json.dumps(catalog).encode() if "/concepts/" in url else png
+    monkeypatch.setattr(logos, "_get", get)
+    mock = consoles.MockConsoleAdapter()
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: mock)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        cid = _console(client, "Living Room")
+        with SessionLocal() as db:
+            on = Game(title="Quest", title_id="PPSA05678", format="image", source_path=str(tmp_path / "q.exfat"),
+                      source_fingerprint="x", size_bytes=1, compatibility_status="ready")
+            off = Game(title="Not There", title_id="PPSA07777", format="image", source_path=str(tmp_path / "n.exfat"),
+                       source_fingerprint="x", size_bytes=1, compatibility_status="ready")
+            db.add_all([on, off, InstalledGame(console_id=cid, title_id="PPSA05678", title="Quest",
+                                               installed_path="/data/homebrew/q.exfat", status="installed")])
+            db.commit()
+
+        assert client.post(f"/api/v1/games/{off.id}/home-logo").json()["error"] == "not_installed"
+        r = client.post(f"/api/v1/games/{on.id}/home-logo").json()
+        assert r == [{"console": "Living Room", "ok": True, "message": "Logo set."}]
+        assert mock.logos == {"PPSA05678": png}
+        assert fetched == [logos.CATALOG.format(5678), "https://image.api.playstation.com/l.png"]  # concept from the console's db
+        assert (config.DATA_DIR / "console-backups" / f"{cid}-app.db").read_bytes()[:16] == b"SQLite format 3\0"
+
+        catalog["media"]["images"][1]["url"] = "http://192.168.0.1/evil.png"  # only Sony's image server is fetched
+        r = client.post(f"/api/v1/games/{on.id}/home-logo").json()
+        assert not r[0]["ok"] and "isn't a usable PNG" in r[0]["message"] and fetched[-1].endswith("/concepts/5678?country=US&language=en-US&age=99")
+        catalog["media"]["images"].pop()
+        assert "no logo" in client.post(f"/api/v1/games/{on.id}/home-logo").json()[0]["message"]
 
 
 def test_ftp_console_app_upload(ps5):  # noqa: F811

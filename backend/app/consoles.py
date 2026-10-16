@@ -8,6 +8,7 @@ import json
 import re
 import socket
 import os
+import sqlite3
 import struct
 import threading
 import time
@@ -113,6 +114,8 @@ class ConsoleAdapter(Protocol):
     async def remove_home_screen_icon(self, title_id: str) -> RemovalResult: ...
     async def install_helper(self) -> str: ...
     async def install_console_app(self, files: dict[str, bytes]) -> None: ...  # relative path -> content
+    async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
+    async def set_home_logo(self, title_id: str, png: bytes) -> None: ...  # raises AdapterError
 
 
 GiB = 1024**3
@@ -138,6 +141,7 @@ class MockConsoleAdapter:
                               "/mnt/usb0/shadowmount/PPSA05678.ffpkg", "/mnt/usb0/shadowmount/PPSA05678.ffpkg", 30 * GiB),
         ]
         self.icons = {g.title_id for g in self.games}  # home-screen icons
+        self.logos: dict[str, bytes] = {}  # title ID -> home-screen logo
 
     def _check(self):
         if not self.online:
@@ -244,6 +248,19 @@ class MockConsoleAdapter:
         self._check()
         self.console_app = dict(files)
 
+    async def get_home_db(self) -> bytes:
+        self._check()
+        db = sqlite3.connect(":memory:")
+        db.execute("CREATE TABLE tbl_contentinfo (titleId TEXT PRIMARY KEY, conceptId INT)")
+        db.executemany("INSERT INTO tbl_contentinfo VALUES (?, ?)", [(g, int(g[4:])) for g in self.icons])  # concept = digits
+        return db.serialize()
+
+    async def set_home_logo(self, title_id: str, png: bytes) -> None:
+        self._check()
+        if title_id not in self.icons:
+            raise AdapterError("not_found", "The home screen has no entry for this game.")
+        self.logos[title_id] = png
+
 
 # ponytail: PS5 paths from community docs, not yet checked on a real console. Adjust them here after the
 # first hardware test. (external_id, label, mount path, type, user-data root, ShadowMountPlus source folder)
@@ -258,6 +275,7 @@ HELPER_ELF = Path(__file__).parent / "payload" / "storefront-helper.elf"  # buil
 CONSOLE_APP_TITLE_ID = "PPSA99787"
 CONSOLE_APP_DIR = Path(__file__).parent / "console_app" / CONSOLE_APP_TITLE_ID
 CONSOLE_APP_PATH = f"/data/homebrew/{CONSOLE_APP_TITLE_ID}"
+HOME_DB = "/system_data/priv/mms/app.db"  # the home screen's database: titles, concept IDs, tile images
 
 
 class _FTP(ftplib.FTP):
@@ -649,6 +667,31 @@ class FTPConsoleAdapter:
     async def remove_home_screen_icon(self, title_id: str) -> RemovalResult:
         """Asks the helper to remove a ShadowMountPlus tile whose game files are gone (payload/main.c, uninstall_tile)."""
         return await asyncio.to_thread(self._remove_tile, title_id)
+
+    async def get_home_db(self) -> bytes:
+        if not (data := await self._run(lambda fs: fs.get(HOME_DB))):
+            raise AdapterError("home_db_unreadable", "Can't read the home screen's database on the console.")
+        return data
+
+    def _set_logo(self, title_id: str, png: bytes):
+        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/logo?id={title_id}", data=png, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=60):
+                return
+        except urllib.error.HTTPError as e:
+            try:
+                why = json.loads(e.read())["error"]
+            except (ValueError, KeyError, TypeError):
+                why = e.reason
+            if why == "not_found":  # the helper's answer to an endpoint it doesn't have
+                raise AdapterError("helper_outdated", "The helper is too old to do it. Update it on the Installed page.")
+            raise AdapterError("logo_refused", f"The console refused: {why}")
+        except OSError:
+            raise AdapterError("helper_unreachable", "The helper isn't running. Install it on the Installed page.")
+
+    async def set_home_logo(self, title_id: str, png: bytes) -> None:
+        """Has the helper put `png` on the game's home-screen page as its title logo (payload/main.c, set_logo)."""
+        await asyncio.to_thread(self._set_logo, title_id, png)
 
     async def install_package(self, *args, **kwargs):
         raise AdapterError("not_implemented", "This console has no package installer. Install folder dumps or disc images instead.")

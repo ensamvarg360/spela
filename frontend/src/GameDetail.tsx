@@ -50,6 +50,37 @@ function Install({ game }: { game: Game }) {
   );
 }
 
+/** Replaces the plain-text name on the game's PS5 home-screen page with its logo from PlayStation Store. */
+function HomeLogo({ game }: { game: Game }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+
+  if (!game.installed) return null;
+
+  async function apply() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const results = await api<{ console: string; ok: boolean; message: string }[]>(`/games/${game.id}/home-logo`, { method: "POST" });
+      setMsg({
+        text: results.length === 1 ? results[0].message : results.map((r) => `${r.console}: ${r.message}`).join(" "),
+        error: results.some((r) => !r.ok),
+      });
+    } catch (e) {
+      setMsg({ text: (e as Error).message, error: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="toolbar">
+      <button className="secondary" onClick={apply} disabled={busy}>{busy ? "Setting logo…" : "Show logo on PS5 home screen"}</button>
+      {msg && <span className={msg.error ? "error" : "muted"} role="status">{msg.text}</span>}
+    </div>
+  );
+}
+
 const TEXT_FIELDS = [
   ["title", "Title"],
   ["title_id", "Title ID"],
@@ -120,6 +151,7 @@ export default function GameDetail({ id }: { id: string }) {
           {game.compatibility_reason && <span> — {game.compatibility_reason}</span>}
         </div>
         <Install game={game} />
+        <HomeLogo game={game} />
 
         {(game.metadata_confidence === "low" || game.metadata_confidence === "unknown") && (
           <div className="panel needs_attention" role="alert">
