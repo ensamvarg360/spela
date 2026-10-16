@@ -685,6 +685,8 @@ class FTPConsoleAdapter:
                 why = e.reason
             if why == "not_found":  # the helper's answer to an endpoint it doesn't have
                 raise AdapterError("helper_outdated", "The helper is too old to do it. Update it on the Installed page.")
+            if e.code == 404:  # the game isn't on the home screen (yet)
+                raise AdapterError("not_found", f"The console says {why}.")
             raise AdapterError("logo_refused", f"The console refused: {why}")
         except OSError:
             raise AdapterError("helper_unreachable", "The helper isn't running. Install it on the Installed page.")

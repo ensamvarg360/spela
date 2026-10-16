@@ -59,6 +59,16 @@ PARAM_JSON = json.dumps({
 }).encode()
 
 
+@pytest.fixture(autouse=True)
+def offline_store(monkeypatch):
+    """No test reaches PlayStation Store; tests about logos replace logos._get themselves."""
+    from app import logos
+
+    def blocked(url):
+        raise OSError("tests don't go online")
+    monkeypatch.setattr(logos, "_get", blocked)
+
+
 @pytest.fixture
 def library(tmp_path):
     """A sample library covering every format category."""

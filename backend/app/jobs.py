@@ -11,7 +11,7 @@ import time
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import archives, inventory, scanner
+from . import archives, inventory, logos, scanner
 from .consoles import IMAGE_EXTS, AdapterError, DriveInfo, InstalledGameInfo, RemovalResult
 from .database import SessionLocal
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, _id, now
@@ -162,6 +162,8 @@ async def run(job_id: str):
             except AdapterError:
                 pass  # the copy is done; the next inventory read will show it
             _finish(db, job, "success", f"Installed on {drive.label}.")
+            if game.title_id:
+                _spawn(_add_logo(job.id, console.id, game.title_id))
         except AdapterError as e:
             db.rollback()
             db.refresh(job)
@@ -174,6 +176,36 @@ async def run(job_id: str):
         finally:
             _cancel.pop(job_id, None)
             await asyncio.to_thread(archives.clean, job_id)
+
+
+LOGO_WAIT_SECONDS = 180  # how long ShadowMountPlus gets to add a new game to the home screen
+LOGO_RETRY_SECONDS = 10
+
+
+async def _add_logo(job_id: str, console_id: str, title_id: str):
+    """After an install: once ShadowMountPlus has added the game to the home screen, puts its PlayStation Store logo
+    there too (logos.apply). The install is already done, so this only adds a note to the job's message."""
+    deadline = time.monotonic() + LOGO_WAIT_SECONDS
+    with SessionLocal() as db:
+        console = db.get(Console, console_id)
+        while True:
+            try:
+                await logos.apply(db, console, title_id)
+                ok, note = True, "Its logo is on the home screen."
+            except AdapterError as e:
+                if e.code == "not_found" and time.monotonic() < deadline:  # not on the home screen yet
+                    await asyncio.sleep(LOGO_RETRY_SECONDS)
+                    continue
+                ok, note = False, f"No home-screen logo: {e.message}"
+            except Exception as e:  # a bug must not leave the task crashing silently
+                log.exception("home-screen logo for %s", title_id)
+                ok, note = False, f"No home-screen logo: unexpected error: {e}"
+            break
+        job = db.get(InstallJob, job_id)
+        if job:
+            job.message = f"{job.message} {note}"
+        logos.audit(db, console, title_id, ok, note)
+        db.commit()
 
 
 def _check_contents(db: Session, console: Console, game: Game, item: scanner.Item):
@@ -214,7 +246,7 @@ async def worker():
 # ponytail: removals live in memory, with the audit log as the lasting record. The removal_jobs table's foreign key
 # would block dropping the installed_games row once the game is gone. A restart forgets previews and progress.
 removals: dict[str, dict] = {}  # removal id -> preview, then status: awaiting_confirmation|removing|success|failed
-_tasks: set[asyncio.Task] = set()  # keeps running removals from being garbage collected
+_tasks: set[asyncio.Task] = set()  # keeps running removals and logo tasks from being garbage collected
 PREVIEW_SECONDS = 600  # a preview older than this must be made again
 
 
@@ -280,10 +312,14 @@ def start_removal(db: Session, console: Console, removal_id: str, confirm_title_
         db.commit()
         raise
     r["status"], r["message"] = "removing", "Deleting the game's files from the console."
-    task = asyncio.create_task(_remove(removal_id))
+    _spawn(_remove(removal_id))
+    return r
+
+
+def _spawn(coro):
+    task = asyncio.create_task(coro)
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
-    return r
 
 
 async def _remove(removal_id: str):

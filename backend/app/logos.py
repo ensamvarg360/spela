@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from . import config, inventory
 from .consoles import AdapterError
-from .models import Console
+from .models import AuditLog, Console
 
 CATALOG = "https://m.np.playstation.com/api/catalog/v2/concepts/{}?country=US&language=en-US&age=99"  # no login needed
 PRODUCT = "https://m.np.playstation.com/api/catalog/v2/products/{}?country={}&language={}&age=99"
@@ -101,6 +101,11 @@ def fetch_logo(concept: int) -> bytes:
     if not png.startswith(PNG) or len(png) > MAX_BYTES:
         raise AdapterError("no_logo", "PlayStation Store's logo for this game isn't a usable PNG.")
     return png
+
+
+def audit(db: Session, console: Console, title_id: str, ok: bool, message: str):
+    db.add(AuditLog(action="home_logo", console_id=console.id, title_id=title_id, result="success" if ok else "failed",
+                    details={"message": message}))
 
 
 async def apply(db: Session, console: Console, title_id: str) -> None:

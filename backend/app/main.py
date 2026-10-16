@@ -745,8 +745,7 @@ async def set_home_logo(game_id: str, db: Session = Depends(get_db)):
         except AdapterError as e:
             ok, message = False, e.message
         results.append({"console": c.name, "ok": ok, "message": message})
-        db.add(AuditLog(action="home_logo", console_id=c.id, result="success" if ok else "failed",
-                        details={"title_id": g.title_id, "message": message}))
+        logos.audit(db, c, g.title_id, ok, message)
     db.commit()
     return results
 

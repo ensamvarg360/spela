@@ -10,10 +10,10 @@ from PIL import Image
 from test_console_profiles import login
 from test_jobs import adapter, forget_consoles, ps5  # noqa: F401  (fixtures)
 
-from app import config, consoles, inventory, logos, main
+from app import config, consoles, inventory, jobs, logos, main
 from app.database import SessionLocal
 from app.main import app, console_app_token
-from app.models import Console, Game, InstalledGame
+from app.models import Console, Game, InstalledGame, InstallJob
 
 
 def _console(client, name="PS5"):
@@ -115,6 +115,45 @@ def test_home_logo(tmp_path, monkeypatch):
         assert not r[0]["ok"] and "isn't a usable PNG" in r[0]["message"] and fetched[-1].endswith("/concepts/5678?country=US&language=en-US&age=99")
         catalog["media"]["images"].pop()
         assert "no logo" in client.post(f"/api/v1/games/{on.id}/home-logo").json()[0]["message"]
+
+
+def test_logo_after_install(tmp_path, monkeypatch):
+    png = logos.PNG + b"logo"
+    monkeypatch.setattr(logos, "_get", lambda url: json.dumps(
+        {"media": {"images": [{"type": "LOGO", "url": "https://image.api.playstation.com/l.png"}]}}).encode()
+        if "/concepts/" in url else png)
+    mock = consoles.MockConsoleAdapter()
+    reads = 0
+
+    async def home_db():  # ShadowMountPlus adds the new game to the home screen only after the first look
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            mock.icons.add("PPSA04444")
+        return await consoles.MockConsoleAdapter.get_home_db(mock)
+    mock.get_home_db = home_db
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: mock)
+    monkeypatch.setattr(jobs, "LOGO_RETRY_SECONDS", 0)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        cid = _console(client)
+        with SessionLocal() as db:
+            g = Game(title="Racer", title_id="PPSA04444", format="image", source_path=str(tmp_path / "r.exfat"),
+                     source_fingerprint="x", size_bytes=1, compatibility_status="ready")
+            db.add(g)
+            db.flush()
+            job = InstallJob(console_id=cid, game_id=g.id, status="success", message="Installed on USB.")
+            db.add(job)
+            db.commit()
+            asyncio.run(jobs._add_logo(job.id, cid, "PPSA04444"))
+            db.refresh(job)
+            assert job.message == "Installed on USB. Its logo is on the home screen." and reads == 2
+            assert mock.logos == {"PPSA04444": png}
+
+            monkeypatch.setattr(jobs, "LOGO_WAIT_SECONDS", 0)  # never shows up: gives up with a note
+            asyncio.run(jobs._add_logo(job.id, cid, "PPSA09999"))
+            db.refresh(job)
+            assert "No home-screen logo:" in job.message
 
 
 def test_library_logo(tmp_path, monkeypatch):
