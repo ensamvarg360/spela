@@ -33,6 +33,16 @@ export interface Game {
   created_at: string;
   updated_at: string;
   installed: boolean; // on any console, per its last storage scan
+  store: StoreInfo | null; // only when already looked up; the tile asks for the rest
+}
+
+export interface StoreInfo {
+  publisher: string | null;
+  release_date: string | null;
+  genres: string[];
+  rating: number | null;
+  rating_count: number;
+  age_rating: string | null;
 }
 
 export interface Root {

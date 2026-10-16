@@ -225,10 +225,12 @@ class GameOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     installed: bool = False  # on any console, per its last storage scan
+    store: dict | None = None  # logos.store_info, when already looked up; the library filters by it
 
 
 def _out(g: Game, installed: bool = False) -> GameOut:
-    return GameOut.model_validate(g).model_copy(update={"has_cover": bool(g.cover_path), "installed": installed})
+    store = g.title_id and logos.store_info(g.title_id, cached=True) or None
+    return GameOut.model_validate(g).model_copy(update={"has_cover": bool(g.cover_path), "installed": installed, "store": store})
 
 
 def _installed_title_ids(db: Session) -> set[str]:

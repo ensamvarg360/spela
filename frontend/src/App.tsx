@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, appVersion } from "./api";
-import Library from "./Library";
+import Library, { NO_VIEW, type View } from "./Library";
 import GameDetail from "./GameDetail";
 import Installed from "./Installed";
 import Settings from "./Settings";
@@ -21,6 +21,7 @@ export default function App() {
   const [needsSetup, setNeedsSetup] = useState(false);
   const route = useHash();
   const [version, setVersion] = useState("");
+  const [view, setView] = useState<View>(NO_VIEW); // here, so filters survive opening a game and coming back
   useEffect(() => { appVersion.then(setVersion); }, []);
 
   useEffect(() => {
@@ -36,20 +37,29 @@ export default function App() {
   const gameId = route.match(/^\/game\/([\w-]+)$/)?.[1];
   const logout = () => api("/auth/logout", { method: "POST" }).then(() => setUser(null));
 
+  const search = (q: string) => {
+    setView({ ...view, q });
+    if (route !== "/") location.hash = "#/";
+  };
+
   return (
     <>
       <header className="topbar">
-        <a href="#/" className="brand">PS5 Local Storefront</a>
-        {version && <span className="muted">v{version}</span>}
+        <a href="#/" className="brand">
+          <span className="mark" aria-hidden>▶</span>
+          <span>PS5 Local Storefront{version && <small>v{version}</small>}</span>
+        </a>
         <nav>
           <a href="#/" aria-current={route === "/" || !!gameId ? "page" : undefined}>Library</a>
           <a href="#/installed" aria-current={route === "/installed" ? "page" : undefined}>Installed</a>
           <a href="#/settings" aria-current={route === "/settings" ? "page" : undefined}>Settings</a>
-          <button className="link" onClick={logout}>Log out</button>
         </nav>
+        <input className="search" type="search" placeholder="Search your library" aria-label="Search title or title ID"
+          value={view.q} onChange={(e) => search(e.target.value)} />
+        <button className="link" onClick={logout}>Log out</button>
       </header>
       <main>
-        {gameId ? <GameDetail id={gameId} /> : route === "/settings" ? <Settings /> : route === "/installed" ? <Installed /> : <Library />}
+        {gameId ? <GameDetail id={gameId} /> : route === "/settings" ? <Settings /> : route === "/installed" ? <Installed /> : <Library view={view} setView={setView} />}
       </main>
     </>
   );

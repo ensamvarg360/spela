@@ -165,9 +165,16 @@ def poster(title_id: str, content_id: str | None = None) -> Path | None:
     return path
 
 
-def store_info(title_id: str) -> dict | None:
-    """What the store says about the game, for its tile: publisher, release date, genres, star rating, age rating."""
-    if not (c := concept(title_id)):
+def cached_concept(title_id: str) -> dict | None:
+    """concept() as far as STORE_DIR already knows it, without asking the store."""
+    path = STORE_DIR / f"{title_id}.json"
+    return json.loads(path.read_bytes()) or None if TITLE_ID.fullmatch(title_id) and path.is_file() else None
+
+
+def store_info(title_id: str, cached: bool = False) -> dict | None:
+    """What the store says about the game, for its tile: publisher, release date, genres, star rating, age rating.
+    `cached` only reads what STORE_DIR already holds."""
+    if not (c := (cached_concept if cached else concept)(title_id)):
         return None
     stars = c.get("starRating") or {}
     return {
