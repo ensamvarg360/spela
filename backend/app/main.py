@@ -312,13 +312,22 @@ def get_cover(game_id: str, db: Session = Depends(get_db)):
     return FileResponse(_cover_file(_game(db, game_id)))
 
 
-@api.get("/games/{game_id}/logo")
-def get_logo(game_id: str, db: Session = Depends(get_db)):
-    """The game's title logo from PlayStation Store, fetched on first use (logos.library_logo)."""
+@api.get("/games/{game_id}/poster")
+def get_poster(game_id: str, db: Session = Depends(get_db)):
+    """The game's portrait key art from PlayStation Store (logos.poster). 404 when it has none, or a cover was
+    uploaded: the tile then shows the cover."""
     g = _game(db, game_id)
-    if not (path := g.content_id and logos.library_logo(g.content_id)):
-        raise HTTPException(404, {"error": "not_found", "message": "No logo."})
+    uploaded = any(config.COVERS_DIR.glob(f"{g.id}.*"))
+    if uploaded or not (path := g.title_id and logos.poster(g.title_id, g.content_id)):
+        raise HTTPException(404, {"error": "not_found", "message": "No poster."})
     return FileResponse(path)
+
+
+@api.get("/games/{game_id}/store")
+def get_store_info(game_id: str, db: Session = Depends(get_db)):
+    """Publisher, release date, genres and ratings from PlayStation Store (logos.store_info); null when it has none."""
+    g = _game(db, game_id)
+    return g.title_id and logos.store_info(g.title_id) or None
 
 
 COVER_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}

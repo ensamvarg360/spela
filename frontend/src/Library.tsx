@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { api, coverUrl, formatLabel, STATUS_LABEL, type Game, type Status } from "./api";
 
 type Sort = "title" | "recent" | "size" | "version";
@@ -76,35 +76,77 @@ export default function Library() {
         </select>
         <span className="muted">{shown.length} of {games.length}</span>
       </div>
-      <ul className="grid">
-        {shown.map((g) => (
-          <li key={g.id}>
-            <a className="tile" href={`#/game/${g.id}`}>
-              <Cover game={g} />
-              {g.installed
-                ? <span className="badge installed">Installed</span>
-                : <span className={`badge ${g.compatibility_status}`}>{STATUS_LABEL[g.compatibility_status]}</span>}
-              <Title game={g} />
-            </a>
-          </li>
-        ))}
+      <ul className="games">
+        {shown.map((g) => <li key={g.id}><Tile game={g} /></li>)}
       </ul>
     </>
   );
 }
 
-/** The game's logo from PlayStation Store; its title as text when the store has none. */
-function Title({ game }: { game: Game }) {
-  const [noLogo, setNoLogo] = useState(!game.content_id);
+interface StoreInfo {
+  publisher: string | null;
+  release_date: string | null;
+  genres: string[];
+  rating: number | null;
+  rating_count: number;
+  age_rating: string | null;
+}
+
+function Tile({ game }: { game: Game }) {
+  const [colors, setColors] = useState<CSSProperties>();
+  const [info, setInfo] = useState<StoreInfo | null>(null);
+  const loaded = (img: HTMLImageElement) => {
+    setColors(sampleColors(img));
+    // asked once the art loads, so only tiles that have scrolled into view ask the store
+    if (game.title_id && !info) api<StoreInfo | null>(`/games/${game.id}/store`).then(setInfo, () => {});
+  };
+  const genre = info?.genres[0] ?? game.genre;
+  const byline = [info?.publisher, (info?.release_date ?? game.release_date)?.slice(0, 4)].filter(Boolean).join(", ");
+
   return (
-    <strong className="title">
-      {game.favorite && "★ "}
-      {noLogo ? game.title : <img className="logo" src={`/api/v1/games/${game.id}/logo`} alt={game.title} loading="lazy" onError={() => setNoLogo(true)} />}
-    </strong>
+    <a className="game" href={`#/game/${game.id}`} style={colors}>
+      <Cover game={game} onLoad={loaded} />
+      <div className="name">
+        <strong>{game.favorite && "★ "}{game.title}</strong>
+        {info?.rating != null && (
+          <span className="rating" title={`${info.rating_count.toLocaleString()} ratings on PlayStation Store`}>{info.rating.toFixed(1)}</span>
+        )}
+        {genre && <span className="genre">{genre}</span>}
+        {byline && <span className="byline">{byline}</span>}
+        {game.installed
+          ? <span className="badge installed">Installed</span>
+          : <span className={`badge ${game.compatibility_status}`}>{STATUS_LABEL[game.compatibility_status]}</span>}
+      </div>
+    </a>
   );
 }
 
-export function Cover({ game }: { game: Game }) {
-  const url = coverUrl(game);
-  return url ? <img className="cover" src={url} alt="" loading="lazy" /> : <div className="cover placeholder" aria-hidden>{game.title.slice(0, 1)}</div>;
+/** The name box's gradient: the art's bottom edge, which it continues, into the art's most vivid patch. */
+function sampleColors(img: HTMLImageElement): CSSProperties | undefined {
+  const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+  if (!ctx) return;
+  ctx.drawImage(img, 0, 0, 8, 8);
+  const px = ctx.getImageData(0, 0, 8, 8).data;
+  const edge = [0, 0, 0];
+  let vivid = [0, 0, 0], best = -1;
+  for (let i = 0; i < 64; i++) {
+    const rgb = [px[i * 4], px[i * 4 + 1], px[i * 4 + 2]];
+    if (i >= 48) rgb.forEach((v, k) => (edge[k] += v / 16)); // bottom two rows
+    const saturation = Math.max(...rgb) - Math.min(...rgb);
+    if (saturation > best) [best, vivid] = [saturation, rgb];
+  }
+  return { "--edge": `rgb(${edge.map(Math.round).join(" ")})`, "--vivid": `rgb(${vivid.join(" ")})` } as CSSProperties;
+}
+
+/** The store's portrait key art, else the game's own (square) cover on a blurred copy of itself. */
+export function Cover({ game, onLoad }: { game: Game; onLoad?: (img: HTMLImageElement) => void }) {
+  const cover = coverUrl(game);
+  const [src, setSrc] = useState(game.title_id ? `/api/v1/games/${game.id}/poster?v=${encodeURIComponent(game.updated_at)}` : cover);
+  if (!src) return <div className="art placeholder" aria-hidden>{game.title.slice(0, 1)}</div>;
+  const square = src === cover;
+  return (
+    <div className={square ? "art square" : "art"} style={square ? ({ "--art": `url("${src}")` } as CSSProperties) : undefined}>
+      <img src={src} alt="" loading="lazy" onLoad={(e) => onLoad?.(e.currentTarget)} onError={() => setSrc(square ? null : cover)} />
+    </div>
+  );
 }

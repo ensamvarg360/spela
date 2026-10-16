@@ -9,6 +9,7 @@ Double-click **PS5 Local Storefront.exe**. It opens in its own window (Windows' 
 Right-click the tray icon to **Open** it, **Open data folder**, **Restart** or **Quit**. Starting the .exe again while it's running brings its window back. The address http://127.0.0.1:8787 still works in a browser too.
 The first time, choose an admin password. Then go to **Settings**, click **Browse…**, pick a folder or a whole drive (for example `G:\`), and click **Scan now**.
 A folder is scanned with all its subfolders. System folders such as `$RECYCLE.BIN` and `System Volume Information` are skipped.
+Each game in the library shows its poster, publisher, release year, genre and star rating from PlayStation Store, looked up by the game's title ID (no account needed) the first time its tile comes into view and kept in the `store` folder of the data folder. The poster is the game's portrait art, looked for in the US, then UK, then Japanese store, and in its other editions (a Deluxe Edition's art says so); only when none has any does the app make one from the game's landscape art and logo. A cover you upload yourself replaces the store's art. Games the store doesn't know show their own cover and are asked about again after a week.
 
 Data (database, covers, password, `app.log`) lives in `%LOCALAPPDATA%\PS5 Local Storefront`. To back it up or move to another PC, see [Backup and restore](#backup-and-restore).
 Forgot the password? Delete `admin_password` in that folder and restart; you'll be asked to choose a new one. That also logs out every device that was logged in.
@@ -66,7 +67,7 @@ To release a new version: bump it, run `./payload/build.ps1` (needs Docker Deskt
 Everything the app knows is in the data folder (`%LOCALAPPDATA%\PS5 Local Storefront`, or `DATA_DIR`). Your game files are never in it.
 
 1. **Quit** from the tray menu, so the database isn't being written.
-2. Copy the whole folder. `staging` (temporary archive extractions), `webview` (the window's browser profile) and `app.log` can be left out.
+2. Copy the whole folder. `staging` (temporary archive extractions), `store` (PlayStation Store art and facts, fetched again when needed), `webview` (the window's browser profile) and `app.log` can be left out.
 3. To restore, quit the app, put the folder back (or copy it to the same place on the new PC) and start it.
 
 Keep `secret_key` together with `app.db`. Without it, saved console passwords can't be decrypted (enter them again) and the PS5 app's pairing key stops working (click **Update PS5 app**). Library folders are stored by full path, so on a new PC give the drives the same letters, or remove the old folders under **Settings** and add the new ones. Games in a removed folder leave the library, and the next scan adds them back. Uploaded covers move with the folder.

@@ -1,6 +1,7 @@
 """Title logos on the PS5 home screen. A backup's home-screen page shows its name in plain text: the console gets the
 logo from PlayStation Network, which a jailbroken console doesn't reach. This PC looks it up in Sony's catalog by the
-game's concept ID, read from the console's own database, and the helper puts it on the console."""
+game's concept ID, read from the console's own database, and the helper puts it on the console.
+Also the library's PlayStation Store lookups by title ID: posters and store facts for the tiles."""
 import asyncio
 import io
 import json
@@ -13,7 +14,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 from sqlalchemy.orm import Session
 
 from . import config, inventory
@@ -21,15 +22,18 @@ from .consoles import AdapterError
 from .models import AuditLog, Console
 
 CATALOG = "https://m.np.playstation.com/api/catalog/v2/concepts/{}?country=US&language=en-US&age=99"  # no login needed
-PRODUCT = "https://m.np.playstation.com/api/catalog/v2/products/{}?country={}&language={}&age=99"
-# A content ID is sold in its own region's store; English stores first, so a Japanese release gets the English logo.
-STORES = (("US", "en-US"), ("GB", "en-GB"), ("JP", "ja-JP"), ("DE", "de-DE"))
+# The concept (the game across editions and regions) behind a title ID; a list, empty when the store has none
+TITLE = "https://m.np.playstation.com/api/catalog/v2/titles/{}_00/concepts?country={}&language={}&age=99"
+PRODUCT = "https://m.np.playstation.com/api/catalog/v2/products/{}?country={}&language={}&age=99"  # one edition
+STORES = (("US", "en-US"), ("GB", "en-GB"), ("JP", "ja-JP"))  # English first, so a Japanese release gets English text
+TITLE_ID = re.compile(r"(PPSA|CUSA)\d{5}")
 CONTENT_ID = re.compile(r"[A-Z]{2}\d{4}-[A-Z]{4}\d{5}_\d{2}-[A-Z0-9]{16}")
 IMAGES = "https://image.api.playstation.com/"
 PNG = b"\x89PNG\r\n\x1a\n"
 MAX_BYTES = 16 << 20  # the helper's limit
-LOGOS_DIR = config.DATA_DIR / "logos"  # library logos: <content ID>.png, or .none when the store has none
-RETRY_SECONDS = 7 * 86400  # a .none is asked about again after this
+# per title ID: <id>.json (its store concept, {} when none), <id>.jpg poster, <id>.none when the store has no art
+STORE_DIR = config.DATA_DIR / "store"
+RETRY_SECONDS = 7 * 86400  # a game the store didn't have is asked about again after this
 
 
 def concept_id(home_db: bytes, title_id: str) -> int | None:
@@ -50,42 +54,130 @@ def _get(url: str) -> bytes:
         return r.read(MAX_BYTES + 1)
 
 
-def _logo_url(images: list[dict]) -> str | None:
-    return next((i["url"] for i in images if i.get("type") == "LOGO"), None)
+def _save(path: Path, data: bytes):
+    STORE_DIR.mkdir(exist_ok=True)
+    tmp = path.with_suffix(f".{threading.get_ident()}.tmp")  # tiles load in parallel
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
 
 
-def library_logo(content_id: str) -> Path | None:
-    """A library game's store logo, found by its content ID, shrunk to tile size and kept in LOGOS_DIR.
-    None when the store has none or can't be reached; the tile then shows the title as text."""
-    if not CONTENT_ID.fullmatch(content_id):
+def concept(title_id: str) -> dict | None:
+    """The game's PlayStation Store concept, found by its title ID and kept in STORE_DIR. None when the store has
+    none or can't be reached."""
+    if not TITLE_ID.fullmatch(title_id):
         return None
-    path, none = LOGOS_DIR / f"{content_id}.png", LOGOS_DIR / f"{content_id}.none"
+    path = STORE_DIR / f"{title_id}.json"
+    if path.is_file() and ((data := json.loads(path.read_bytes())) or time.time() - path.stat().st_mtime < RETRY_SECONDS):
+        return data or None
+    data = {}
+    for country, language in STORES:
+        try:
+            found = json.loads(_get(TITLE.format(title_id, country, language)))
+        except urllib.error.HTTPError:
+            continue  # not sold in that store
+        except (OSError, ValueError):
+            return None  # offline: ask again next time
+        if isinstance(found, list) and found and isinstance(found[0], dict):
+            data = found[0]
+            break
+    _save(path, json.dumps(data).encode())
+    return data or None
+
+
+def _url(images: list[dict], kind: str) -> str | None:
+    url = next((i.get("url") for i in images if i.get("type") == kind), None)
+    return url if isinstance(url, str) and url.startswith(IMAGES) else None  # only Sony's image server
+
+
+def _open(url: str | None) -> Image.Image | None:
+    if not url:
+        return None
+    try:
+        img = Image.open(io.BytesIO(_get(url)))
+        img.load()
+        return img
+    except (OSError, Image.DecompressionBombError):  # unreachable or not an image
+        return None
+
+
+def _portrait_url(title_id: str, content_id: str | None) -> str | None:
+    """The game's portrait key art: its own product's (its content ID), its concept's (shared by a collection's games),
+    or else one of its editions' (often a Deluxe Edition's, which says so on the art), asking each store in turn.
+    Raises OSError when offline."""
+    def product_art(pid: str, country: str, language: str) -> str | None:
+        try:
+            product = json.loads(_get(PRODUCT.format(pid, country, language)))
+        except urllib.error.HTTPError:
+            return None  # not sold in that store
+        return _url((product.get("media") or {}).get("images") or [], "PORTRAIT_BANNER")
+
+    for country, language in STORES:
+        if content_id and CONTENT_ID.fullmatch(content_id) and (url := product_art(content_id, country, language)):
+            return url
+        try:
+            found = json.loads(_get(TITLE.format(title_id, country, language)))
+        except urllib.error.HTTPError:
+            continue
+        if not (isinstance(found, list) and found and isinstance(found[0], dict)):
+            continue
+        c = found[0]
+        if url := _url((c.get("media") or {}).get("images") or [], "PORTRAIT_BANNER"):
+            return url
+        editions = [(c.get("defaultProduct") or {}).get("id")] + [
+            i for group in c.get("categorizedProducts") or [] for i in group.get("ids") or []]
+        for pid in dict.fromkeys(filter(None, editions)):
+            if pid != content_id and (url := product_art(pid, country, language)):
+                return url
+    return None
+
+
+def poster(title_id: str, content_id: str | None = None) -> Path | None:
+    """The game's 2:3 poster, kept in STORE_DIR: the store's portrait key art (_portrait_url), or else its landscape
+    key art cropped to 2:3 with the game's logo on top. None when the store has neither."""
+    path, none = STORE_DIR / f"{title_id}.jpg", STORE_DIR / f"{title_id}.none"
     if path.is_file():
         return path
     if none.is_file() and time.time() - none.stat().st_mtime < RETRY_SECONDS:
         return None
-    url = None
-    for country, language in STORES:
-        try:
-            url = _logo_url(json.loads(_get(PRODUCT.format(content_id, country, language)))["media"]["images"])
-            break
-        except urllib.error.HTTPError:
-            continue  # not sold in that store
-        except (OSError, ValueError, KeyError, TypeError):
-            return None  # offline: ask again next time
-    LOGOS_DIR.mkdir(exist_ok=True)
-    try:
-        img = Image.open(io.BytesIO(_get(url))) if url and url.startswith(IMAGES) else None
-        if img:
-            img.thumbnail((480, 160))
-            tmp = path.with_suffix(f".{threading.get_ident()}.tmp")  # tiles load in parallel
-            img.save(tmp, "PNG")
-            os.replace(tmp, path)
-            return path
-    except OSError:  # unreachable or not an image
+    if not (c := concept(title_id)):
         return None
-    none.touch()
-    return None
+    try:
+        portrait = _open(_portrait_url(title_id, content_id))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None  # offline or a surprising answer: ask again next time
+    images = (c.get("media") or {}).get("images") or []
+    if portrait:
+        img = ImageOps.fit(portrait.convert("RGB"), (480, 720))
+    elif (art := _open(_url(images, "GAMEHUB_COVER_ART"))) and (logo := _open(_url(images, "LOGO"))):
+        # ponytail: a centre crop; the subject of some key art sits off-centre
+        img = ImageOps.fit(art.convert("RGB"), (480, 720))
+        shade = Image.linear_gradient("L").rotate(180).resize((480, 320)).point(lambda v: v * 3 // 4)  # dark at the top
+        img.paste((0, 0, 0), (0, 0, 480, 320), shade)  # so the logo reads over busy art
+        logo = logo.convert("RGBA")
+        logo.thumbnail((400, 200))
+        img.paste(logo, ((480 - logo.width) // 2, 48), logo)
+    else:
+        _save(none, b"")
+        return None
+    out = io.BytesIO()
+    img.save(out, "JPEG", quality=85)
+    _save(path, out.getvalue())
+    return path
+
+
+def store_info(title_id: str) -> dict | None:
+    """What the store says about the game, for its tile: publisher, release date, genres, star rating, age rating."""
+    if not (c := concept(title_id)):
+        return None
+    stars = c.get("starRating") or {}
+    return {
+        "publisher": c.get("publisherName") or None,
+        "release_date": ((c.get("releaseDate") or {}).get("date") or "")[:10] or None,
+        "genres": [g["value"] for g in c.get("localizedGenres") or []],
+        "rating": round(float(stars["score"]), 1) if stars.get("score") else None,
+        "rating_count": int(stars.get("total") or 0),
+        "age_rating": (c.get("contentRating") or {}).get("description"),
+    }
 
 
 def fetch_logo(concept: int) -> bytes:

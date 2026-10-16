@@ -156,40 +156,78 @@ def test_logo_after_install(tmp_path, monkeypatch):
             assert "No home-screen logo:" in job.message
 
 
-def test_library_logo(tmp_path, monkeypatch):
-    big = io.BytesIO()
-    Image.new("RGBA", (1440, 592), (255, 255, 255, 0)).save(big, "PNG")
+def test_store_poster_and_info(tmp_path, monkeypatch):
+    def png(size, mode="RGB"):
+        out = io.BytesIO()
+        Image.new(mode, size).save(out, "PNG")
+        return out.getvalue()
+    art = {"PORTRAIT_BANNER": png((1440, 2160)), "GAMEHUB_COVER_ART": png((3840, 2160)), "LOGO": png((1200, 400), "RGBA")}
+    concept = {"publisherName": "Pub", "releaseDate": {"date": "2023-01-24T05:00:00Z"},
+               "localizedGenres": [{"value": "Role Playing Games"}], "contentRating": {"description": "PEGI 18"},
+               "starRating": {"score": "3.45", "total": "19847"},
+               "media": {"images": [{"type": t, "url": f"https://image.api.playstation.com/{t}"} for t in art]}}
     asked = []
 
     def get(url):
         asked.append(url)
-        if "country=US" in url:  # a European content ID isn't sold in the US store
+        if "/titles/PPSA01111_00/" in url:
+            return b"[]" if "country=US" in url else json.dumps([concept]).encode()  # sold in Europe only
+        if "/titles/PPSA02222_00/" in url:  # no portrait art: a poster is made from the key art and logo
+            return json.dumps([{"media": {"images": concept["media"]["images"][1:]}}]).encode()
+        if "/titles/PPSA04444_00/" in url:  # only its Deluxe Edition has portrait art, and only in Japan
+            return json.dumps([{"media": {"images": []}, "categorizedProducts": [{"ids": ["DELUXE"]}]}]).encode()
+        if "/products/DELUXE" in url:
+            images = concept["media"]["images"][:1] if "country=JP" in url else []
+            return json.dumps({"media": {"images": images}}).encode()
+        if "/titles/PPSA06666_00/" in url:  # a collection's concept, with the collection's own art...
+            return json.dumps([concept]).encode()
+        if "/products/UP0001-PPSA06666_00-OWNART0000000000" in url:  # ...but the game has art of its own
+            return json.dumps({"media": {"images": concept["media"]["images"][:1]}}).encode()
+        if "/titles/PPSA05555_00/" in url:  # no art at all
+            return json.dumps([{"media": {"images": []}}]).encode()
+        if "/titles/" in url:
             raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
-        if "/products/" in url:
-            return json.dumps({"media": {"images": [{"type": "LOGO", "url": "https://image.api.playstation.com/l.png"}]}}).encode()
-        return big.getvalue()
+        return art[url.rsplit("/", 1)[1]]
     monkeypatch.setattr(logos, "_get", get)
-    monkeypatch.setattr(logos, "LOGOS_DIR", tmp_path / "logos")
+    monkeypatch.setattr(logos, "STORE_DIR", tmp_path / "store")
+    monkeypatch.setattr(config, "COVERS_DIR", tmp_path / "covers")
+    (tmp_path / "covers").mkdir()
     with TestClient(app, base_url="http://127.0.0.1") as client:
         login(client)
         with SessionLocal() as db:
-            g = Game(title="Euro", title_id="PPSA01111", content_id="EP0001-PPSA01111_00-EUROGAME00000000", format="image",
-                     source_path=str(tmp_path / "e.exfat"), source_fingerprint="x", size_bytes=1, compatibility_status="ready")
-            none = Game(title="No ID", format="image", source_path=str(tmp_path / "n.exfat"), source_fingerprint="x",
-                        size_bytes=1, compatibility_status="ready")
-            db.add_all([g, none])
+            games = [Game(title=t, title_id=tid, format="image", source_path=str(tmp_path / f"{t}.exfat"),
+                          source_fingerprint="x", size_bytes=1, compatibility_status="ready")
+                     for t, tid in (("Euro", "PPSA01111"), ("Wide", "PPSA02222"), ("Deluxe", "PPSA04444"), ("Bare", "PPSA05555"),
+                                   ("No ID", None))]
+            db.add_all(games)
             db.commit()
-        r = client.get(f"/api/v1/games/{g.id}/logo")
-        assert r.status_code == 200 and Image.open(io.BytesIO(r.content)).size == (389, 160)  # shrunk to tile size
+            euro, wide, deluxe, bare, none = (g.id for g in games)
+        r = client.get(f"/api/v1/games/{euro}/poster")
+        assert r.status_code == 200 and Image.open(io.BytesIO(r.content)).size == (480, 720)  # shrunk to tile size
         assert [u.split("country=")[1][:2] for u in asked[:2]] == ["US", "GB"]
-        client.get(f"/api/v1/games/{g.id}/logo")
-        assert len(asked) == 3  # cached
-        assert client.get(f"/api/v1/games/{none.id}/logo").status_code == 404
+        assert client.get(f"/api/v1/games/{euro}/store").json() == {
+            "publisher": "Pub", "release_date": "2023-01-24", "genres": ["Role Playing Games"], "rating": 3.5,
+            "rating_count": 19847, "age_rating": "PEGI 18"}
+        client.get(f"/api/v1/games/{euro}/poster")
+        assert len(asked) == 5  # concept: US, GB; portrait: US, GB, the image; then cached
+        assert Image.open(io.BytesIO(client.get(f"/api/v1/games/{wide}/poster").content)).size == (480, 720)
+        asked.clear()
+        assert client.get(f"/api/v1/games/{deluxe}/poster").status_code == 200
+        assert "/products/DELUXE?country=JP" in asked[-2] and asked[-1].endswith("/PORTRAIT_BANNER")
+        assert client.get(f"/api/v1/games/{bare}/poster").status_code == 404
+        asked.clear()
+        assert client.get(f"/api/v1/games/{bare}/poster").status_code == 404
+        assert not asked  # no art: asked again only after a week
+        assert logos.poster("PPSA06666", "UP0001-PPSA06666_00-OWNART0000000000")
+        assert "/products/UP0001-PPSA06666_00-OWNART0000000000?country=US" in asked[1] and len(asked) == 3
+        assert client.get(f"/api/v1/games/{none}/poster").status_code == 404
+        assert client.get(f"/api/v1/games/{none}/store").json() is None
+        (tmp_path / "covers" / f"{euro}.png").write_bytes(b"x")
+        assert client.get(f"/api/v1/games/{euro}/poster").status_code == 404  # an uploaded cover wins
 
-        monkeypatch.setattr(logos, "_get", lambda url: json.dumps({"media": {"images": []}}).encode())
-        assert logos.library_logo("UP0001-PPSA02222_00-NOLOGO0000000000") is None
-        monkeypatch.setattr(logos, "_get", lambda url: pytest.fail("a store without a logo is asked only once a week"))
-        assert logos.library_logo("UP0001-PPSA02222_00-NOLOGO0000000000") is None
+        assert logos.concept("PPSA03333") is None  # in no store
+        monkeypatch.setattr(logos, "_get", lambda url: pytest.fail("a game the store lacks is asked about once a week"))
+        assert logos.concept("PPSA03333") is None
 
 
 def test_ftp_console_app_upload(ps5):  # noqa: F811

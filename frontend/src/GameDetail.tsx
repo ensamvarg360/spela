@@ -133,7 +133,7 @@ export default function GameDetail({ id }: { id: string }) {
   return (
     <div className="detail">
       <aside>
-        <Cover game={game} />
+        <Cover key={game.updated_at} game={game} />
         <label className="button secondary">
           Change cover
           <input type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
