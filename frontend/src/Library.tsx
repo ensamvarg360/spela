@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { api, appVersion, coverUrl, formatLabel, STATUS_LABEL, type Console, type Game, type Kind, type ScanStatus, type StoreInfo } from "./api";
+import { api, appVersion, coverUrl, formatLabel, STATUS_LABEL, type Console, type Game, type Job, type Kind, type ScanStatus, type StoreInfo } from "./api";
 import { STATE_LABEL } from "./Installed";
 
 export type Sort = "title" | "recent" | "rating" | "released" | "size";
@@ -84,12 +84,74 @@ function Connection() {
   );
 }
 
+/** Queues every picked game on one console, one request each, and says which couldn't be queued and why. */
+function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Set<string>; shown: Game[]; setPicked: (p: Set<string> | null) => void }) {
+  const [consoles, setConsoles] = useState<Console[]>([]);
+  const [cid, setCid] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ queued: number; failed: [string, string][] } | null>(null);
+  useEffect(() => {
+    api<Console[]>("/consoles").then((cs) => {
+      setConsoles(cs);
+      setCid((cs.find((c) => c.enabled) ?? cs[0])?.id ?? "");
+    }, () => {});
+  }, []);
+
+  const games = shown.filter((g) => picked.has(g.id));
+  async function install() {
+    if (games.some((g) => g.format === "archive") && !confirm("Archives are extracted to the private staging folder on this PC before they're installed, one at a time. Make sure the PC has room for the biggest unpacked game.")) return;
+    if (kind === "dlc" && !confirm("Each unlocker's files are copied into its installed game's folder and replace files there with the same names. Close the games on the PS5 first.")) return;
+    setBusy(true);
+    const failed: [string, string][] = [];
+    for (const g of games) {
+      try {
+        await api<Job>(`/consoles/${cid}/install`, { json: { game_id: g.id, drive_id: null } });
+      } catch (e) {
+        failed.push([g.title, (e as Error).message]);
+      }
+    }
+    setBusy(false);
+    setResult({ queued: games.length - failed.length, failed });
+    if (!failed.length) setPicked(new Set());
+  }
+
+  return (
+    <div className="pick-bar card" role="region" aria-label="Selection">
+      <strong>{picked.size} selected</strong>
+      <button className="link" onClick={() => setPicked(new Set(shown.map((g) => g.id)))}>Select all {shown.length}</button>
+      {picked.size > 0 && <button className="link" onClick={() => setPicked(new Set())}>Clear</button>}
+      <span className="spacer" />
+      {!consoles.length ? <a href="#/settings">Add a PS5 to install</a> : <>
+        {consoles.length > 1 && (
+          <select aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
+            {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        )}
+        <button disabled={busy || !games.length} onClick={install}>
+          {busy ? "Queuing…" : `${kind === "dlc" ? "Add" : "Install"} ${games.length || ""}`.trim()}
+        </button>
+      </>}
+      <button className="secondary" onClick={() => setPicked(null)}>Done</button>
+      {result && (
+        <div className="pick-result" role="status">
+          {result.queued > 0 && <p className="muted">Queued {result.queued}. They install one at a time; follow them on the <a href="#/installed">Installed</a> page.</p>}
+          {result.failed.length > 0 && <>
+            <p className="error">Couldn't queue {result.failed.length}:</p>
+            <ul>{result.failed.map(([t, why]) => <li key={t}><strong>{t}</strong>: {why}</li>)}</ul>
+          </>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The grid of games, or of DLC: DLC shares its game's title ID, so its tiles show the game's art. */
 export default function Library({ kind, view, setView }: { kind: Kind; view: View; setView: (v: View) => void }) {
   const [games, setGames] = useState<Game[] | null>(null);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({}); // filters showing all their values
   const [filtersOpen, setFiltersOpen] = useState(false); // phones only: the sidebar sits behind a button
+  const [picked, setPicked] = useState<Set<string> | null>(null); // null = not selecting; tiles open their game
 
   const load = () => api<Game[]>("/games").then((gs) => setGames(gs.filter((g) => g.kind === kind)), (e) => setError(e.message));
   useEffect(() => { load(); }, [kind]);
@@ -184,6 +246,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
             {(chips.length > 0 || q) && <li><button className="link" onClick={clear}>Clear all</button></li>}
           </ul>
           <span className="muted">{shown.length === games.length ? `${games.length} ${noun}` : `${shown.length} of ${games.length} ${noun}`}</span>
+          {!picked && <button className="secondary small" onClick={() => setPicked(new Set())}>Select</button>}
           <label className="sort">
             Sort by
             <select value={view.sort} onChange={(e) => setView({ ...view, sort: e.target.value as Sort })}>
@@ -195,15 +258,23 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
             </select>
           </label>
         </div>
+        {picked && <InstallBar kind={kind} picked={picked} shown={shown} setPicked={setPicked} />}
         {shown.length
-          ? <ul className="games">{shown.map((g) => <li key={g.id}><Tile game={g} onChange={changed} /></li>)}</ul>
+          ? <ul className="games">{shown.map((g) => <li key={g.id}>
+            <Tile game={g} onChange={changed} picked={picked && picked.has(g.id)} onPick={() => {
+              const next = new Set(picked);
+              if (!next.delete(g.id)) next.add(g.id);
+              setPicked(next);
+            }} />
+          </li>)}</ul>
           : <p className="muted nothing">No {noun} match. <button className="link" onClick={clear}>Clear the filters</button></p>}
       </section>
     </div>
   );
 }
 
-function Tile({ game, onChange }: { game: Game; onChange: (id: string, changes: Partial<Game>) => void }) {
+/** `picked`: null when not selecting; otherwise a click ticks the tile instead of opening the game. */
+function Tile({ game, onChange, picked, onPick }: { game: Game; onChange: (id: string, changes: Partial<Game>) => void; picked: boolean | null; onPick: () => void }) {
   const [colors, setColors] = useState<CSSProperties>();
   const info = game.store;
   const loaded = (img: HTMLImageElement) => {
@@ -217,8 +288,10 @@ function Tile({ game, onChange }: { game: Game; onChange: (id: string, changes: 
   const byline = [info?.publisher, (info?.release_date ?? game.release_date)?.slice(0, 4)].filter(Boolean).join(", ");
 
   return (<>
-    <a className="game" href={`#/game/${game.id}`} style={colors}>
-      {game.new && <span className="ribbon">New</span>}
+    <a className={picked ? "game picked" : "game"} href={`#/game/${game.id}`} style={colors}
+      onClick={picked !== null ? (e) => { e.preventDefault(); onPick(); } : undefined}
+      aria-pressed={picked ?? undefined} role={picked !== null ? "button" : undefined}>
+      {picked !== null ? <span className="pick" aria-hidden>{picked ? "✓" : ""}</span> : game.new && <span className="ribbon">New</span>}
       <Cover game={game} onLoad={loaded} />
       <div className="name">
         <strong>{game.title}</strong>
@@ -233,10 +306,10 @@ function Tile({ game, onChange }: { game: Game; onChange: (id: string, changes: 
       </div>
     </a>
     {/* a sibling, not inside the link: a button can't be nested in a link */}
-    <button className="fav" aria-pressed={game.favorite} title={game.favorite ? "Remove from favorites" : "Add to favorites"}
+    {picked === null && <button className="fav" aria-pressed={game.favorite} title={game.favorite ? "Remove from favorites" : "Add to favorites"}
       aria-label={`Favorite ${game.title}`} onClick={favorite}>
       <svg viewBox="0 0 24 24" aria-hidden><path d="M12 2.8l2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3-4.6-4.4 6.3-.9z" /></svg>
-    </button>
+    </button>}
   </>);
 }
 

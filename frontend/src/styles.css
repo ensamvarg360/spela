@@ -162,6 +162,18 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
 }
 .games > li:hover > .game::after, .game:focus-visible::after { transform: translateX(110%); }
 
+/* selecting games to install together */
+.pick-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1rem; padding: 0.75rem 1rem; margin-bottom: 1.1rem; position: sticky; top: 4.5rem; z-index: 5; }
+@media (max-width: 800px) { .pick-bar { top: 0; } }
+.pick-result { flex-basis: 100%; }
+.pick-result p, .pick-result ul { margin: 0.2rem 0; }
+.pick {
+  position: absolute; top: 0.6rem; left: 0.6rem; z-index: 3; display: grid; place-items: center; width: 1.7rem; height: 1.7rem;
+  border-radius: 50%; border: 2px solid #fff; background: rgb(7 9 13 / 0.55); color: #fff; font-weight: 700;
+}
+.game.picked { box-shadow: 0 0 0 3px var(--accent); }
+.game.picked .pick { background: var(--accent); border-color: var(--accent); }
+
 .ribbon {
   position: absolute; top: 0.7rem; left: 0.7rem; z-index: 3; padding: 0.2rem 0.6rem; border-radius: 999px;
   font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
