@@ -792,6 +792,27 @@ def cancel_move(move_id: str):
     return {"ok": jobs.cancel_move(move_id)}
 
 
+@api.get("/games/{game_id}/history")
+def game_history(game_id: str, db: Session = Depends(get_db)):
+    """Where the game is installed now, and its installs, removals and moves, newest first (the latest 50)."""
+    g = _game(db, game_id)
+    consoles = {c.id: c.name for c in db.scalars(select(Console))}
+    drives = {d.id: d.label for d in db.scalars(select(Drive))}
+    installed = [] if g.kind != "game" or not g.title_id else [
+        {"console": consoles.get(r.console_id, ""), "drive": drives.get(r.drive_id, ""), "path": r.installed_path,
+         "version": r.version, "status": r.status}
+        for r in db.scalars(select(InstalledGame).where(InstalledGame.title_id == g.title_id).order_by(InstalledGame.console_id))]
+    events = [{"at": j.finished_at or j.created_at, "what": "install", "result": j.status, "console": consoles.get(j.console_id, ""),
+               "drive": drives.get(j.target_drive_id, ""), "message": j.message}
+              for j in db.scalars(select(InstallJob).where(InstallJob.game_id == g.id).order_by(InstallJob.created_at.desc()).limit(50))]
+    if g.title_id and g.kind == "game":
+        events += [{"at": a.created_at, "what": a.action, "result": a.result, "console": consoles.get(a.console_id, ""), "drive": "",
+                    "message": a.details.get("message") or a.details.get("reason") or ""}
+                   for a in db.scalars(select(AuditLog).where(AuditLog.title_id == g.title_id, AuditLog.action.in_(("uninstall", "move")))
+                                       .order_by(AuditLog.created_at.desc()).limit(50))]
+    return {"installed": installed, "events": sorted(events, key=lambda e: e["at"], reverse=True)[:50]}
+
+
 @api.post("/games/{game_id}/home-logo")
 async def set_home_logo(game_id: str, db: Session = Depends(get_db)):
     """Puts the game's title logo from PlayStation Store on its home-screen page, on each console it's installed on."""

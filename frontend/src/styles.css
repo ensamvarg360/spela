@@ -356,3 +356,7 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .dashboard .card > h2:first-child { margin-top: 0; }
 .problems { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
 .console-card > .card { margin-top: 1rem; border-color: var(--border); background: var(--surface-2); }
+
+/* game page: where it's installed and what happened to it */
+.history ul { list-style: none; margin: 0 0 1rem; padding: 0; display: grid; gap: 0.5rem; }
+.history code { margin-left: 0.4rem; font-size: 0.8rem; overflow-wrap: anywhere; }

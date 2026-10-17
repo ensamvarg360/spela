@@ -376,6 +376,12 @@ def test_install_api(ps5):
         assert j["status"] == "success", j
         assert client.get(f"/api/v1/consoles/{c.id}/jobs").json()[0]["title"] == "Racer PPSA04444.exfat"
         assert client.post(f"/api/v1/jobs/{job_id}/cancel").status_code == 409
+        with SessionLocal() as db:
+            db.get(Game, image.id).title_id = "PPSA04444"
+            db.commit()
+        h = client.get(f"/api/v1/games/{image.id}/history").json()
+        assert [(i["console"], i["drive"]) for i in h["installed"]] == [("PS5", "USB drive 0")]
+        assert [(e["what"], e["result"], e["console"]) for e in h["events"]] == [("install", "success", "PS5")]
 
 
 def test_remove_source_allowlist(ps5):

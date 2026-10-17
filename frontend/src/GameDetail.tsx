@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, formatBytes, formatLabel, SOURCE_LABEL, STATUS_LABEL, type Console, type Drive, type Game, type Job } from "./api";
 import { Cover } from "./Library";
+import { when } from "./Installed";
 
 /** Queues an install on a console; the job shows up on the Installed page. DLC goes onto its game's drive. */
 function Install({ game }: { game: Game }) {
@@ -139,6 +140,40 @@ function Convert({ game }: { game: Game }) {
   );
 }
 
+type History = {
+  installed: { console: string; drive: string; path: string; version: string | null; status: string }[];
+  events: { at: string; what: string; result: string; console: string; drive: string; message: string }[];
+};
+const WHAT: Record<string, string> = { install: "Install", uninstall: "Removed", move: "Moved" };
+const RESULT_BADGE: Record<string, string> = { success: "ready", failed: "incompatible", interrupted: "incompatible", blocked: "incompatible", canceled: "unknown" };
+
+/** Where the game is installed now, and what happened to it: installs, removals and moves. */
+function InstallHistory({ game }: { game: Game }) {
+  const [h, setH] = useState<History | null>(null);
+  useEffect(() => { api<History>(`/games/${game.id}/history`).then(setH, () => {}); }, [game.id]);
+  if (!h || (!h.installed.length && !h.events.length)) return null;
+  return (
+    <section className="history">
+      {h.installed.length > 0 && <>
+        <h2>On your consoles</h2>
+        <ul>{h.installed.map((i) => (
+          <li key={i.console + i.path}><strong>{i.console}</strong> · {i.drive || "Unknown drive"}{i.version && ` · v${i.version}`} <code>{i.path}</code></li>
+        ))}</ul>
+      </>}
+      {h.events.length > 0 && <>
+        <h2>History</h2>
+        <ul>{h.events.map((e, n) => (
+          <li key={n}>
+            <span className={`badge ${RESULT_BADGE[e.result] ?? "needs_attention"}`}>{e.result}</span> {WHAT[e.what] ?? e.what}
+            {e.console && ` · ${e.console}`}{e.drive && ` · ${e.drive}`} · <span className="muted">{when(e.at)}</span>
+            {e.message && <div className="muted">{e.message}</div>}
+          </li>
+        ))}</ul>
+      </>}
+    </section>
+  );
+}
+
 const TEXT_FIELDS = [
   ["title", "Title"],
   ["title_id", "Title ID"],
@@ -227,6 +262,8 @@ export default function GameDetail({ id }: { id: string }) {
             )}
           </div>
         )}
+
+        <InstallHistory game={game} />
 
         <dl className="facts">
           <dt>Metadata source</dt>
