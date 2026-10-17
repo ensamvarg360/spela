@@ -20,12 +20,34 @@ ACTIVE = ("queued", "preflight", "extracting", "transferring", "registering")
 RUNNING = ACTIVE[1:]
 _cancel: dict[str, threading.Event] = {}  # job id -> set to stop its transfer
 log = logging.getLogger(__name__)
+# Highest firmware where fake packages launch (Kstuff Lite 1.11 + ArkSama's 11.60 fix, Oct 2026).
+# Raise a row when a payload release confirms more; 12.x-13.60 install but PS5 packages don't launch yet.
+PKG_MAX_FIRMWARE = {"ps4_pkg": "11.60", "ps5_pkg": "11.60"}
+
+
+def _fw(v: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in v.split("."))
+
+
+def pkg_blocker(console: Console, game: Game) -> str:
+    """Why a package can't be installed. Firmware first, so a 13.xx console hears the real reason."""
+    kind, top = ("PS4" if game.format == "ps4_pkg" else "PS5"), PKG_MAX_FIRMWARE[game.format]
+    if not console.firmware:
+        return f"{kind} packages need firmware {top} or lower, and this console's firmware is unknown. Install the helper."
+    try:
+        too_new = _fw(console.firmware) > _fw(top)
+    except ValueError:
+        return f"Can't read this console's firmware ({console.firmware})."
+    if too_new:
+        return f"{kind} packages don't run on firmware {console.firmware} yet (works up to {top}). Use a folder dump or disc image."
+    return "This console has no package installer. Only folder dumps and disc images can be installed."
+
 
 
 def blocker(db: Session, console: Console, game: Game) -> str | None:
     """Why this game can't be queued for this console, or None. Console-side checks (online, space) run at preflight."""
     if game.format in ("ps4_pkg", "ps5_pkg"):
-        return "This console has no package installer. Only folder dumps and disc images can be installed."
+        return pkg_blocker(console, game)
     if game.format == "archive" and (reason := archives.blocker(game.source_path)):
         return reason
     if game.format not in ("folder_dump", "image", "archive"):

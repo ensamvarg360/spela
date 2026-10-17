@@ -47,7 +47,7 @@ def test_console_api(tmp_path):
 
         rows = {r.split("\t")[0]: r.split("\t") for r in client.get("/api/v1/console-app/library", headers=auth).text.splitlines()}
         assert rows[ready.id] == [ready.id, "Racer Tabs", "PPSA04444", "01.000.000", "1", "installable", "", "1"]
-        assert rows[pkg.id][5].startswith("blocked:") and "package installer" in rows[pkg.id][5]
+        assert rows[pkg.id][5].startswith("blocked:") and "packages need firmware" in rows[pkg.id][5]
         assert rows[have.id][5] == "installed"
         installed = {g["id"]: g["installed"] for g in client.get("/api/v1/games").json()}
         assert installed[have.id] and not installed[ready.id]

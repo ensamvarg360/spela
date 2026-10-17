@@ -208,6 +208,16 @@ def test_job_runs_to_success_then_blocks_reinstall(ps5):
         assert jobs.blocker(db, c, dump) == "Already installed on this console."
 
 
+def test_pkg_firmware_gate():
+    ps5, ps4 = Game(format="ps5_pkg"), Game(format="ps4_pkg")
+    assert "firmware is unknown" in jobs.pkg_blocker(Console(firmware=None), ps5)
+    assert "don't run on firmware 13.60" in jobs.pkg_blocker(Console(firmware="13.60"), ps5)
+    assert "PS4 packages don't run on firmware 12.00" in jobs.pkg_blocker(Console(firmware="12.00"), ps4)
+    assert "Can't read" in jobs.pkg_blocker(Console(firmware="beta"), ps5)
+    for fw in ("4.03", "11.60"):  # in range: only the missing installer blocks it
+        assert "no package installer" in jobs.pkg_blocker(Console(firmware=fw), ps5)
+
+
 def test_job_failures(ps5, monkeypatch):
     root, port, lib = ps5
     with SessionLocal() as db:
