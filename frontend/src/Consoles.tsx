@@ -1,6 +1,38 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, type Console } from "./api";
-import { STATE_BADGE } from "./Installed";
+import { api, appVersion, type Console } from "./api";
+import { STATE_BADGE, STATE_LABEL, when } from "./Installed";
+
+function Facts({ c, version, busy, act }: { c: Console; version: string; busy: boolean; act: (path: string) => void }) {
+  const helper = c.helper_status.helper; // "missing", a version, or absent before the first check
+  const helperOk = !!version && helper === version;
+  const consoleApp = c.helper_status.console_app; // same: "missing", a version, or absent
+  const consoleAppOk = !!version && consoleApp === version;
+  return (
+    <dl className="facts">
+      <dt>Firmware</dt><dd>{c.firmware ?? "Unknown"}</dd>
+      <dt>Helper payload</dt>
+      <dd>
+        {!helper || helper === "missing" ? "Not running" : `v${helper}`}
+        {helper && helper !== "missing" && !helperOk && version && ` (this app needs v${version})`}
+        {!helperOk && (
+          <button className="small" disabled={busy || c.state === "standby"} title={c.state === "standby" ? "Wake the console first." : undefined}
+            onClick={() => act("helper")}>{!helper || helper === "missing" ? "Install helper" : "Update helper"}</button>
+        )}
+      </dd>
+      <dt>PS5 app</dt>
+      <dd>
+        {!consoleApp || consoleApp === "missing" ? "Not installed" : `v${consoleApp}`}
+        {!consoleAppOk && (
+          <button className="small" disabled={busy || c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
+            onClick={() => act("console-app")}>{!consoleApp || consoleApp === "missing" ? "Install PS5 app" : "Update PS5 app"}</button>
+        )}
+      </dd>
+      <dt>Connections</dt><dd>{Object.entries(c.helper_status).filter(([k]) => !["banner", "helper", "console_app"].includes(k)).map(([k, v]) => `${k}: ${v}`).join(", ") || c.connection_type}</dd>
+      <dt>Last seen</dt><dd>{when(c.last_seen_at)}</dd>
+      <dt>Last inventory</dt><dd>{when(c.last_inventory_scan_at)}</dd>
+    </dl>
+  );
+}
 
 const EMPTY = { name: "", ip_address: "", connection_type: "helper", port: "7735", username: "", password: "" };
 type Draft = typeof EMPTY;
@@ -68,11 +100,29 @@ export default function Consoles() {
   const [consoles, setConsoles] = useState<Console[]>([]);
   const [editing, setEditing] = useState<string | null>(null); // console id, "new", or null
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState("");
+  useEffect(() => { appVersion.then(setVersion); }, []);
 
   const load = () => api<Console[]>("/consoles").then(setConsoles, (e) => setError(e.message));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 15000); // the backend checks every 15 s
+    return () => clearInterval(t);
+  }, []);
   const done = () => (setEditing(null), load());
-  const test = (c: Console) => api<Console>(`/consoles/${c.id}/test-connection`, { method: "POST" }).then(load, (e) => setError(e.message));
+  async function act(c: Console, path: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await api<Console>(`/consoles/${c.id}/${path}`, { method: "POST" });
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   const remove = (c: Console) =>
     confirm(`Remove ${c.name}? Nothing on the console is changed.`) &&
     api(`/consoles/${c.id}`, { method: "DELETE" }).then(load, (e) => setError(e.message));
@@ -88,13 +138,15 @@ export default function Consoles() {
               <strong>{c.name}</strong>
               <code>{c.connection_type}://{c.ip_address}:{c.port}</code>
               <span className="muted">
-                <span className={`badge ${STATE_BADGE[c.state]}`}>{c.state}</span> {c.status_message || (c.has_password ? "Password saved" : "No password")}
+                <span className={`badge ${STATE_BADGE[c.state]}`}>{STATE_LABEL[c.state]}</span> {c.status_message || (c.has_password ? "Password saved" : "No password")}
               </span>
               <span className="inline">
-                <button className="link" onClick={() => test(c)}>Test connection</button>
+                <button className="link" disabled={busy} onClick={() => act(c, "test-connection")}>Check connection</button>
+                <button className="link" disabled={busy} onClick={() => act(c, "rescan")}>Refresh inventory</button>
                 <button className="link" onClick={() => setEditing(c.id)}>Edit</button>
                 <button className="link" onClick={() => remove(c)}>Remove</button>
               </span>
+              <Facts c={c} version={version} busy={busy} act={(path) => act(c, path)} />
             </li>
           ))}
       </ul>

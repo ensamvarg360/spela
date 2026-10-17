@@ -7,7 +7,7 @@ import socket
 import time
 import urllib.parse
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -24,7 +24,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import __version__, config, credentials, inventory, jobs, logos, scanner
 from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError
 from .database import Base, SessionLocal, engine, get_db
-from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id
+from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id, now
 
 
 @asynccontextmanager
@@ -32,6 +32,10 @@ async def lifespan(app: FastAPI):
     config.COVERS_DIR.mkdir(parents=True, exist_ok=True)
     # ponytail: create_all instead of Alembic; add migrations before the first schema change after v1.
     Base.metadata.create_all(engine)
+    with engine.begin() as c:  # columns added after v1
+        if "seen_at" not in {r[1] for r in c.exec_driver_sql("PRAGMA table_info(games)")}:
+            c.exec_driver_sql("ALTER TABLE games ADD COLUMN seen_at DATETIME")
+            c.exec_driver_sql("UPDATE games SET seen_at = created_at")  # games already there aren't new
     tasks = [asyncio.create_task(jobs.worker())]
     if config.SCAN_INTERVAL_MINUTES > 0:
         tasks.append(asyncio.create_task(_scheduled_scans()))
@@ -226,11 +230,13 @@ class GameOut(BaseModel):
     updated_at: datetime
     installed: bool = False  # on any console, per its last storage scan
     store: dict | None = None  # logos.store_info, when already looked up; the library filters by it
+    new: bool = False  # added in the last 30 days and not opened yet
 
 
 def _out(g: Game, installed: bool = False) -> GameOut:
     store = g.title_id and logos.store_info(g.title_id, cached=True) or None
-    return GameOut.model_validate(g).model_copy(update={"has_cover": bool(g.cover_path), "installed": installed, "store": store})
+    new = g.seen_at is None and g.created_at > now() - timedelta(days=30)
+    return GameOut.model_validate(g).model_copy(update={"has_cover": bool(g.cover_path), "installed": installed, "store": store, "new": new})
 
 
 def _installed_title_ids(db: Session) -> set[str]:
@@ -269,6 +275,9 @@ def list_games(db: Session = Depends(get_db)):
 @api.get("/games/{game_id}", response_model=GameOut)
 def get_game(game_id: str, db: Session = Depends(get_db)):
     g = _game(db, game_id)
+    if not g.seen_at:  # opening a game is what clears its "new" mark; installing or editing it starts here too
+        g.seen_at = now()
+        db.commit()
     return _out(g, g.title_id in _installed_title_ids(db))
 
 
@@ -280,6 +289,7 @@ def patch_game(game_id: str, body: GamePatch, db: Session = Depends(get_db)):
         raise HTTPException(422, {"error": "invalid_field", "message": "Title and owned copy type can't be empty."})
     for k, v in changes.items():
         setattr(g, k, v)
+    g.seen_at = g.seen_at or now()  # favoriting from the library tile counts as opening it
     if "title_id" in changes:  # user set or confirmed it: trusted over parsers, kept across rescans
         g.metadata_source, g.metadata_confidence = "manual", "medium"
     db.flush()

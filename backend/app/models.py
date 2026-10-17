@@ -78,6 +78,7 @@ class Game(Base):
     detection_evidence: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now, onupdate=now)
+    seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime)  # first opened; until then (for 30 days) it's marked new
 
 
 class Console(Base):

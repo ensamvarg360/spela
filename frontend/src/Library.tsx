@@ -10,8 +10,8 @@ const year = (g: Game) => Number((g.store?.release_date ?? g.release_date ?? "")
 
 /** The sidebar's filters, each listing the values its games have. Ticked values of one filter are OR'ed, filters AND'ed. */
 const FILTERS: { key: string; label: string; values: (g: Game) => (string | null | undefined)[]; order?: string[] }[] = [
-  { key: "collection", label: "Collection", order: ["Favorites", "Installed", "Not installed"],
-    values: (g) => [g.favorite ? "Favorites" : null, g.installed ? "Installed" : "Not installed"] },
+  { key: "collection", label: "Collection", order: ["New", "Favorites", "Installed", "Not installed"],
+    values: (g) => [g.new ? "New" : null, g.favorite ? "Favorites" : null, g.installed ? "Installed" : "Not installed"] },
   { key: "genre", label: "Genre", values: (g) => (g.store?.genres.length ? g.store.genres : [g.genre]) },
   { key: "year", label: "Released", order: ["2020 – now", "2015 – 2019", "2010 – 2014", "Before 2010"], values: (g) => {
     const y = year(g);
@@ -46,7 +46,7 @@ export default function Library({ view, setView }: { view: View; setView: (v: Vi
     api<Game[]>("/games").then(setGames, (e) => setError(e.message));
   }, []);
   // a tile's store lookup, so the sidebar's genres, years and ratings fill in as tiles come into view
-  const gotStore = (id: string, store: StoreInfo) => setGames((gs) => gs && gs.map((g) => (g.id === id ? { ...g, store } : g)));
+  const changed = (id: string, changes: Partial<Game>) => setGames((gs) => gs && gs.map((g) => (g.id === id ? { ...g, ...changes } : g)));
 
   const searched = useMemo(() => {
     const needle = view.q.trim().toLowerCase();
@@ -132,29 +132,32 @@ export default function Library({ view, setView }: { view: View; setView: (v: Vi
           </label>
         </div>
         {shown.length
-          ? <ul className="games">{shown.map((g) => <li key={g.id}><Tile game={g} onStore={gotStore} /></li>)}</ul>
+          ? <ul className="games">{shown.map((g) => <li key={g.id}><Tile game={g} onChange={changed} /></li>)}</ul>
           : <p className="muted nothing">No games match. <button className="link" onClick={clear}>Clear the filters</button></p>}
       </section>
     </div>
   );
 }
 
-function Tile({ game, onStore }: { game: Game; onStore: (id: string, info: StoreInfo) => void }) {
+function Tile({ game, onChange }: { game: Game; onChange: (id: string, changes: Partial<Game>) => void }) {
   const [colors, setColors] = useState<CSSProperties>();
   const info = game.store;
   const loaded = (img: HTMLImageElement) => {
     setColors(sampleColors(img));
     // asked once the art loads, so only tiles that have scrolled into view ask the store
-    if (game.title_id && !info) api<StoreInfo | null>(`/games/${game.id}/store`).then((i) => i && onStore(game.id, i), () => {});
+    if (game.title_id && !info) api<StoreInfo | null>(`/games/${game.id}/store`).then((i) => i && onChange(game.id, { store: i }), () => {});
   };
+  const favorite = () => api<Game>(`/games/${game.id}`, { method: "PATCH", json: { favorite: !game.favorite } })
+    .then((g) => onChange(game.id, { favorite: g.favorite, new: false }), (e) => alert(e.message));
   const genre = info?.genres[0] ?? game.genre;
   const byline = [info?.publisher, (info?.release_date ?? game.release_date)?.slice(0, 4)].filter(Boolean).join(", ");
 
-  return (
+  return (<>
     <a className="game" href={`#/game/${game.id}`} style={colors}>
+      {game.new && <span className="ribbon">New</span>}
       <Cover game={game} onLoad={loaded} />
       <div className="name">
-        <strong>{game.favorite && "★ "}{game.title}</strong>
+        <strong>{game.title}</strong>
         {info?.rating != null && (
           <span className="rating" title={`${info.rating_count.toLocaleString()} ratings on PlayStation Store`}>{info.rating.toFixed(1)}</span>
         )}
@@ -165,7 +168,12 @@ function Tile({ game, onStore }: { game: Game; onStore: (id: string, info: Store
           : <span className={`badge ${game.compatibility_status}`}>{STATUS_LABEL[game.compatibility_status]}</span>}
       </div>
     </a>
-  );
+    {/* a sibling, not inside the link: a button can't be nested in a link */}
+    <button className="fav" aria-pressed={game.favorite} title={game.favorite ? "Remove from favorites" : "Add to favorites"}
+      aria-label={`Favorite ${game.title}`} onClick={favorite}>
+      <svg viewBox="0 0 24 24" aria-hidden><path d="M12 2.8l2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3-4.6-4.4 6.3-.9z" /></svg>
+    </button>
+  </>);
 }
 
 /** The name box's gradient: the art's bottom edge, which it continues, into the art's most vivid patch. */

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { api, appVersion, formatBytes, JOB_ACTIVE, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Removal } from "./api";
 
 const JOB_LABEL: Record<JobStatus, [string, string]> = {
@@ -120,14 +120,25 @@ function RemoveDialog({ consoleId, game, onClose }: { consoleId: string; game: I
   );
 }
 
+/** The library's portrait poster when the game is in the library, else the console's square icon. */
+function Art({ g }: { g: InstalledGame }) {
+  const [src, setSrc] = useState(g.game_id ? `/api/v1/games/${g.game_id}/poster` : g.cover_url);
+  if (!src) return <div className="art placeholder" aria-hidden>{g.title.slice(0, 1)}</div>;
+  const square = src === g.cover_url;
+  return (
+    <div className={square ? "art square" : "art"} style={square ? ({ "--art": `url("${src}")` } as CSSProperties) : undefined}>
+      <img src={src} alt="" loading="lazy" onError={() => setSrc(square ? null : g.cover_url)} />
+    </div>
+  );
+}
+
 // Reuses the library badge colours.
 export const STATE_BADGE: Record<ConsoleState, string> = {
   online: "ready", standby: "unknown", degraded: "needs_attention", offline: "incompatible", disabled: "unknown", unknown: "unknown",
 };
-const STATE_LABEL: Record<ConsoleState, string> = {
+export const STATE_LABEL: Record<ConsoleState, string> = {
   online: "Online", standby: "Rest mode", degraded: "Degraded", offline: "Offline", disabled: "Disabled", unknown: "Not checked yet",
 };
-const ROUTE_LABEL = { package_installer: "Package", shadowmountplus: "ShadowMountPlus", unknown: "Unknown" };
 const STATUS = {
   installed: ["Installed", "ready"],
   update_available: ["Update in library", "needs_attention"],
@@ -138,7 +149,7 @@ const STATUS = {
 
 // SQLite drops the zone from stored UTC times; without a "Z" the browser would read them as local time.
 const utc = (t: string) => new Date(/(Z|[+-]\d\d:\d\d)$/.test(t) ? t : t + "Z");
-const when = (t: string | null) => (t ? utc(t).toLocaleString() : "Never");
+export const when = (t: string | null) => (t ? utc(t).toLocaleString() : "Never");
 const bytes = (n: number) => (n ? formatBytes(n) : "Unknown");
 
 export default function Installed() {
@@ -191,17 +202,14 @@ export default function Installed() {
 
   const c = consoles.find((x) => x.id === id) ?? consoles[0];
   const driveLabel = Object.fromEntries(drives.map((d) => [d.id, d.label]));
-  const updates = games.filter((g) => g.status === "update_available").length;
-  const helper = c.helper_status.helper; // "missing", a version, or absent before the first check
-  const helperOk = !!version && helper === version;
-  const consoleApp = c.helper_status.console_app; // same: "missing", a version, or absent
-  const consoleAppOk = !!version && consoleApp === version;
+  const helperBad = !!version && c.helper_status.helper !== version;
+  const consoleAppBad = !!version && c.helper_status.console_app !== version;
 
-  async function act(path: string) {
+  async function rescan() {
     setBusy(true);
     setError("");
     try {
-      const updated = await api<Console>(`/consoles/${c.id}/${path}`, { method: "POST" });
+      const updated = await api<Console>(`/consoles/${c.id}/rescan`, { method: "POST" });
       setConsoles((cs) => cs!.map((x) => (x.id === updated.id ? updated : x)));
       await loadInventory(c.id);
     } catch (e) {
@@ -217,67 +225,38 @@ export default function Installed() {
 
   return (
     <div className="installed">
-      <section className="card">
-        <div className="toolbar">
-          {consoles.length > 1 ? (
-            <select aria-label="Console" value={c.id} onChange={(e) => setId(e.target.value)}>
-              {consoles.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-            </select>
-          ) : <h2 className="inline-title">{c.name}</h2>}
-          <span className={`badge ${STATE_BADGE[c.state]}`}>{STATE_LABEL[c.state]}</span>
-          {c.status_message && <span className="muted">{c.status_message}</span>}
-          <span className="spacer" />
-          <button className="secondary" disabled={busy} onClick={() => act("test-connection")}>Check connection</button>
-          <button disabled={busy} onClick={() => act("rescan")}>{busy ? "Working…" : "Refresh inventory"}</button>
-        </div>
-        <dl className="facts">
-          <dt>Firmware</dt><dd>{c.firmware ?? "Unknown"}</dd>
-          <dt>Helper payload</dt>
-          <dd>
-            {!helper || helper === "missing" ? "Not running" : `v${helper}`}
-            {helper && helper !== "missing" && !helperOk && version && ` (this app needs v${version})`}
-            {!helperOk && (
-              <button className="small" disabled={busy || c.state === "standby"} title={c.state === "standby" ? "Wake the console first." : undefined}
-                onClick={() => act("helper")}>{!helper || helper === "missing" ? "Install helper" : "Update helper"}</button>
-            )}
-          </dd>
-          <dt>PS5 app</dt>
-          <dd>
-            {!consoleApp || consoleApp === "missing" ? "Not installed" : `v${consoleApp}`}
-            {!consoleAppOk && (
-              <button className="small" disabled={busy || c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
-                onClick={() => act("console-app")}>{!consoleApp || consoleApp === "missing" ? "Install PS5 app" : "Update PS5 app"}</button>
-            )}
-          </dd>
-          <dt>Connections</dt><dd>{Object.entries(c.helper_status).filter(([k]) => !["banner", "helper", "console_app"].includes(k)).map(([k, v]) => `${k}: ${v}`).join(", ") || c.connection_type}</dd>
-          <dt>Last seen</dt><dd>{when(c.last_seen_at)}</dd>
-          <dt>Last inventory</dt><dd>{when(c.last_inventory_scan_at)}</dd>
-          <dt>Installed</dt><dd>{games.length} game{games.length === 1 ? "" : "s"}{updates ? ` · ${updates} with a newer version in your library` : ""}</dd>
-        </dl>
-        {error && <p className="error" role="alert">{error}</p>}
-      </section>
-
-      <Jobs consoleId={c.id} onDone={() => loadInventory(c.id)} />
-
-      {drives.length > 0 && (
-        <ul className="drives">
-          {drives.map((d) => (
-            <li key={d.id} className="card">
+      <div className="toolbar">
+        {consoles.length > 1 ? (
+          <select aria-label="Console" value={c.id} onChange={(e) => setId(e.target.value)}>
+            {consoles.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+          </select>
+        ) : <h2 className="inline-title">{c.name}</h2>}
+        <span className={`badge ${STATE_BADGE[c.state]}`}>{STATE_LABEL[c.state]}</span>
+        {c.status_message && <span className="muted">{c.status_message}</span>}
+        {(helperBad || consoleAppBad) && <a href="#/settings">Update needed in Settings</a>}
+        <span className="spacer" />
+        {drives.map((d) => (
+          <details key={d.id} className="drive" name="drive">{/* same name: the browser keeps only one open */}
+            <summary>
               <strong>{d.label}</strong>
-              <span className="muted">{d.drive_type} · <code>{d.path}</code></span>
               {d.total_bytes > 0 && <meter min={0} max={d.total_bytes} value={d.total_bytes - d.free_bytes} />}
-              <span>
-                {bytes(d.free_bytes)} free
-                {d.total_bytes > 0 && ` of ${formatBytes(d.total_bytes)} · ${formatBytes(d.total_bytes - d.free_bytes)} used`}
-              </span>
+              <span className="muted">{bytes(d.free_bytes)} free</span>
+            </summary>
+            <div className="card">
+              <span className="muted">{d.drive_type} · <code>{d.path}</code></span>
+              {d.total_bytes > 0 && <span>{formatBytes(d.total_bytes - d.free_bytes)} used of {formatBytes(d.total_bytes)}</span>}
               <span className="muted">{d.installed_count} installed · last seen {when(d.last_seen_at)}</span>
               <label className="check">
                 <input type="checkbox" checked={d.is_install_target} onChange={(e) => setTarget(d, e.target.checked)} /> Allow installs here
               </label>
-            </li>
-          ))}
-        </ul>
-      )}
+            </div>
+          </details>
+        ))}
+        <button disabled={busy} onClick={rescan}>{busy ? "Working…" : "Refresh inventory"}</button>
+      </div>
+      {error && <p className="error" role="alert">{error}</p>}
+
+      <Jobs consoleId={c.id} onDone={() => loadInventory(c.id)} />
 
       {games.length > 0 ? (
         <>
@@ -285,24 +264,26 @@ export default function Installed() {
             <input type="search" placeholder="Search title or title ID" aria-label="Search installed games" value={q} onChange={(e) => setQ(e.target.value)} />
             <span className="muted">{shown.length} of {games.length}</span>
           </div>
-          <ul className="grid">
+          <ul className="games compact">
             {shown.map((g) => {
               const [label, cls] = g.removing ? ["Removing", "needs_attention"] : STATUS[g.status];
+              const tip = `${g.title_id} · v${g.version ?? "?"} · ${bytes(g.size_bytes)}\n${g.installed_path}`;
+              const body = <>
+                <Art g={g} />
+                <div className="name">
+                  <strong>{g.title}</strong>
+                  <span className="genre">{(g.drive_id && driveLabel[g.drive_id]) || "Unknown drive"}</span>
+                  {(g.removing || g.status !== "installed") && <span className={`badge ${cls}`}>{label}</span>}
+                </div>
+              </>;
               return (
-                <li key={g.id} className="tile">
-                  {g.cover_url
-                    ? <img className="cover" src={g.cover_url} alt="" loading="lazy" />
-                    : <div className="cover placeholder" aria-hidden>{g.title.slice(0, 1)}</div>}
-                  <span className={`badge ${cls}`}>{label}</span>
-                  <strong>{g.game_id ? <a href={`#/game/${g.game_id}`}>{g.title}</a> : g.title}</strong>
-                  <span className="muted">
-                    {g.title_id} · v{g.version ?? "?"}{g.status === "update_available" && ` → ${g.library_version}`} · {ROUTE_LABEL[g.install_route]}
-                  </span>
-                  <span className="muted">{(g.drive_id && driveLabel[g.drive_id]) || "Unknown drive"} · {bytes(g.size_bytes)}</span>
-                  <code className="muted" title={`Verified ${when(g.last_verified_at)}`}>{g.installed_path}</code>
+                <li key={g.id}>
+                  {g.game_id ? <a className="game" href={`#/game/${g.game_id}`} title={tip}>{body}</a> : <div className="game" title={tip}>{body}</div>}
                   {g.install_route === "shadowmountplus" && !g.removing && (
-                    <button className="link" disabled={c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
-                      onClick={() => setRemoving(g)}>Remove from console</button>
+                    <button className="fav" disabled={c.state !== "online"} title={c.state !== "online" ? "The console must be online." : "Remove from console"}
+                      aria-label={`Remove ${g.title} from console`} onClick={() => setRemoving(g)}>
+                      <svg viewBox="0 0 24 24" aria-hidden><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" /></svg>
+                    </button>
                   )}
                 </li>
               );

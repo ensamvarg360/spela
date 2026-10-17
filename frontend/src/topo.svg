@@ -1,0 +1,25 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 1000' preserveAspectRatio='xMidYMid slice' fill='none' stroke='#8d97a8' stroke-opacity='0.07' stroke-width='1.2'>
+<defs><path id='a' vector-effect='non-scaling-stroke' d='M0-100C55-108 118-62 112 2S68 92 6 101-92 84-112 18-58-94 0-100Z'/><path id='b' vector-effect='non-scaling-stroke' d='M0-100C70-96 104-40 96 18S40 104-20 98-108 50-102-8-52-102 0-100Z'/></defs>
+<use href='#a' transform='translate(380 320) rotate(9) scale(45e-2 38e-2)'/>
+<use href='#a' transform='translate(380 320) rotate(18) scale(90e-2 76e-2)'/>
+<use href='#a' transform='translate(380 320) rotate(27) scale(135e-2 114e-2)'/>
+<use href='#a' transform='translate(380 320) rotate(36) scale(180e-2 152e-2)'/>
+<use href='#a' transform='translate(380 320) rotate(45) scale(225e-2 190e-2)'/>
+<use href='#a' transform='translate(380 320) rotate(54) scale(270e-2 228e-2)'/>
+<use href='#a' transform='translate(380 320) rotate(63) scale(315e-2 266e-2)'/>
+<use href='#a' transform='translate(380 320) rotate(72) scale(360e-2 304e-2)'/>
+<use href='#a' transform='translate(380 320) rotate(81) scale(405e-2 342e-2)'/>
+<use href='#a' transform='translate(380 320) rotate(90) scale(450e-2 380e-2)'/>
+<use href='#b' transform='translate(1260 760) rotate(9) scale(45e-2 38e-2)'/>
+<use href='#b' transform='translate(1260 760) rotate(18) scale(90e-2 76e-2)'/>
+<use href='#b' transform='translate(1260 760) rotate(27) scale(135e-2 114e-2)'/>
+<use href='#b' transform='translate(1260 760) rotate(36) scale(180e-2 152e-2)'/>
+<use href='#b' transform='translate(1260 760) rotate(45) scale(225e-2 190e-2)'/>
+<use href='#b' transform='translate(1260 760) rotate(54) scale(270e-2 228e-2)'/>
+<use href='#b' transform='translate(1260 760) rotate(63) scale(315e-2 266e-2)'/>
+<use href='#b' transform='translate(1260 760) rotate(72) scale(360e-2 304e-2)'/>
+<use href='#b' transform='translate(1260 760) rotate(81) scale(405e-2 342e-2)'/>
+<use href='#a' transform='translate(1380 140) rotate(9) scale(45e-2 38e-2)'/>
+<use href='#a' transform='translate(1380 140) rotate(18) scale(90e-2 76e-2)'/>
+<use href='#a' transform='translate(1380 140) rotate(27) scale(135e-2 114e-2)'/>
+</svg>

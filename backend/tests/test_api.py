@@ -44,6 +44,8 @@ def test_flow(library):
 
         games = {g["title"]: g for g in c.get("/api/v1/games").json()}
         dump = games["Example Game"]
+        assert dump["new"] and not c.get(f"/api/v1/games/{dump['id']}").json()["new"]  # opening it clears the mark
+        assert not next(g for g in c.get("/api/v1/games").json() if g["id"] == dump["id"])["new"]
         assert dump["has_cover"] and c.get(f"/api/v1/games/{dump['id']}/cover").content == b"png"
 
         assert c.patch(f"/api/v1/games/{dump['id']}", json={"title_id": "bad"}).status_code == 422

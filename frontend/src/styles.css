@@ -118,17 +118,20 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-bottom: 1.25rem; }
 .toolbar input[type="search"] { flex: 1 1 240px; }
 
-.grid { list-style: none; padding: 0; margin: 0; display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
-.tile { display: flex; flex-direction: column; gap: 0.3rem; text-decoration: none; position: relative; }
-.tile strong { font-size: 0.95rem; }
-.tile .muted { font-size: 0.78rem; }
-.tile .badge { position: absolute; top: 0.5rem; left: 0.5rem; }
-.tile:hover .cover { outline: 2px solid var(--accent); }
-.cover { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: var(--surface-2); display: block; }
-.cover.placeholder { display: grid; place-items: center; font-size: 3rem; color: var(--muted); font-weight: 700; }
 
 /* Library tiles: portrait art, then a name box tinted with colors sampled from it (Library.tsx sampleColors). */
 .games { list-style: none; padding: 0; margin: 0; display: grid; gap: 1.5rem 1.25rem; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+/* the li lifts, not the link, so the favorite button (its sibling) moves with the card */
+.games > li { position: relative; transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
+.games > li:hover, .games > li:focus-within { transform: translateY(-6px) scale(1.02); }
+.fav {
+  position: absolute; top: 0.55rem; right: 0.55rem; z-index: 3; display: grid; place-items: center; width: 2.1rem; height: 2.1rem; padding: 0;
+  border: none; border-radius: 50%; background: rgb(7 9 13 / 0.55); color: #fff; backdrop-filter: blur(4px);
+}
+.fav svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.fav:hover { background: rgb(7 9 13 / 0.8); }
+.fav[aria-pressed="true"] { color: #facc15; }
+.fav[aria-pressed="true"] svg { fill: currentColor; }
 .game {
   --edge: var(--surface-2); --vivid: var(--surface-2); --ease: cubic-bezier(0.22, 1, 0.36, 1);
   position: relative; display: flex; flex-direction: column; height: 100%; text-decoration: none;
@@ -136,8 +139,7 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
   box-shadow: 0 2px 10px -4px rgb(0 0 0 / 0.6);
   transition: transform 0.5s var(--ease), box-shadow 0.5s var(--ease);
 }
-.game:hover, .game:focus-visible {
-  transform: translateY(-6px) scale(1.02);
+.games > li:hover > .game, .game:focus-visible {
   box-shadow: 0 22px 44px -14px color-mix(in oklab, var(--vivid) 65%, transparent), 0 0 0 1px color-mix(in oklab, var(--vivid) 45%, transparent);
 }
 /* a light sheen that sweeps across on the way in, and back on the way out */
@@ -146,11 +148,17 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
   background: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / 0.13) 50%, transparent 65%);
   transform: translateX(-110%); transition: transform 0.8s var(--ease);
 }
-.game:hover::after, .game:focus-visible::after { transform: translateX(110%); }
+.games > li:hover > .game::after, .game:focus-visible::after { transform: translateX(110%); }
+
+.ribbon {
+  position: absolute; top: 0.7rem; left: 0.7rem; z-index: 3; padding: 0.2rem 0.6rem; border-radius: 999px;
+  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  background: var(--accent); color: #fff; box-shadow: 0 2px 8px -2px rgb(0 0 0 / 0.6);
+}
 
 .art { position: relative; aspect-ratio: 2 / 3; overflow: hidden; background: var(--surface-2); }
 .art img { position: relative; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.9s var(--ease); }
-.game:hover .art img, .game:focus-visible .art img { transform: scale(1.06); }
+.games > li:hover > .game .art img, .game:focus-visible .art img { transform: scale(1.06); }
 .art.square img { object-fit: contain; object-position: top; }
 .art.square::before { content: ""; position: absolute; inset: -10%; background: var(--art) center / cover; filter: blur(24px) brightness(0.8) saturate(1.3); }
 .game .art::after { /* fades the art into the name box */
@@ -166,7 +174,7 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
   background: linear-gradient(180deg, color-mix(in oklab, var(--edge) 40%, #07090d), color-mix(in oklab, var(--vivid) 28%, #07090d));
   transition: filter 0.5s var(--ease);
 }
-.game:hover .name { filter: brightness(1.25) saturate(1.15); }
+.games > li:hover > .game .name { filter: brightness(1.25) saturate(1.15); }
 .name strong { font-weight: 300; font-size: 1.05rem; line-height: 1.25; letter-spacing: 0.01em; color: #f4f6fa; overflow-wrap: anywhere; }
 .name .rating {
   grid-row: span 2; align-self: start; display: grid; place-items: center; width: 2.1rem; height: 2.1rem; border-radius: 50%;
@@ -179,7 +187,7 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
 
 @media (prefers-reduced-motion: reduce) {
   .game, .game::after, .art img, .name { transition: none; }
-  .game:hover, .game:focus-visible { transform: none; }
+  .games > li, .games > li:hover, .games > li:focus-within { transition: none; transform: none; }
   .game::after { display: none; }
 }
 
@@ -216,6 +224,7 @@ summary { cursor: pointer; color: var(--muted); }
 .roots { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
 .roots li { display: grid; grid-template-columns: auto auto 1fr auto; gap: 0.75rem; align-items: center; }
 .roots li.full { display: block; }
+.roots li > .facts { grid-column: 1 / -1; margin: 0; }
 .inline { display: flex; gap: 0.5rem; }
 .inline input { flex: 1; }
 .picker { margin-top: 0.75rem; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; }
@@ -230,10 +239,27 @@ summary { cursor: pointer; color: var(--muted); }
 .installed .toolbar { margin-bottom: 0.75rem; }
 .inline-title { margin: 0; }
 .spacer { flex: 1; }
-.drives { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
-.drives li { display: flex; flex-direction: column; gap: 0.35rem; padding: 1rem; }
-.drives meter { width: 100%; }
-.tile a { text-decoration: none; }
+/* Drives: a compact chip in the toolbar; the details open as a dropdown so the row keeps its height. */
+.drive { position: relative; }
+.drive summary {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.7rem; cursor: pointer; list-style: none;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 0.85rem;
+}
+.drive summary::-webkit-details-marker { display: none; }
+.drive[open] summary { border-color: var(--accent); }
+.drive meter { width: 4.5rem; }
+.drive > .card {
+  position: absolute; top: calc(100% + 0.4rem); right: 0; z-index: 10; width: 18rem;
+  display: flex; flex-direction: column; gap: 0.35rem; padding: 0.9rem; box-shadow: 0 12px 30px -10px rgb(0 0 0 / 0.7);
+}
+
+/* Installed: the library tiles, smaller */
+.games.compact { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 1rem 0.9rem; }
+.games.compact .name { padding: 0.55rem 0.65rem 0.7rem; }
+.games.compact .name strong { font-size: 0.88rem; }
+.games.compact .name .genre { margin-top: 0.15rem; font-size: 0.72rem; }
+.games.compact .fav { width: 1.8rem; height: 1.8rem; }
+.games.compact .fav svg { width: 1rem; height: 1rem; }
 
 @media (max-width: 700px) {
   .detail { grid-template-columns: 1fr; }
@@ -259,3 +285,6 @@ dialog.remove progress { width: 100%; }
 .audit th, .audit td { padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 .audit td:first-child { white-space: nowrap; }
 .table-wrap + p, .table-wrap ~ button { margin-top: 0.75rem; }
+
+/* Subtle topographic contour backdrop */
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: url("./topo.svg") center / cover no-repeat; }

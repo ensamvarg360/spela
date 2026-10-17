@@ -34,6 +34,7 @@ export interface Game {
   updated_at: string;
   installed: boolean; // on any console, per its last storage scan
   store: StoreInfo | null; // only when already looked up; the tile asks for the rest
+  new: boolean; // added in the last 30 days and not opened yet
 }
 
 export interface StoreInfo {
