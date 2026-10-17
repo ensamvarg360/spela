@@ -71,6 +71,7 @@ export default function Library({ view, setView }: { view: View; setView: (v: Vi
   const [games, setGames] = useState<Game[] | null>(null);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({}); // filters showing all their values
+  const [filtersOpen, setFiltersOpen] = useState(false); // phones only: the sidebar sits behind a button
 
   useEffect(() => {
     api<Game[]>("/games").then(setGames, (e) => setError(e.message));
@@ -117,7 +118,10 @@ export default function Library({ view, setView }: { view: View; setView: (v: Vi
 
   return (
     <div className="browse">
-      <aside className="filters" aria-label="Filters">
+      <button className="secondary filters-toggle" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}>
+        Filters{chips.length > 0 && <span>{chips.length}</span>}
+      </button>
+      <aside className={filtersOpen ? "filters open" : "filters"} aria-label="Filters">
         {facets.filter((f) => f.values.length > 1 || view.picked[f.key]?.length).map((f) => (
           <details key={f.key} open>
             <summary>{f.label}</summary>

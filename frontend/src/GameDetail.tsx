@@ -81,6 +81,56 @@ function HomeLogo({ game }: { game: Game }) {
   );
 }
 
+type Conversion = { status: "converting" | "success" | "failed" | "canceled"; progress: number; message: string; image_path: string; image_game_id: string | null };
+
+/** Writes a folder dump into one .exfat disc image next to it; the image then shows up in the library as its own game. */
+function Convert({ game }: { game: Game }) {
+  const [conv, setConv] = useState<Conversion | null>(null);
+  const [error, setError] = useState("");
+  const converting = conv?.status === "converting";
+
+  useEffect(() => {
+    if (game.format === "folder_dump") api<Conversion>(`/games/${game.id}/convert`).then(setConv, () => {});
+  }, [game.id, game.format]);
+  useEffect(() => {
+    if (!converting) return;
+    const t = setInterval(() => api<Conversion>(`/games/${game.id}/convert`).then(setConv, () => {}), 1000);
+    return () => clearInterval(t);
+  }, [converting, game.id]);
+
+  if (game.format !== "folder_dump") return null;
+
+  async function start() {
+    if (!confirm(`Write this game into one .exfat disc image next to its folder? It needs about ${formatBytes(game.size_bytes)} free on that drive. The folder is kept.`)) return;
+    setError("");
+    try {
+      setConv(await api<Conversion>(`/games/${game.id}/convert`, { method: "POST" }));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <div className="toolbar">
+      {converting ? (
+        <>
+          <progress value={conv.progress} aria-label="Conversion progress" />
+          <span className="muted" role="status">{Math.floor(conv.progress * 100)}% · {conv.message}</span>
+          <button className="secondary" onClick={() => api(`/games/${game.id}/convert/cancel`, { method: "POST" })}>Cancel</button>
+        </>
+      ) : (
+        <button className="secondary" onClick={start}>Convert to .exfat</button>
+      )}
+      {error && <span className="error" role="alert">{error}</span>}
+      {conv && !converting && (
+        <span className={conv.status === "success" ? "muted" : "error"} role="status">
+          {conv.message}{conv.image_game_id && <> <a href={`#/game/${conv.image_game_id}`}>Open the image</a></>}
+        </span>
+      )}
+    </div>
+  );
+}
+
 const TEXT_FIELDS = [
   ["title", "Title"],
   ["title_id", "Title ID"],
@@ -152,6 +202,7 @@ export default function GameDetail({ id }: { id: string }) {
         </div>
         <Install game={game} />
         <HomeLogo game={game} />
+        <Convert game={game} />
 
         {(game.metadata_confidence === "low" || game.metadata_confidence === "unknown") && (
           <div className="panel needs_attention" role="alert">

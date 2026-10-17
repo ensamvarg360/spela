@@ -768,6 +768,25 @@ async def set_home_logo(game_id: str, db: Session = Depends(get_db)):
     return results
 
 
+@api.post("/games/{game_id}/convert", status_code=202)
+async def convert_game(game_id: str, db: Session = Depends(get_db)):
+    """Starts writing the folder dump into an .exfat disc image next to it (jobs.start_convert). The folder is kept."""
+    try:
+        return jobs.start_convert(_game(db, game_id))
+    except ValueError as e:
+        raise HTTPException(409, {"error": "cannot_convert", "message": str(e)})
+
+
+@api.get("/games/{game_id}/convert")
+def get_conversion(game_id: str):
+    return jobs.conversions.get(game_id) or _not_found()
+
+
+@api.post("/games/{game_id}/convert/cancel")
+def cancel_conversion(game_id: str):
+    return {"ok": jobs.cancel_convert(game_id)}
+
+
 @api.get("/icons/{title_id}")
 def get_icon(title_id: str):
     """A title's icon as read from a console (inventory.refresh)."""

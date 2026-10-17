@@ -37,6 +37,11 @@ It copies under a hidden `.<name>.partial` name and renames it when the copy is 
 Folder dumps and disc images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) can be installed, and so can `.zip`, `.7z` and `.rar` archives (also split sets like `.7z.001`) that hold one of them. `.pkg` files can't: the console has no package installer. On firmware above 11.60 the app says so instead, since fake packages don't launch there yet; the limit is `PKG_MAX_FIRMWARE` in [backend/app/jobs.py](backend/app/jobs.py). An archive is first extracted on this PC, with Windows' own `tar.exe`, into a private staging folder (`staging` in the data folder, or `STAGING_DIR`), so the PC needs room for the unpacked game. The game's title ID is then read from its own `param.json`, and the staging copy is deleted when the install ends, also when it fails or is canceled. Multi-part RAR (`.part1.rar`) and spanned ZIP (`.z01`) sets, password-protected archives and archives with links in them can't be installed: extract those yourself.
 The helper must be running, so the app can check free space first. If the app or the connection stops mid-copy, the install shows *Interrupted*; queue it again, and the leftover partial copy is replaced.
 
+### Converting a folder dump to `.exfat`
+
+Open a folder dump and click **Convert to .exfat**. The app writes the folder into one exFAT disc image next to it (`<folder>.exfat`, with ` [PPSAxxxxx]` added when the folder name has no title ID, since an image's title ID comes from its file name). The image holds the folder's contents at its root, as ShadowMountPlus expects. It is written in plain Python ([backend/app/exfat.py](backend/app/exfat.py)), so no OSFMount, WSL or admin rights are needed, and the drive needs room for a second copy of the game. When it's done the image is scanned into the library with the folder's title, title ID and everything you set on it. The folder is never deleted: check the image, then delete the folder yourself. Until then both show *Duplicate title ID*.
+While it's written the file is named `<name>.exfat.building`, which the scanner ignores; it is deleted if the conversion fails or is canceled. If the app is closed mid-way, delete that file yourself.
+
 ## Removing games
 
 Deleting a ShadowMountPlus game on the PS5 only removes its home-screen tile. Its files stay in the `homebrew` folder, so ShadowMountPlus adds it back and no space is freed. Remove it from the app instead: **Remove from console** on the **Installed** page (type the title ID to confirm), or Square on an installed game in the PS5 app.
@@ -60,7 +65,7 @@ The app is built from [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5
 ## Versions
 
 The version number lives in one place: `__version__` in [backend/app/__init__.py](backend/app/__init__.py). The Python package, `/api/v1/health`, the page header and the helper payload all read it.
-To release a new version: bump it, run `./payload/build.ps1` (needs Docker Desktop; it rebuilds `backend/app/payload/storefront-helper.elf`, which is committed), then `./build.ps1`. A test fails if the bundled helper's version doesn't match the app's version.
+To release a new version: bump it, run `./payload/build.ps1` (needs Docker Desktop; it rebuilds `backend/app/payload/storefront-helper.elf`, which is committed), then `./build.ps1`. A test fails if the bundled helper's version doesn't match the app's version. Before tagging, run the [manual test on a real PS5](docs/manual-test.md).
 
 ## Backup and restore
 

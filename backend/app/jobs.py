@@ -1,17 +1,20 @@
 """Install jobs (project.md §10): a queue in the install_jobs table and one worker that runs them.
 Only the ShadowMountPlus route exists: folder dumps and disc images are copied into a drive's homebrew folder.
 Archives are extracted on this PC first (archives.py) and the dump or image inside is copied the same way.
-Removals (project.md §13) delete that copy again, after a preview and the title ID typed back."""
+Removals (project.md §13) delete that copy again, after a preview and the title ID typed back.
+Conversions turn a folder dump into an .exfat disc image next to it, on this PC (exfat.py)."""
 import asyncio
 import logging
 import os
+import shutil
 import threading
 import time
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import archives, inventory, logos, scanner
+from . import archives, config, exfat, inventory, logos, scanner
 from .consoles import IMAGE_EXTS, AdapterError, DriveInfo, InstalledGameInfo, RemovalResult
 from .database import SessionLocal
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, _id, now
@@ -41,7 +44,6 @@ def pkg_blocker(console: Console, game: Game) -> str:
     if too_new:
         return f"{kind} packages don't run on firmware {console.firmware} yet (works up to {top}). Use a folder dump or disc image."
     return "This console has no package installer. Only folder dumps and disc images can be installed."
-
 
 
 def blocker(db: Session, console: Console, game: Game) -> str | None:
@@ -385,3 +387,103 @@ async def _remove(removal_id: str):
                         details={"removal": removal_id, "message": r["message"], "bytes_freed": r["bytes_total"],
                                  "tile_left": r["tile_left"]}))
         db.commit()
+
+
+# ---------------------------------------------------------------- folder dump -> .exfat image (exfat.py)
+
+# ponytail: conversions live in memory like removals; the audit log is the lasting record. One at a time: they're disk-bound.
+conversions: dict[str, dict] = {}  # game id -> status: converting|success|failed|canceled, progress, message
+_convert_stop: dict[str, threading.Event] = {}
+CARRIED = ("title", "title_id", "metadata_source", "metadata_confidence", "content_id", "version", "region", "description",
+           "genre", "release_date", "owned_copy_type", "backup_date", "provenance_notes", "favorite")
+
+
+def image_path(game: Game) -> Path:
+    """Next to the folder, so the next scan finds it. Disc images get their title ID from the file name."""
+    src = Path(game.source_path)
+    name = src.name if not game.title_id or scanner.TITLE_ID_RE.search(src.name) else f"{src.name} [{game.title_id}]"
+    return src.with_name(name + ".exfat")
+
+
+def convert_blocker(game: Game) -> str | None:
+    if game.format != "folder_dump":
+        return "Only folder dumps can be converted to a disc image."
+    if game.missing or not os.path.isdir(game.source_path):
+        return f"Can't read {game.source_path}."
+    if game.detection_evidence.get("partial"):
+        return "The folder looks like an incomplete copy."
+    if any(c["status"] == "converting" for c in conversions.values()):
+        return "Another game is being converted. Wait for it to finish."
+    if image_path(game).exists():
+        return f"{image_path(game).name} already exists next to the folder."
+    return None
+
+
+def start_convert(game: Game) -> dict:
+    """Raises ValueError with the reason when the game can't be converted."""
+    if reason := convert_blocker(game):
+        raise ValueError(reason)
+    c = conversions[game.id] = {"status": "converting", "progress": 0.0, "bytes_done": 0, "bytes_total": game.size_bytes,
+                                "message": "Writing the disc image.", "image_path": str(image_path(game)), "image_game_id": None}
+    _convert_stop[game.id] = threading.Event()
+    _spawn(_convert(game.id))
+    return c
+
+
+def cancel_convert(game_id: str) -> bool:
+    if (c := conversions.get(game_id)) and c["status"] == "converting":
+        _convert_stop[game_id].set()
+        return True
+    return False
+
+
+async def _convert(game_id: str):
+    c = conversions[game_id]
+
+    def progress(done: int, total: int):  # called from the build thread; plain assignments
+        c["bytes_done"], c["bytes_total"], c["progress"] = done, total, done / total if total else 1.0
+
+    with SessionLocal() as db:
+        game = db.get(Game, game_id)
+        dest, source, title_id = Path(c["image_path"]), game.source_path, game.title_id
+        try:
+            size = await asyncio.to_thread(exfat.build, Path(source), dest, progress, _convert_stop[game_id], title_id or "")
+            c["message"] = "Adding it to the library."
+            while await asyncio.to_thread(scanner.run_scan_locked, SessionLocal) is None:
+                await asyncio.sleep(1)  # a scan was already running and may have missed the new file
+            db.expire_all()
+            image = db.scalar(select(Game).where(Game.source_path == str(dest)))
+            if image and (game := db.get(Game, game_id)):
+                _carry_over(game, image)
+                db.flush()
+                scanner.refresh_statuses(db)
+                c["image_game_id"] = image.id
+            c["status"] = "success"
+            c["message"] = (f"Done: {dest.name} ({size / 1e9:.1f} GB). The folder is still there; delete it yourself "
+                            f"once you've checked the image.")
+        except AdapterError as e:
+            c["status"] = "canceled" if e.code == "canceled" else "failed"
+            c["message"] = e.message
+        except OSError as e:
+            c["status"], c["message"] = "failed", f"Couldn't write the image: {e.strerror or e}"
+        except Exception as e:  # a bug must fail the conversion, not leave it "converting"
+            log.exception("conversion of %s", game_id)
+            c["status"], c["message"] = "failed", f"Unexpected error: {e}"
+        finally:
+            _convert_stop.pop(game_id, None)
+        db.add(AuditLog(action="convert", title_id=title_id, target_path=str(dest),
+                        result={"success": "success", "canceled": "canceled"}.get(c["status"], "failed"),
+                        details={"source": source, "message": c["message"]}))
+        db.commit()
+
+
+def _carry_over(folder: Game, image: Game):
+    """The image holds the same game: it keeps the folder's title ID (from its param.json) and everything the user set."""
+    for f in CARRIED:
+        setattr(image, f, getattr(folder, f))
+    if folder.cover_path and os.path.isfile(folder.cover_path):
+        cover = Path(folder.cover_path)
+        uploaded = cover.parent == config.COVERS_DIR  # only uploaded covers hide the PlayStation Store poster
+        copy = config.COVERS_DIR / f"{image.id}{'' if uploaded else '-icon0'}{cover.suffix.lower()}"
+        shutil.copyfile(cover, copy)
+        image.cover_path = str(copy)

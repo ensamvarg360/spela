@@ -107,3 +107,34 @@ def test_audit_log():
         assert [r["result"] for r in rows[:2]] == ["success", "failed"] and rows[0]["action"] == "login"
         older = c.get("/api/v1/maintenance/audit-logs", params={"before": rows[0]["created_at"]}).json()
         assert older[0]["id"] == rows[1]["id"]
+
+
+def test_convert_folder_dump_to_exfat(tmp_path):
+    import time
+    from conftest import PARAM_JSON, write
+    dump = tmp_path / "Native Game"
+    write(dump / "sce_sys" / "param.json", PARAM_JSON)
+    write(dump / "eboot.bin", b"elf" * 1000)
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.post("/api/v1/auth/login", json={"password": "password1"})  # set up in test_flow
+        for r in c.get("/api/v1/library/roots").json():
+            c.delete(f"/api/v1/library/roots/{r['id']}")
+        c.post("/api/v1/library/roots", json={"path": str(tmp_path)})
+        c.post("/api/v1/library/scan")
+        folder = c.get("/api/v1/games").json()[0]
+        c.patch(f"/api/v1/games/{folder['id']}", json={"favorite": True})
+
+        r = c.post(f"/api/v1/games/{folder['id']}/convert")
+        assert r.status_code == 202 and r.json()["image_path"].endswith("Native Game [PPSA02222].exfat")
+        for _ in range(100):
+            if (conv := c.get(f"/api/v1/games/{folder['id']}/convert").json())["status"] != "converting":
+                break
+            time.sleep(0.1)
+        assert conv["status"] == "success", conv
+        image = c.get(f"/api/v1/games/{conv['image_game_id']}").json()
+        assert (image["format"], image["image_subtype"], image["title_id"]) == ("image", "exfat", "PPSA02222")
+        assert image["metadata_confidence"] == "high" and image["favorite"] and image["title"] == "Native Game"
+        assert dump.is_dir()  # the folder is kept
+        r = c.post(f"/api/v1/games/{folder['id']}/convert")
+        assert r.status_code == 409 and "already exists" in r.json()["message"]
+        assert c.post(f"/api/v1/games/{image['id']}/convert").status_code == 409  # only folder dumps

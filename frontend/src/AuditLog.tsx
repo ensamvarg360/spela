@@ -8,6 +8,7 @@ const ACTION_LABEL: Record<string, string> = {
   install_queued: "Install queued",
   install: "Install",
   uninstall: "Removal",
+  convert: "Converted to .exfat",
   console_create: "Console added",
   console_update: "Console changed",
   console_delete: "Console removed",
