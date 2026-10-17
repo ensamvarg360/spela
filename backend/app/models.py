@@ -43,6 +43,7 @@ class LibraryRoot(Base):
     path: Mapped[str] = mapped_column(String, unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     exclude_patterns: Mapped[list] = mapped_column(JSON, default=list)
+    kind: Mapped[str] = mapped_column(String(8), default="game")  # game|dlc: which Settings list it's in; archives in a dlc root count as DLC
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=now)
 
 
@@ -52,12 +53,13 @@ class Game(Base):
     title: Mapped[str] = mapped_column(String)
     title_id: Mapped[str | None] = mapped_column(String(16), index=True)
     content_id: Mapped[str | None] = mapped_column(String(48))
-    metadata_source: Mapped[str] = mapped_column(String(16), default="none")  # ps5_cnt|ps5_param_json|ps4_cnt|ps4_param_sfo|sidecar|filename|manual|none
+    metadata_source: Mapped[str] = mapped_column(String(16), default="none")  # ps5_cnt|ps5_param_json|ps4_cnt|ps4_param_sfo|unlocker_ini|sidecar|filename|manual|none
     metadata_confidence: Mapped[str] = mapped_column(String(8), default="unknown")  # high|medium|low|unknown
     parser_warnings: Mapped[list] = mapped_column(JSON, default=list)
     region: Mapped[str | None] = mapped_column(String)
     version: Mapped[str | None] = mapped_column(String)
-    format: Mapped[str] = mapped_column(String(16))  # folder_dump|image|ps5_pkg|ps4_pkg|archive|unknown
+    kind: Mapped[str] = mapped_column(String(8), default="game", index=True)  # game|dlc
+    format: Mapped[str] = mapped_column(String(16))  # folder_dump|image|ps5_pkg|ps4_pkg|archive|unlocker|unknown
     image_subtype: Mapped[str | None] = mapped_column(String(16))  # exfat|ffpkg|ffpfs|ffpfsc
     source_path: Mapped[str] = mapped_column(String, unique=True)
     source_fingerprint: Mapped[str] = mapped_column(String)

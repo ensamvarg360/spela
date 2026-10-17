@@ -5,7 +5,7 @@ import GameDetail from "./GameDetail";
 import Installed from "./Installed";
 import Settings from "./Settings";
 
-// ponytail: hash routing, four routes. Swap in react-router when nested routes show up.
+// ponytail: hash routing, five routes. Swap in react-router when nested routes show up.
 function useHash() {
   const [hash, setHash] = useState(location.hash);
   useEffect(() => {
@@ -22,6 +22,7 @@ export default function App() {
   const route = useHash();
   const [version, setVersion] = useState("");
   const [view, setView] = useState<View>(NO_VIEW); // here, so filters survive opening a game and coming back
+  const [dlcView, setDlcView] = useState<View>(NO_VIEW);
   useEffect(() => { appVersion.then(setVersion); }, []);
 
   useEffect(() => {
@@ -37,7 +38,9 @@ export default function App() {
   const gameId = route.match(/^\/game\/([\w-]+)$/)?.[1];
   const logout = () => api("/auth/logout", { method: "POST" }).then(() => setUser(null));
 
+  const dlc = route === "/dlc";
   const search = (q: string) => {
+    if (dlc) return setDlcView({ ...dlcView, q });
     setView({ ...view, q });
     if (route !== "/") location.hash = "#/";
   };
@@ -51,15 +54,17 @@ export default function App() {
         </a>
         <nav>
           <a href="#/" aria-current={route === "/" || !!gameId ? "page" : undefined}>Library</a>
+          <a href="#/dlc" aria-current={dlc ? "page" : undefined}>DLC</a>
           <a href="#/installed" aria-current={route === "/installed" ? "page" : undefined}>Installed</a>
           <a href="#/settings" aria-current={route === "/settings" ? "page" : undefined}>Settings</a>
         </nav>
-        <input className="search" type="search" placeholder="Search your library" aria-label="Search title or title ID"
-          value={view.q} onChange={(e) => search(e.target.value)} />
+        <input className="search" type="search" placeholder={dlc ? "Search your DLC" : "Search your library"} aria-label="Search title or title ID"
+          value={dlc ? dlcView.q : view.q} onChange={(e) => search(e.target.value)} />
         <button className="link" onClick={logout}>Log out</button>
       </header>
       <main>
-        {gameId ? <GameDetail id={gameId} /> : route === "/settings" ? <Settings /> : route === "/installed" ? <Installed /> : <Library view={view} setView={setView} />}
+        {gameId ? <GameDetail id={gameId} /> : route === "/settings" ? <Settings /> : route === "/installed" ? <Installed />
+          : dlc ? <Library key="dlc" kind="dlc" view={dlcView} setView={setDlcView} /> : <Library key="game" kind="game" view={view} setView={setView} />}
       </main>
     </>
   );

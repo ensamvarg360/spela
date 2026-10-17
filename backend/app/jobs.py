@@ -2,6 +2,8 @@
 Only the ShadowMountPlus route exists: folder dumps and disc images are copied into a drive's homebrew folder.
 Archives are extracted on this PC first (archives.py) and the dump or image inside is copied the same way.
 Removals (project.md §13) delete that copy again, after a preview and the title ID typed back.
+DLC unlockers (a folder with dlc_emu.ini) are copied over the installed game's folder, as their release notes say.
+DLC packages need a package installer, like game packages.
 Conversions turn a folder dump into an .exfat disc image next to it, on this PC (exfat.py)."""
 import asyncio
 import logging
@@ -46,17 +48,34 @@ def pkg_blocker(console: Console, game: Game) -> str:
     return "This console has no package installer. Only folder dumps and disc images can be installed."
 
 
+def unlocker_target(db: Session, console: Console, title_id: str | None) -> tuple[InstalledGame | None, str]:
+    """The installed game folder a DLC unlocker for `title_id` is copied into, or (None, why not)."""
+    if not title_id:
+        return None, "Can't tell which game this DLC is for. Enter its title ID."
+    rows = db.scalars(select(InstalledGame).where(InstalledGame.console_id == console.id, InstalledGame.title_id == title_id,
+                                                  InstalledGame.status != "orphaned_icon")).all()
+    if row := next((r for r in rows if r.install_route == "shadowmountplus" and r.source_path
+                    and not r.source_path.lower().endswith(IMAGE_EXTS)), None):
+        return row, ""
+    if rows:
+        return None, (f"{title_id} is installed as a {'disc image' if rows[0].install_route == 'shadowmountplus' else 'package'}. "
+                      f"A DLC unlocker is copied into the game's folder, so the game must be installed as a folder dump.")
+    return None, f"Install the game ({title_id}) on this console first. The DLC unlocker is copied into its folder."
+
+
 def blocker(db: Session, console: Console, game: Game) -> str | None:
     """Why this game can't be queued for this console, or None. Console-side checks (online, space) run at preflight."""
     if game.format in ("ps4_pkg", "ps5_pkg"):
         return pkg_blocker(console, game)
     if game.format == "archive" and (reason := archives.blocker(game.source_path)):
         return reason
-    if game.format not in ("folder_dump", "image", "archive"):
+    if game.format not in ("folder_dump", "image", "archive", "unlocker"):
         return "Format not recognized."
     if game.compatibility_status == "incompatible":
         return game.compatibility_reason
-    if game.title_id and db.scalar(select(InstalledGame.id).where(
+    if game.format == "unlocker" and not (target := unlocker_target(db, console, game.title_id))[0]:
+        return target[1]
+    if game.kind == "game" and game.title_id and db.scalar(select(InstalledGame.id).where(
             InstalledGame.console_id == console.id, InstalledGame.title_id == game.title_id)):
         return "Already installed on this console."
     if db.scalar(select(InstallJob.id).where(InstallJob.console_id == console.id, InstallJob.game_id == game.id,
@@ -161,9 +180,11 @@ async def run(job_id: str):
                 job.status, job.message = "extracting", "Reading the archive."
                 db.commit()
                 archive, needed = await asyncio.to_thread(archives.prepare, source, job.id, stop)
-            drive = _pick_drive(db, console, job, await adapter.list_drives(), needed)
-            job.target_drive_id = db.scalar(select(Drive.id).where(Drive.console_id == console.id,
-                                                                   Drive.external_id == drive.external_id))
+            dlc = game.kind == "dlc"  # goes into the installed game's folder, on that game's drive
+            if not dlc:
+                drive = _pick_drive(db, console, job, await adapter.list_drives(), needed)
+                job.target_drive_id = db.scalar(select(Drive.id).where(Drive.console_id == console.id,
+                                                                       Drive.external_id == drive.external_id))
             if game.format == "archive":
                 job.message = "Extracting on this PC."
                 db.commit()
@@ -173,6 +194,11 @@ async def run(job_id: str):
                 db.refresh(job)
                 _check_contents(db, console, game, item)
                 source = item.source_path
+                if dlc and item.detected_format != "unlocker":
+                    raise AdapterError("archive_contents", "This archive doesn't hold a DLC unlocker folder.")
+            if dlc:
+                await _add_unlocker(db, adapter, console, job, game, source)
+                return
             job.status, job.message = "transferring", f"Copying to {drive.label}."
             db.commit()
 
@@ -232,6 +258,20 @@ async def _add_logo(job_id: str, console_id: str, title_id: str):
         db.commit()
 
 
+async def _add_unlocker(db: Session, adapter, console: Console, job: InstallJob, game: Game, source: str):
+    """Copies a DLC unlocker over the installed game's folder. Its files replace the game's own ones of the same name."""
+    row, why = unlocker_target(db, console, game.title_id)
+    if not row:
+        raise AdapterError("game_not_installed", why)
+    job.target_drive_id = row.drive_id
+    job.status, job.message = "transferring", f"Copying into {row.source_path}."
+    db.commit()
+    target = InstalledGameInfo(row.title_id, row.title, None, "shadowmountplus", None, row.source_path, row.source_path, 0)
+    await adapter.add_to_game_folder(source, target, _progress(job.id, time.monotonic()), _cancel[job.id])
+    db.refresh(job)
+    _finish(db, job, "success", f"Added to {row.title}. Start the game to use the DLC.")
+
+
 def _check_contents(db: Session, console: Console, game: Game, item: scanner.Item):
     """What the archive really holds: its param.json title ID replaces one guessed from the file name."""
     tid = item.title_id
@@ -240,7 +280,8 @@ def _check_contents(db: Session, console: Console, game: Game, item: scanner.Ite
     if tid and item.metadata_confidence == "high" and game.metadata_source != "manual":
         game.title_id, game.metadata_source, game.metadata_confidence = tid, item.metadata_source, "high"
         game.version = item.version or game.version
-    if tid and db.scalar(select(InstalledGame.id).where(InstalledGame.console_id == console.id, InstalledGame.title_id == tid)):
+    if game.kind == "game" and tid and db.scalar(select(InstalledGame.id).where(InstalledGame.console_id == console.id,
+                                                                                InstalledGame.title_id == tid)):
         raise AdapterError("already_installed", f"{tid} is already installed on this console.")
 
 

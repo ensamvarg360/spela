@@ -208,6 +208,32 @@ def test_job_runs_to_success_then_blocks_reinstall(ps5):
         assert jobs.blocker(db, c, dump) == "Already installed on this console."
 
 
+def test_dlc_unlocker_is_copied_into_the_game_folder(ps5):
+    root, port, lib = ps5
+    write(lib / "Dump PPSA03333/fakelib/libSceAppContent.sprx", b"original")
+    write(lib / "unlocker/dlc_emu.ini", b"[PSAC]\ncontent_id=EP0001-PPSA03333_00-ADDON00000000001\n")
+    write(lib / "unlocker/fakelib/libSceAppContent.sprx", b"unlocked")
+    with SessionLocal() as db:
+        c, (dump, image, dlc) = _setup(db, port, lib, (lib / "Dump PPSA03333", "folder_dump"),
+                                       (lib / "Racer PPSA04444.exfat", "image"), (lib / "unlocker", "unlocker"))
+        dump.title_id, image.title_id, dlc.title_id, dlc.kind = "PPSA03333", "PPSA04444", "PPSA03333", "dlc"
+        db.commit()
+        assert "Install the game (PPSA03333)" in jobs.blocker(db, c, dlc)
+
+        asyncio.run(jobs.run(jobs.queue(db, c, dump).id))
+        job = jobs.queue(db, c, dlc)  # DLC shares the game's title ID: installed game doesn't block it
+        asyncio.run(jobs.run(job.id))
+        db.expire_all()
+        assert job.status == "success", job.message
+        game = root / "mnt/usb0/homebrew/Dump PPSA03333"
+        assert (game / "dlc_emu.ini").exists() and (game / "fakelib/libSceAppContent.sprx").read_bytes() == b"unlocked"
+        assert (game / "eboot.bin").exists()  # the rest of the game is untouched
+
+        asyncio.run(jobs.run(jobs.queue(db, c, image).id))
+        dlc.title_id = "PPSA04444"
+        assert "installed as a disc image" in jobs.blocker(db, c, dlc)
+
+
 def test_pkg_firmware_gate():
     ps5, ps4 = Game(format="ps5_pkg"), Game(format="ps4_pkg")
     assert "firmware is unknown" in jobs.pkg_blocker(Console(firmware=None), ps5)

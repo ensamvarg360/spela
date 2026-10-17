@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import AuditLog, Game, LibraryRoot, now
-from .pkg import PLATFORM_PREFIX, parse_pkg
+from .pkg import CONTENT_ID_RE, PLATFORM_PREFIX, parse_pkg
 
 TITLE_ID_RE = re.compile(r"(?<![A-Za-z0-9])(PPSA|CUSA)(\d{5})(?!\d)")  # strict: uppercase, no separator
 PARTIAL_SUFFIXES = (".partial", ".part", ".tmp")
@@ -27,13 +27,20 @@ def is_system_dir(name: str) -> bool:
     return any(fnmatch.fnmatch(name, p) for p in SYSTEM_DIRS)
 
 
-# Release extras that aren't playable base games: firmware backports of the main package,
-# add-on content, DLC-only/unlocker releases, and bonus apps shipped beside the game. Lowercase.
-NOT_A_GAME = ("backport*", "dlc", "dlcs", "*dlc.unlocker*", "*dlc.only*", "*artbook*", "*soundtrack*")
+# Release extras that are neither a game nor DLC: firmware backports of the main package and bonus apps. Lowercase.
+NOT_A_GAME = ("backport*", "*artbook*", "*soundtrack*")
+# DLC is told apart by content (package content type, dlc_emu.ini). Only an archive can't be looked into, so one
+# under a folder named like this counts as DLC. Lowercase.
+DLC_NAMES = ("dlc", "dlcs", "*dlc.unlocker*", "*dlc.only*", "*dlc.ps5*")
+UNLOCKER_INI = "dlc_emu.ini"  # DLC unlocker: copied over the game's folder, its fakelib/ answers the game's DLC checks
 
 
 def is_not_a_game(name: str) -> bool:
     return any(fnmatch.fnmatchcase(name.lower(), p) for p in NOT_A_GAME)
+
+
+def is_dlc_name(name: str) -> bool:
+    return any(fnmatch.fnmatchcase(name.lower(), p) for p in DLC_NAMES)
 
 # name -> (offset, magic). Add entries here when a new format's header is known.
 # PFS/PFSC/package magics verified against LibProsperoPKG; UFS2 is the standard FreeBSD superblock magic.
@@ -77,7 +84,7 @@ class Item:
     image_subtype: str | None = None
     title_id: str | None = None
     content_id: str | None = None
-    metadata_source: str = "none"  # ps5_cnt|ps5_param_json|ps4_cnt|ps4_param_sfo|sidecar|filename|manual|none
+    metadata_source: str = "none"  # ps5_cnt|ps5_param_json|ps4_cnt|ps4_param_sfo|unlocker_ini|sidecar|filename|manual|none
     metadata_confidence: str = "unknown"  # high|medium|low|unknown
     provisional_title: str = ""
     version: str | None = None
@@ -89,6 +96,7 @@ class Item:
     evidence: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     partial: bool = False
+    kind: str = "game"  # game|dlc
 
 
 def _read_header(path: Path, n=HEADER_BYTES) -> bytes:
@@ -162,6 +170,17 @@ def detect_folder(path: Path) -> Item | None:
     else:
         item.title_id = None
         _filename_fallback(item, path.name, "param.json has no valid title ID.")
+    _tree_stats(item, path)
+    icon = path / "sce_sys" / "icon0.png"
+    item.cover_path = str(icon) if icon.is_file() else None
+    for name in SIDECAR_NAMES:
+        if (path / name).is_file():
+            item.sidecar = _load_sidecar(path / name)
+            break
+    return item
+
+
+def _tree_stats(item: Item, path: Path):
     total = count = latest = 0
     for dirpath, _, files in os.walk(path):
         for f in files:
@@ -170,12 +189,29 @@ def detect_folder(path: Path) -> Item | None:
     item.size_bytes = total
     item.fingerprint = f"dir:{total}:{count}:{latest}"
     item.partial = (path / PARTIAL_MARKER).exists()
-    icon = path / "sce_sys" / "icon0.png"
-    item.cover_path = str(icon) if icon.is_file() else None
-    for name in SIDECAR_NAMES:
-        if (path / name).is_file():
-            item.sidecar = _load_sidecar(path / name)
-            break
+
+
+def detect_unlocker(path: Path) -> Item | None:
+    """A DLC unlocker folder: dlc_emu.ini lists the DLC's content IDs, which name the game it belongs to."""
+    ini = path / UNLOCKER_INI
+    if not ini.is_file():
+        return None
+    item = Item(str(path), "unlocker", kind="dlc", evidence={"signature": UNLOCKER_INI},
+                provisional_title=_title_from_name(path.name)[1])
+    try:
+        ids = re.findall(r"^\s*content_id\s*=\s*(\S+)", ini.read_text(encoding="utf-8", errors="replace"), re.M)
+    except OSError as e:
+        ids = []
+        item.warnings.append(f"{UNLOCKER_INI} unreadable: {e}")
+    tids = {m[1] for cid in ids if (m := CONTENT_ID_RE.match(cid))}
+    item.evidence["content_ids"] = ids[:50]
+    if len(tids) == 1:
+        item.title_id, item.metadata_source, item.metadata_confidence = tids.pop(), "unlocker_ini", "high"
+    else:
+        if tids:
+            item.warnings.append(f"{UNLOCKER_INI} names several games: {', '.join(sorted(tids))}.")
+        _filename_fallback(item, path.name, f"{UNLOCKER_INI} names no single game.")
+    _tree_stats(item, path)
     return item
 
 
@@ -203,11 +239,12 @@ def detect_file(path: Path) -> Item | None:
     pkg_title = None
     if sig in accepted and fmt == "pkg":
         meta = parse_pkg(str(path))
-        item.detected_format = meta.platform
+        item.detected_format, item.kind = meta.platform, "dlc" if meta.dlc else "game"
         item.title_id, item.content_id, item.version, item.region = meta.title_id, meta.content_id, meta.version, meta.region
         item.metadata_source, item.metadata_confidence = meta.source, meta.confidence
         item.warnings += meta.warnings
-        item.evidence["pkg"] = {"category": meta.category, "min_firmware": meta.min_firmware, "multipart": meta.multipart}
+        item.evidence["pkg"] = {"category": meta.category, "min_firmware": meta.min_firmware, "multipart": meta.multipart,
+                                "dlc": meta.dlc}
         pkg_title = meta.title if meta.title_id else None
         folder_tid = _title_from_name(path.parent.name)[0]
         if meta.title_id and folder_tid and folder_tid != meta.title_id:
@@ -224,7 +261,7 @@ def detect_file(path: Path) -> Item | None:
     return item
 
 
-FOLDER_DETECTORS = [detect_folder]
+FOLDER_DETECTORS = [detect_folder, detect_unlocker]  # in order: a game folder with an unlocker copied in is a game
 FILE_DETECTORS = [detect_file]
 
 
@@ -232,8 +269,9 @@ def _excluded(rel: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(os.path.basename(rel), p) for p in patterns)
 
 
-def scan_root(root: str, excludes: list[str] | None = None) -> tuple[list[Item], list[str]]:
-    """Return (items, failed_dirs). Raises OSError if the root itself is unreadable."""
+def scan_root(root: str, excludes: list[str] | None = None, kind: str = "game") -> tuple[list[Item], list[str]]:
+    """Return (items, failed_dirs). Raises OSError if the root itself is unreadable.
+    `kind` is the root's: in a DLC root every archive counts as DLC, elsewhere only one under a DLC-named folder."""
     excludes = excludes or []
     os.listdir(root)  # surface an unreachable mount before walking
     items, failed, later_volumes = [], [], {}
@@ -266,6 +304,9 @@ def scan_root(root: str, excludes: list[str] | None = None) -> tuple[list[Item],
                 failed.append(str(full))
                 continue
             if found:
+                if found.detected_format == "archive" and (kind == "dlc" or any(
+                        is_dlc_name(p) for p in Path(os.path.relpath(full, root)).parts)):
+                    found.kind = "dlc"
                 items.append(found)
     first_volumes = {_volume_key(Path(it.source_path)) for it in items}
     for key, path in later_volumes.items():
@@ -285,7 +326,7 @@ def _apply_sidecar(it: Item):
     s = it.sidecar
     if not s:
         return
-    base = Path(it.source_path) if it.detected_format == "folder_dump" else Path(it.source_path).parent
+    base = Path(it.source_path) if it.detected_format in ("folder_dump", "unlocker") else Path(it.source_path).parent
     if not it.title_id and isinstance(s.get("title_id"), str) and TITLE_ID_RE.fullmatch(s["title_id"]):
         it.title_id, it.metadata_source, it.metadata_confidence = s["title_id"], "sidecar", "low"
     it.version = it.version or s.get("version")
@@ -309,8 +350,9 @@ def _is_under(path: str, roots: list[str]) -> bool:
     return any(path == r or path.startswith(r.rstrip("/\\") + os.sep) for r in roots)
 
 
-def evaluate(game: Game, duplicate_ids: set[str]) -> tuple[str, str]:
-    """Library-side compatibility. Console-side checks (firmware, space, helper) run at preflight."""
+def evaluate(game: Game, duplicate_ids: set[str], game_ids: set[str] = frozenset()) -> tuple[str, str]:
+    """Library-side compatibility. Console-side checks (firmware, space, helper) run at preflight.
+    `game_ids`: title IDs of the games in the library (archives included), so DLC can tell its game is there."""
     if game.missing:
         return "incompatible", "Source path is missing or unreadable."
     if game.format == "unknown":
@@ -322,6 +364,8 @@ def evaluate(game: Game, duplicate_ids: set[str]) -> tuple[str, str]:
         reasons.append("Archive: it is extracted on this PC before it is installed.")
     if game.format in ("ps4_pkg", "ps5_pkg"):
         reasons.append("Package install requires confirmation.")
+    if game.kind == "dlc" and game.title_id and game.title_id not in game_ids:
+        reasons.append(f"Its game ({game.title_id}) isn't in your library.")
     prefix = PLATFORM_PREFIX.get(game.format)
     if game.detection_evidence.get("pkg", {}).get("multipart"):
         reasons.append("Multi-part package: verify all parts are present.")
@@ -339,12 +383,13 @@ def evaluate(game: Game, duplicate_ids: set[str]) -> tuple[str, str]:
 def refresh_statuses(db: Session):
     games = db.scalars(select(Game)).all()
     seen, dups = set(), set()
+    game_ids = {g.title_id for g in games if g.kind == "game" and g.title_id and not g.missing}
     for g in games:
-        # An archive next to its extracted copy is a backup pair, not a duplicate.
-        if g.title_id and not g.missing and g.format != "archive":
+        # An archive next to its extracted copy is a backup pair, not a duplicate. DLC shares its game's title ID.
+        if g.title_id and not g.missing and g.format != "archive" and g.kind == "game":
             (dups if g.title_id in seen else seen).add(g.title_id)
     for g in games:
-        g.compatibility_status, g.compatibility_reason = evaluate(g, dups)
+        g.compatibility_status, g.compatibility_reason = evaluate(g, dups, game_ids)
 
 
 def _upsert(db: Session, it: Item, existing: Game | None) -> str | None:
@@ -352,7 +397,7 @@ def _upsert(db: Session, it: Item, existing: Game | None) -> str | None:
     if existing and existing.source_fingerprint == it.fingerprint and not existing.missing:
         return None
     g = existing or Game(source_path=it.source_path, title=it.provisional_title or Path(it.source_path).name)
-    g.format, g.image_subtype = it.detected_format, it.image_subtype
+    g.format, g.image_subtype, g.kind = it.detected_format, it.image_subtype, it.kind
     g.size_bytes, g.source_fingerprint = it.size_bytes, it.fingerprint
     g.compressed_size_bytes = it.size_bytes if it.detected_format == "archive" else None
     g.detection_evidence, g.missing = evidence, False
@@ -384,7 +429,7 @@ def run_scan(db: Session) -> dict:
     seen, scanned_roots, failed_dirs = set(), [], []
     for root in roots:
         try:
-            items, failed = scan_root(root.path, root.exclude_patterns)
+            items, failed = scan_root(root.path, root.exclude_patterns, root.kind)
         except OSError as e:
             report["errors"].append(f"{root.path}: {e}")
             continue

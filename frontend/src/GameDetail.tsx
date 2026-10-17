@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, formatBytes, formatLabel, SOURCE_LABEL, STATUS_LABEL, type Console, type Drive, type Game, type Job } from "./api";
 import { Cover } from "./Library";
 
-/** Queues an install on a console; the job shows up on the Installed page. */
+/** Queues an install on a console; the job shows up on the Installed page. DLC goes onto its game's drive. */
 function Install({ game }: { game: Game }) {
   const [consoles, setConsoles] = useState<Console[]>([]);
   const [cid, setCid] = useState("");
@@ -25,6 +25,9 @@ function Install({ game }: { game: Game }) {
 
   async function install() {
     if (game.format === "archive" && !confirm("This archive will be extracted to the private staging folder on this PC before it's installed. Make sure the PC has room for the unpacked game.")) return;
+    if (game.kind === "dlc" && game.format !== "ps5_pkg" && game.format !== "ps4_pkg" && !confirm(
+      "The unlocker's files are copied into the installed game's folder and replace files there with the same names. " +
+      "Close the game on the PS5 first. To undo it, remove the game and install it again.")) return;
     try {
       await api<Job>(`/consoles/${cid}/install`, { json: { game_id: game.id, drive_id: did || null } });
       setMsg({ text: "Queued. Follow it on the Installed page." });
@@ -40,11 +43,13 @@ function Install({ game }: { game: Game }) {
           {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       )}
-      <select aria-label="Drive" value={did} onChange={(e) => setDid(e.target.value)}>
-        <option value="">Drive with the most free space</option>
-        {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
-      </select>
-      <button onClick={install}>Install</button>
+      {game.kind === "game" && (
+        <select aria-label="Drive" value={did} onChange={(e) => setDid(e.target.value)}>
+          <option value="">Drive with the most free space</option>
+          {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
+        </select>
+      )}
+      <button onClick={install}>{game.kind === "dlc" ? "Add to game" : "Install"}</button>
       {msg && <span className={msg.error ? "error" : "muted"} role="status">{msg.text}{!msg.error && <> <a href="#/installed">Open</a></>}</span>}
     </div>
   );
@@ -177,7 +182,7 @@ export default function GameDetail({ id }: { id: string }) {
   async function remove() {
     if (!confirm(`Remove "${game!.title}" from the catalog? Files on disk are not touched; a rescan will add it back.`)) return;
     await api(`/games/${id}`, { method: "DELETE" });
-    location.hash = "#/";
+    location.hash = game!.kind === "dlc" ? "#/dlc" : "#/";
   }
 
   return (
@@ -194,7 +199,7 @@ export default function GameDetail({ id }: { id: string }) {
       </aside>
 
       <section>
-        <a href="#/" className="muted">← Library</a>
+        {game.kind === "dlc" ? <a href="#/dlc" className="muted">← DLC</a> : <a href="#/" className="muted">← Library</a>}
         <h1>{game.title}</h1>
         <div className={`panel ${game.compatibility_status}`}>
           <strong>{STATUS_LABEL[game.compatibility_status]}</strong>

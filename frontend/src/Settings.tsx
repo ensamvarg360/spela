@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, type Root, type ScanStatus } from "./api";
+import { api, type Kind, type Root, type ScanStatus } from "./api";
 import AuditLog from "./AuditLog";
 import Consoles from "./Consoles";
 
@@ -31,12 +31,54 @@ function FolderPicker({ start, onPick, onClose }: { start: string; onPick: (path
   );
 }
 
+/** One kind's library folders. Kind only sorts them into lists: what's DLC is told by content, wherever it is. */
+function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: (p: Promise<unknown>) => Promise<void> }) {
+  const [path, setPath] = useState("");
+  const [browsing, setBrowsing] = useState(false);
+  const addPath = (p: string) => act(api("/library/roots", { json: { path: p, kind } }).then(() => (setPath(""), setBrowsing(false))));
+  const add = (e: FormEvent) => {
+    e.preventDefault();
+    addPath(path);
+  };
+  const label = kind === "dlc" ? "DLC folder" : "library folder";
+
+  return (
+    <>
+      <ul className="roots">
+        {roots.filter((r) => r.kind === kind).map((r) => (
+          <li key={r.id}>
+            <label className="check">
+              <input type="checkbox" checked={r.enabled} onChange={(e) => act(api(`/library/roots/${r.id}`, { method: "PATCH", json: { enabled: e.target.checked } }))} />
+              <code>{r.path}</code>
+            </label>
+            {!r.reachable && <span className="badge incompatible">Unreachable</span>}
+            <input
+              aria-label={`Exclude patterns for ${r.path}`}
+              placeholder="Exclude patterns, comma-separated (e.g. *.tmp, old/*)"
+              defaultValue={r.exclude_patterns.join(", ")}
+              onBlur={(e) => {
+                const pats = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
+                if (pats.join() !== r.exclude_patterns.join()) act(api(`/library/roots/${r.id}`, { method: "PATCH", json: { exclude_patterns: pats } }));
+              }}
+            />
+            <button className="link" onClick={() => confirm(`Stop scanning ${r.path} and remove what it holds from the library? Files on disk are not touched.`) && act(api(`/library/roots/${r.id}`, { method: "DELETE" }))}>Remove</button>
+          </li>
+        ))}
+      </ul>
+      <form className="inline" onSubmit={add}>
+        <input required placeholder={kind === "dlc" ? "G:\\DLC" : "G:\\"} aria-label={`New ${label}`} value={path} onChange={(e) => setPath(e.target.value)} />
+        <button type="submit">Add folder</button>
+        <button type="button" onClick={() => setBrowsing(true)}>Browse…</button>
+      </form>
+      {browsing && <FolderPicker start={path} onPick={addPath} onClose={() => setBrowsing(false)} />}
+    </>
+  );
+}
+
 export default function Settings() {
   const [roots, setRoots] = useState<Root[]>([]);
-  const [path, setPath] = useState("");
   const [error, setError] = useState("");
   const [scan, setScan] = useState<ScanStatus | null>(null);
-  const [browsing, setBrowsing] = useState(false);
 
   const load = () => api<Root[]>("/library/roots").then(setRoots, (e) => setError(e.message));
   const pollScan = () => api<ScanStatus>("/library/scan-status").then(setScan);
@@ -62,46 +104,18 @@ export default function Settings() {
     }
   }
 
-  const addPath = (p: string) => act(api("/library/roots", { json: { path: p } }).then(() => (setPath(""), setBrowsing(false))));
-  const add = (e: FormEvent) => {
-    e.preventDefault();
-    addPath(path);
-  };
-
   const startScan = () => act(api("/library/scan", { method: "POST" }).then(() => setScan((s) => ({ ...s!, running: true }))));
 
   return (
     <div className="settings">
       <section className="card">
-        <h2>Library folders</h2>
+        <h2>Game folders</h2>
         <p className="muted">A folder or a whole drive, e.g. <code>G:\</code>. Every subfolder is scanned too. Folders are only ever read.</p>
-        <ul className="roots">
-          {roots.map((r) => (
-            <li key={r.id}>
-              <label className="check">
-                <input type="checkbox" checked={r.enabled} onChange={(e) => act(api(`/library/roots/${r.id}`, { method: "PATCH", json: { enabled: e.target.checked } }))} />
-                <code>{r.path}</code>
-              </label>
-              {!r.reachable && <span className="badge incompatible">Unreachable</span>}
-              <input
-                aria-label={`Exclude patterns for ${r.path}`}
-                placeholder="Exclude patterns, comma-separated (e.g. *.tmp, old/*)"
-                defaultValue={r.exclude_patterns.join(", ")}
-                onBlur={(e) => {
-                  const pats = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
-                  if (pats.join() !== r.exclude_patterns.join()) act(api(`/library/roots/${r.id}`, { method: "PATCH", json: { exclude_patterns: pats } }));
-                }}
-              />
-              <button className="link" onClick={() => confirm(`Stop scanning ${r.path} and remove its games from the library? Files on disk are not touched.`) && act(api(`/library/roots/${r.id}`, { method: "DELETE" }))}>Remove</button>
-            </li>
-          ))}
-        </ul>
-        <form className="inline" onSubmit={add}>
-          <input required placeholder="G:\" aria-label="New library folder" value={path} onChange={(e) => setPath(e.target.value)} />
-          <button type="submit">Add folder</button>
-          <button type="button" onClick={() => setBrowsing(true)}>Browse…</button>
-        </form>
-        {browsing && <FolderPicker start={path} onPick={addPath} onClose={() => setBrowsing(false)} />}
+        <Folders kind="game" roots={roots} act={act} />
+        <h2>DLC folders</h2>
+        <p className="muted">Where you keep DLC packages and DLC unlocker folders. DLC inside game folders is found too, and
+          shows on the DLC page either way.</p>
+        <Folders kind="dlc" roots={roots} act={act} />
         {error && <p className="error" role="alert">{error}</p>}
         <button style={{ marginTop: "1rem" }} onClick={startScan} disabled={scan?.running || !roots.length}>{scan?.running ? "Scanning…" : "Scan now"}</button>
         {scan?.report && !scan.running && (

@@ -110,6 +110,9 @@ class ConsoleAdapter(Protocol):
     # `cancel` set = stop between chunks and raise AdapterError("canceled"); the partial upload is removed.
     async def stage_shadowmount_content(self, source_path: str, target_drive: DriveInfo, progress_callback: ProgressCallback,
                                         cancel: threading.Event | None = None) -> InstallResult: ...
+    # Copies a folder's files into an installed ShadowMountPlus game folder, replacing files of the same name.
+    async def add_to_game_folder(self, source_path: str, game: InstalledGameInfo, progress_callback: ProgressCallback,
+                                 cancel: threading.Event | None = None) -> None: ...
     async def uninstall_package(self, title_id: str) -> RemovalResult: ...
     async def remove_shadowmount_source(self, installed_game: InstalledGameInfo, progress_callback: ProgressCallback) -> RemovalResult: ...
     async def remove_home_screen_icon(self, title_id: str) -> RemovalResult: ...
@@ -143,6 +146,7 @@ class MockConsoleAdapter:
         ]
         self.icons = {g.title_id for g in self.games}  # home-screen icons
         self.logos: dict[str, bytes] = {}  # title ID -> home-screen logo
+        self.added: list[tuple[str, str]] = []  # (source folder, game folder) of each add_to_game_folder
 
     def _check(self):
         if not self.online:
@@ -211,6 +215,14 @@ class MockConsoleAdapter:
         name = re.split(r"[\\/]", source_path)[-1]
         dest = f"{drive.path}/shadowmount/{name}"
         return self._install(source_path, "shadowmountplus", drive, dest, dest, progress_callback)
+
+    async def add_to_game_folder(self, source_path: str, game: InstalledGameInfo, progress_callback: ProgressCallback,
+                                 cancel: threading.Event | None = None) -> None:
+        self._check()
+        if not any(g.source_path == game.source_path for g in self.games):
+            raise AdapterError("not_found", f"{game.source_path} isn't on the console any more.")
+        progress_callback(1, 1)
+        self.added.append((source_path, game.source_path))
 
     def _remove(self, title_id: str, route: str) -> RemovalResult:
         game = next((g for g in self.games if g.title_id == title_id and g.install_route == route), None)
@@ -628,16 +640,61 @@ class FTPConsoleAdapter:
             self._put_files(ftp, files)
         await self._run(put)
 
-    def _remove_source(self, ftp: ftplib.FTP, game: InstalledGameInfo, progress: ProgressCallback) -> RemovalResult:
-        """Deletes one game's folder or image. Only a direct entry of a homebrew folder (project.md §13 allowlist),
-        and only while the console still lists exactly that path with that title ID."""
+    def _game_entry(self, ftp: ftplib.FTP, game: InstalledGameInfo, verb: str) -> tuple[str, str]:
+        """(homebrew folder, name) of an installed game. Only a direct entry of a homebrew folder (project.md §13
+        allowlist), and only while the console still lists exactly that path with that title ID."""
         path = game.source_path or ""
         homebrew, _, name = path.rpartition("/")
         if (homebrew not in {hb for *_, hb in FTP_DRIVES} or not name or name.startswith(".")
                 or any(ch in name for ch in "*?[]") or name == CONSOLE_APP_TITLE_ID):
-            raise AdapterError("path_outside_allowlist", f"Won't delete {path}: it isn't a game in a homebrew folder.")
+            raise AdapterError("path_outside_allowlist", f"Won't {verb} {path}: it isn't a game in a homebrew folder.")
         if not any(g.source_path == path and g.title_id == game.title_id and not g.orphaned for g in self._games(ftp)):
             raise AdapterError("not_found", f"{path} isn't on the console any more, or holds a different game.")
+        return homebrew, name
+
+    def _add_to_folder(self, ftp: ftplib.FTP, src: Path, game: InstalledGameInfo, progress: ProgressCallback,
+                       cancel: threading.Event):
+        homebrew, name = self._game_entry(ftp, game, "change")
+        if not ftp.ls(homebrew).get(name, (False,))[0]:
+            raise AdapterError("not_a_folder", f"{game.source_path} is a disc image; only a game folder can take DLC files.")
+        dirs, files = [], []
+        for root, subdirs, names in os.walk(src):
+            rel = Path(root).relative_to(src).as_posix()
+            base = game.source_path if rel == "." else f"{game.source_path}/{rel}"
+            dirs += [f"{base}/{d}" for d in sorted(subdirs)]
+            files += [(Path(root) / n, f"{base}/{n}") for n in sorted(names)]
+        total, done = sum(f.stat().st_size for f, _ in files), 0
+
+        def chunk(block: bytes):
+            nonlocal done
+            if cancel.is_set():
+                raise AdapterError("canceled", "Canceled. Some DLC files may already be in the game's folder.")
+            done += len(block)
+            progress(done, total)
+
+        for d in dirs:
+            try:
+                ftp.mkd(d)
+            except ftplib.error_perm:
+                pass  # the game already has this folder
+        # ponytail: written in place, not staged and renamed: an interrupted copy leaves some files; installing again
+        # finishes it. Staging would mean renaming over the game's own files, which the console may refuse.
+        for local, remote in files:
+            with open(local, "rb") as f:
+                ftp.storbinary(f"STOR {remote}", f, self.BLOCK, chunk)
+        progress(total, total)
+
+    async def add_to_game_folder(self, source_path: str, game: InstalledGameInfo, progress_callback: ProgressCallback,
+                                 cancel: threading.Event | None = None) -> None:
+        src = Path(source_path)
+        if not src.is_dir():
+            raise AdapterError("source_missing", f"Can't read {source_path}.")
+        await self._run(lambda ftp: self._add_to_folder(ftp, src, game, progress_callback, cancel or threading.Event()))
+
+    def _remove_source(self, ftp: ftplib.FTP, game: InstalledGameInfo, progress: ProgressCallback) -> RemovalResult:
+        """Deletes one game's folder or image (see _game_entry for which)."""
+        path = game.source_path or ""
+        homebrew, name = self._game_entry(ftp, game, "delete")
         entries = ftp.ls(homebrew)
         is_dir, size = entries[name]
         tmp = f"{homebrew}/.{name}.partial"

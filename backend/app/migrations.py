@@ -20,7 +20,14 @@ def _1_games_seen_at(c: Connection):
         c.exec_driver_sql("UPDATE games SET seen_at = created_at")  # games already there aren't new
 
 
-STEPS = [_1_games_seen_at]
+def _2_dlc_kind(c: Connection):
+    for table in ("games", "library_roots"):
+        if "kind" not in _columns(c, table):  # create_all made the table with it if it was missing
+            c.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN kind VARCHAR(8) NOT NULL DEFAULT 'game'")
+    c.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_games_kind ON games (kind)")
+
+
+STEPS = [_1_games_seen_at, _2_dlc_kind]
 
 
 def upgrade(engine: Engine):

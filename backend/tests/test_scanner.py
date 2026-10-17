@@ -17,8 +17,14 @@ def test_detection(library):
     assert set(found) == {"Example Game (PPSA01234)", "Other_PPSA05555.exfat", "fake.ffpfs", "Old CUSA00001.pkg",
                           "renamed.pkg", "Broken PPSA03333.pkg", "Archived CUSA00002.7z.001", "Lost.part2.rar",
                           "Half PPSA07777.exfat.part", "Copy (PPSA01234).ffpkg", "Comp PPSA04444.ffpfsc",
-                          "main.pkg"}  # backports, DLCs, unlockers and artbooks skipped
+                          "main.pkg", "addon.pkg", "unlocker.rar", "duplex-game.dlc.unlocker"}  # backports, artbooks skipped
     assert any("mislabeled" in w for w in found["main.pkg"].warnings)
+    assert {n for n, i in found.items() if i.kind == "dlc"} == {"addon.pkg", "unlocker.rar", "duplex-game.dlc.unlocker"}
+    addon = found["addon.pkg"]
+    assert (addon.detected_format, addon.title_id, addon.metadata_confidence) == ("ps5_pkg", "PPSA02222", "high")
+    unlocker = found["duplex-game.dlc.unlocker"]
+    assert (unlocker.detected_format, unlocker.title_id, unlocker.metadata_source) == ("unlocker", "PPSA02222", "unlocker_ini")
+    assert found["renamed.pkg"].kind == "game"
 
     dump = found["Example Game (PPSA01234)"]
     assert (dump.detected_format, dump.title_id, dump.version) == ("folder_dump", "PPSA01234", "01.020.000")
@@ -55,12 +61,12 @@ def test_scan_sync_statuses_and_missing(library):
         db.execute(delete(Game))
         db.execute(delete(LibraryRoot))
         db.add(LibraryRoot(path=str(library), exclude_patterns=["skip"]))
-        stale = str(library / "Rel.PS5-PPSA02222[FPKG]" / "DLCs" / "addon.pkg")
+        stale = str(library / "Rel.PS5-PPSA02222[FPKG]" / "backport (4.xx Only)" / "x-4xx.pkg")
         db.add(Game(source_path=stale, title="addon", format="ps5_pkg", source_fingerprint="x"))  # catalogued by an older scanner
         db.commit()
 
         report = scanner.run_scan(db)
-        assert len(report["added"]) == 12 and report["unknown"]
+        assert len(report["added"]) == 15 and report["unknown"]
         assert db.scalar(select(Game).where(Game.source_path == stale)) is None
         db.add(Game(source_path="/gone/root/x.pkg", title="orphan", format="ps5_pkg", source_fingerprint="x"))
         db.commit()
@@ -72,6 +78,14 @@ def test_scan_sync_statuses_and_missing(library):
         assert status["Example Game"] == "needs_attention"  # duplicate PPSA01234 with the .ffpkg copy
         assert status["Old Game"] == "needs_attention"  # package needs confirmation
         assert status["Half"] == "needs_attention"  # partial transfer
+        assert {g.kind for g in db.scalars(select(Game).where(Game.title_id == "PPSA02222"))} == {"game", "dlc"}
+        unlocker = db.scalar(select(Game).where(Game.format == "unlocker"))
+        assert "isn't in your library" not in unlocker.compatibility_reason  # renamed.pkg is its game
+        unlocker.title_id = "PPSA06666"
+        scanner.refresh_statuses(db)
+        assert unlocker.compatibility_status == "needs_attention"
+        assert "Its game (PPSA06666) isn't in your library." in unlocker.compatibility_reason
+        db.rollback()
         dump = db.scalar(select(Game).where(Game.format == "folder_dump"))
         assert dump.region == "EU"
 

@@ -203,6 +203,7 @@ class GameOut(BaseModel):
     parser_warnings: list[str]
     region: str | None
     version: str | None
+    kind: str  # game|dlc
     format: str
     image_subtype: str | None
     source_path: str
@@ -228,7 +229,9 @@ class GameOut(BaseModel):
     new: bool = False  # added in the last 30 days and not opened yet
 
 
-def _out(g: Game, installed: bool = False) -> GameOut:
+def _out(g: Game, installed: set[str] = frozenset()) -> GameOut:
+    """`installed`: title IDs on any console. DLC shares its game's title ID, so it's never marked installed."""
+    installed = g.kind == "game" and g.title_id in installed
     store = g.title_id and logos.store_info(g.title_id, cached=True) or None
     new = g.seen_at is None and g.created_at > now() - timedelta(days=30)
     return GameOut.model_validate(g).model_copy(update={"has_cover": bool(g.cover_path), "installed": installed, "store": store, "new": new})
@@ -264,7 +267,7 @@ def _game(db: Session, game_id: str) -> Game:
 def list_games(db: Session = Depends(get_db)):
     # ponytail: returns the whole library; filtering is client-side. Paginate past a few thousand titles.
     installed = _installed_title_ids(db)
-    return [_out(g, g.title_id in installed) for g in db.scalars(select(Game).order_by(Game.title))]
+    return [_out(g, installed) for g in db.scalars(select(Game).order_by(Game.title))]
 
 
 @api.get("/games/{game_id}", response_model=GameOut)
@@ -273,7 +276,7 @@ def get_game(game_id: str, db: Session = Depends(get_db)):
     if not g.seen_at:  # opening a game is what clears its "new" mark; installing or editing it starts here too
         g.seen_at = now()
         db.commit()
-    return _out(g, g.title_id in _installed_title_ids(db))
+    return _out(g, _installed_title_ids(db))
 
 
 @api.patch("/games/{game_id}", response_model=GameOut)
@@ -379,6 +382,7 @@ class RootIn(BaseModel):
     path: str
     enabled: bool = True
     exclude_patterns: list[str] = []
+    kind: Literal["game", "dlc"] = "game"
 
 
 class RootPatch(BaseModel):
@@ -409,7 +413,7 @@ def add_root(body: RootIn, db: Session = Depends(get_db)):
         raise HTTPException(400, {"error": "invalid_root", "message": f"Not a readable directory: {body.path}"})
     if db.scalar(select(LibraryRoot).where(LibraryRoot.path == path)):
         raise HTTPException(409, {"error": "duplicate_root", "message": "Root already added."})
-    r = LibraryRoot(path=path, enabled=body.enabled, exclude_patterns=body.exclude_patterns)
+    r = LibraryRoot(path=path, enabled=body.enabled, exclude_patterns=body.exclude_patterns, kind=body.kind)
     db.add(r)
     db.commit()
     return _root_out(r)

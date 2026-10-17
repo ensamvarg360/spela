@@ -3,7 +3,9 @@
 Layouts follow LibProsperoPKG (src/LibProsperoPkg/PKG/ProsperoPkgReader.cs):
 - PS4 package: CNT container at offset 0, magic \\x7fCNT.
 - PS5 package: FIH header, magic \\x7fFIH; embedded CNT offset is a little-endian u64 at 0x58.
-- CNT header is big-endian: entry count u32 @0x10, entry table offset u32 @0x18, content ID @0x40 (36 chars).
+- CNT header is big-endian: entry count u32 @0x10, entry table offset u32 @0x18, content ID @0x40 (36 chars),
+  content type u32 @0x74. PS5: 0x20 game, 0x21 add-on (checked on every package of a real library). PS4: 0x1A game,
+  0x1B add-on, 0x1C add-on license.
 - Entry record (0x20 bytes, BE): id, name offset, flags1, flags2, data offset, data size.
   Offsets are relative to the CNT start. flags1 & 0x80000000 = encrypted.
 - Entry 0x1000 = param.sfo (PS4), 0x2000 = param.json (PS5).
@@ -16,6 +18,7 @@ from dataclasses import dataclass, field
 FIH_MAGIC, CNT_MAGIC, MPKG_MAGIC = b"\x7fFIH", b"\x7fCNT", b"PS5MPKG1"
 ENTRY_PARAM_SFO, ENTRY_PARAM_JSON = 0x1000, 0x2000
 MAX_PARAM_SIZE = 1 << 20
+DLC_CONTENT_TYPES = {0x21, 0x1B, 0x1C}
 PLATFORM_PREFIX = {"ps5_pkg": "PPSA", "ps4_pkg": "CUSA"}
 CONTENT_ID_RE = re.compile(r"^[A-Z]{2}\d{4}-([A-Z]{4}\d{5})_\d{2}-[A-Z0-9]{16}$")
 REGIONS = {"U": "US", "E": "EU", "J": "JP", "H": "Asia", "K": "KR", "I": "INT"}
@@ -32,12 +35,13 @@ class PkgMetadata:
     region: str | None = None
     min_firmware: str | None = None
     multipart: bool = False
+    dlc: bool = False  # an add-on (DLC) package, from the CNT content type
     source: str = "none"  # ps5_cnt|ps5_param_json|ps4_cnt|ps4_param_sfo|none
     confidence: str = "unknown"  # high|medium|low|unknown
     warnings: list[str] = field(default_factory=list)
 
 
-def _cnt(f, base: int) -> tuple[str, dict[int, tuple[int, int, int]]]:
+def _cnt(f, base: int) -> tuple[str, int, dict[int, tuple[int, int, int]]]:
     f.seek(base)
     hdr = f.read(0x80)
     if hdr[:4] != CNT_MAGIC:
@@ -46,6 +50,7 @@ def _cnt(f, base: int) -> tuple[str, dict[int, tuple[int, int, int]]]:
     if count > 0x10000:
         raise ValueError("CNT entry count out of range")
     content_id = hdr[0x40:0x64].split(b"\0")[0].decode("ascii", "replace")
+    content_type = struct.unpack_from(">I", hdr, 0x74)[0]
     f.seek(base + table)
     raw = f.read(count * 0x20)
     if len(raw) < count * 0x20:
@@ -54,7 +59,7 @@ def _cnt(f, base: int) -> tuple[str, dict[int, tuple[int, int, int]]]:
     for i in range(count):
         eid, _, flags1, _, off, size = struct.unpack_from(">6I", raw, i * 0x20)
         entries[eid] = (flags1, base + off, size)
-    return content_id, entries
+    return content_id, content_type, entries
 
 
 def _entry(f, entries, eid: int, name: str, warnings: list[str]) -> bytes | None:
@@ -109,12 +114,12 @@ def parse_pkg(path: str) -> PkgMetadata:
             return meta
 
         try:
-            cid, entries = _cnt(f, base)
+            cid, content_type, entries = _cnt(f, base)
         except (ValueError, struct.error, OSError) as e:
             meta.warnings.append(f"{'PS5' if meta.platform == 'ps5_pkg' else 'PS4'} CNT metadata could not be parsed: {e}.")
             return meta
 
-        meta.content_id = cid
+        meta.content_id, meta.dlc = cid, content_type in DLC_CONTENT_TYPES
         m = CONTENT_ID_RE.match(cid)
         if m and _title_id_ok(meta, m[1]):
             meta.title_id, meta.source, meta.confidence = m[1], meta.platform[:3] + "_cnt", "high"

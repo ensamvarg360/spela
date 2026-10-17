@@ -95,7 +95,7 @@ def _size(folder: Path) -> int:
 
 
 def extract(archive: Path, unpacked: int, name: str, job_id: str, progress: ProgressCallback, stop: Event) -> scanner.Item:
-    """Extracts into staging/job-<id>/<name> and returns the one folder dump or disc image found there.
+    """Extracts into staging/job-<id>/<name> and returns the one folder dump, disc image or DLC unlocker found there.
     bsdtar refuses absolute paths and `..` entries; links are refused here, so nothing points outside staging."""
     dest = job_dir(job_id) / name
     dest.mkdir(parents=True)
@@ -119,11 +119,12 @@ def extract(archive: Path, unpacked: int, name: str, job_id: str, progress: Prog
             p = Path(d, n)
             if p.is_symlink() or p.is_junction():
                 raise AdapterError("archive_unsafe", "The archive contains links, which aren't allowed. Nothing was installed.")
-    found = scanner.detect_folder(dest)  # the dump may sit at the archive's top level
+    # the dump may sit at the archive's top level
+    found = next((i for det in scanner.FOLDER_DETECTORS if (i := det(dest))), None)
     items = [found] if found else scanner.scan_root(str(dest))[0]
-    games = [i for i in items if i.detected_format in ("folder_dump", "image") and not i.partial]
+    games = [i for i in items if i.detected_format in ("folder_dump", "image", "unlocker") and not i.partial]
     if len(games) != 1:
         what = ", ".join(sorted({i.detected_format for i in items})) or "nothing recognizable"
-        raise AdapterError("archive_contents", f"The archive must hold exactly one folder dump or disc image. "
+        raise AdapterError("archive_contents", f"The archive must hold exactly one folder dump, disc image or DLC unlocker. "
                                                f"Found {len(games)} ({what}).")
     return games[0]

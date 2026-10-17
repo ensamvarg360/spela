@@ -12,6 +12,7 @@ export interface Game {
   parser_warnings: string[];
   region: string | null;
   version: string | null;
+  kind: Kind;
   format: string;
   image_subtype: string | null;
   source_path: string;
@@ -46,8 +47,11 @@ export interface StoreInfo {
   age_rating: string | null;
 }
 
+export type Kind = "game" | "dlc";
+
 export interface Root {
   id: string;
+  kind: Kind;
   path: string;
   enabled: boolean;
   exclude_patterns: string[];
@@ -214,10 +218,12 @@ export const SOURCE_LABEL: Record<string, string> = {
   ps4_cnt: "CNT",
   ps5_param_json: "param.json",
   ps4_param_sfo: "param.sfo",
+  unlocker_ini: "dlc_emu.ini",
   sidecar: "Sidecar",
   filename: "Filename",
   manual: "Manual",
   none: "Unknown",
 };
 
-export const formatLabel = (g: Game) => (g.image_subtype ? `image · ${g.image_subtype}` : g.format.replace("_", " "));
+export const formatLabel = (g: Game) =>
+  g.image_subtype ? `image · ${g.image_subtype}` : g.format === "unlocker" ? "DLC unlocker" : g.format.replace("_", " ");

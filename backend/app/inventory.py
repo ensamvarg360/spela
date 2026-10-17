@@ -49,7 +49,7 @@ async def refresh(db: Session, console: Console):
     db.flush()
 
     library: dict[str, Game] = {}  # title ID -> newest library copy
-    for g in db.scalars(select(Game).where(Game.title_id.is_not(None))):
+    for g in db.scalars(select(Game).where(Game.title_id.is_not(None), Game.kind == "game")):
         if g.title_id not in library or _ver(g.version) > _ver(library[g.title_id].version):
             library[g.title_id] = g
 

@@ -37,6 +37,13 @@ It copies under a hidden `.<name>.partial` name and renames it when the copy is 
 Folder dumps and disc images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) can be installed, and so can `.zip`, `.7z` and `.rar` archives (also split sets like `.7z.001`) that hold one of them. `.pkg` files can't: the console has no package installer. On firmware above 11.60 the app says so instead, since fake packages don't launch there yet; the limit is `PKG_MAX_FIRMWARE` in [backend/app/jobs.py](backend/app/jobs.py). An archive is first extracted on this PC, with Windows' own `tar.exe`, into a private staging folder (`staging` in the data folder, or `STAGING_DIR`), so the PC needs room for the unpacked game. The game's title ID is then read from its own `param.json`, and the staging copy is deleted when the install ends, also when it fails or is canceled. Multi-part RAR (`.part1.rar`) and spanned ZIP (`.z01`) sets, password-protected archives and archives with links in them can't be installed: extract those yourself.
 The helper must be running, so the app can check free space first. If the app or the connection stops mid-copy, the install shows *Interrupted*; queue it again, and the leftover partial copy is replaced.
 
+### DLC
+
+DLC shows on the **DLC** page, not in the library. Add the folder you keep it in under *DLC folders* in Settings. DLC that sits inside game folders is found as well, since what counts as DLC is read from the files themselves. The one exception is an archive: the app can't tell what's inside without extracting it, so an archive counts as DLC only in a DLC folder or under a folder named like `DLC`, `DLCs`, `*.DLC.Unlocker*` or `*.DLC.only*`.
+
+- **DLC unlockers** (a folder with `dlc_emu.ini` and `fakelib/`) can be installed. **Add to game** copies their files into the game's folder on the console and replaces files there with the same names, as the release notes ask. This needs the game installed as a folder dump through ShadowMountPlus. A disc image can't take extra files, so for a game installed as an image the app says so. To undo it, remove the game and install it again. An archive holding one unlocker folder is extracted first, like a game archive.
+- **DLC packages** (`.pkg`) can't be installed, for the same reason game packages can't (see above).
+
 ### Converting a folder dump to `.exfat`
 
 Open a folder dump and click **Convert to .exfat**. The app writes the folder into one exFAT disc image next to it (`<folder>.exfat`, with ` [PPSAxxxxx]` added when the folder name has no title ID, since an image's title ID comes from its file name). The image holds the folder's contents at its root, as ShadowMountPlus expects. It is written in plain Python ([backend/app/exfat.py](backend/app/exfat.py)), so no OSFMount, WSL or admin rights are needed, and the drive needs room for a second copy of the game. When it's done the image is scanned into the library with the folder's title, title ID and everything you set on it. The folder is never deleted: check the image, then delete the folder yourself. Until then both show *Duplicate title ID*.
@@ -124,6 +131,8 @@ Classification needs evidence from the file itself. The extension alone isn't en
 | `.ffpfs` / `.ffpfsc` | PFS / `PFSC` header, or an exFAT wrapper |
 | `.pkg` | `\x7fCNT` (PS4) or `\x7fFIH` (PS5). Title ID, content ID, title and version come from the CNT header and `param.sfo` / `param.json` ([backend/app/pkg.py](backend/app/pkg.py)). |
 | `.zip` `.7z` `.rar` `.001` | Archive magic |
+| DLC package | A `.pkg` whose CNT content type (u32 at 0x74) is add-on: `0x21` on PS5, `0x1B`/`0x1C` on PS4. Games are `0x20`/`0x1A`. |
+| DLC unlocker | A folder with `dlc_emu.ini`. The game's title ID comes from the content IDs listed in it. |
 
 Anything else is marked `unknown`, and its first 16 header bytes are saved under *Detection evidence* so a signature can be added in `SIGNATURES` in [backend/app/scanner.py](backend/app/scanner.py).
 A title ID that comes only from the file name is marked low confidence, and the game shows *Needs attention* until you confirm it on its detail page.

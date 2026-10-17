@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { api, appVersion, coverUrl, formatLabel, STATUS_LABEL, type Console, type Game, type StoreInfo } from "./api";
+import { api, appVersion, coverUrl, formatLabel, STATUS_LABEL, type Console, type Game, type Kind, type StoreInfo } from "./api";
 import { STATE_LABEL } from "./Installed";
 
 export type Sort = "title" | "recent" | "rating" | "released" | "size";
@@ -67,15 +67,16 @@ function Connection() {
   );
 }
 
-export default function Library({ view, setView }: { view: View; setView: (v: View) => void }) {
+/** The grid of games, or of DLC: DLC shares its game's title ID, so its tiles show the game's art. */
+export default function Library({ kind, view, setView }: { kind: Kind; view: View; setView: (v: View) => void }) {
   const [games, setGames] = useState<Game[] | null>(null);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({}); // filters showing all their values
   const [filtersOpen, setFiltersOpen] = useState(false); // phones only: the sidebar sits behind a button
 
   useEffect(() => {
-    api<Game[]>("/games").then(setGames, (e) => setError(e.message));
-  }, []);
+    api<Game[]>("/games").then((gs) => setGames(gs.filter((g) => g.kind === kind)), (e) => setError(e.message));
+  }, [kind]);
   // a tile's store lookup, so the sidebar's genres, years and ratings fill in as tiles come into view
   const changed = (id: string, changes: Partial<Game>) => setGames((gs) => gs && gs.map((g) => (g.id === id ? { ...g, ...changes } : g)));
 
@@ -101,7 +102,13 @@ export default function Library({ view, setView }: { view: View; setView: (v: Vi
   if (error) return <p className="error" role="alert">{error}</p>;
   if (!games) return <p className="muted">Loading…</p>;
   if (!games.length)
-    return (
+    return kind === "dlc" ? (
+      <div className="empty card">
+        <h2>No DLC yet</h2>
+        <p>Add your DLC folder in <a href="#/settings">Settings</a>, then run a scan. DLC packages and DLC unlocker folders
+          (with a <code>dlc_emu.ini</code>) are found in game folders too.</p>
+      </div>
+    ) : (
       <div className="empty card">
         <h2>Your library is empty</h2>
         <p>Add a library folder in <a href="#/settings">Settings</a>, then run a scan.</p>
@@ -115,6 +122,7 @@ export default function Library({ view, setView }: { view: View; setView: (v: Vi
   const clear = () => setView({ ...view, q: "", picked: {} });
   const chips = Object.entries(view.picked).flatMap(([key, vs]) => vs.map((v) => [key, v]));
   const q = view.q.trim();
+  const noun = kind === "dlc" ? "DLC" : "games";
 
   return (
     <div className="browse">
@@ -154,7 +162,7 @@ export default function Library({ view, setView }: { view: View; setView: (v: Vi
             ))}
             {(chips.length > 0 || q) && <li><button className="link" onClick={clear}>Clear all</button></li>}
           </ul>
-          <span className="muted">{shown.length === games.length ? `${games.length} games` : `${shown.length} of ${games.length} games`}</span>
+          <span className="muted">{shown.length === games.length ? `${games.length} ${noun}` : `${shown.length} of ${games.length} ${noun}`}</span>
           <label className="sort">
             Sort by
             <select value={view.sort} onChange={(e) => setView({ ...view, sort: e.target.value as Sort })}>
@@ -168,7 +176,7 @@ export default function Library({ view, setView }: { view: View; setView: (v: Vi
         </div>
         {shown.length
           ? <ul className="games">{shown.map((g) => <li key={g.id}><Tile game={g} onChange={changed} /></li>)}</ul>
-          : <p className="muted nothing">No games match. <button className="link" onClick={clear}>Clear the filters</button></p>}
+          : <p className="muted nothing">No {noun} match. <button className="link" onClick={clear}>Clear the filters</button></p>}
       </section>
     </div>
   );

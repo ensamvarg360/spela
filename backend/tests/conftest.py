@@ -19,13 +19,14 @@ def write(path, data: bytes = b""):
     return path
 
 
-def cnt(content_id: str, entries: dict[int, bytes], encrypted=()) -> bytes:
+def cnt(content_id: str, entries: dict[int, bytes], encrypted=(), content_type=0x20) -> bytes:
     """Minimal CNT container: header, 0x20-byte BE entry records, then entry data (offsets CNT-relative)."""
     hdr = bytearray(0x100)
     hdr[:4] = b"\x7fCNT"
     struct.pack_into(">I", hdr, 0x10, len(entries))
     struct.pack_into(">I", hdr, 0x18, 0x100)
     hdr[0x40:0x40 + len(content_id)] = content_id.encode()
+    struct.pack_into(">I", hdr, 0x74, content_type)
     table, body, data_off = b"", b"", 0x100 + len(entries) * 0x20
     for eid, d in entries.items():
         flags1 = 0x80000000 if eid in encrypted else 0
@@ -57,6 +58,16 @@ PARAM_JSON = json.dumps({
     "applicationCategoryType": 0, "requiredSystemSoftwareVersion": "0x0400000000000000",
     "localizedParameters": {"defaultLanguage": "en-US", "en-US": {"titleName": "Native Game"}},
 }).encode()
+
+
+UNLOCKER_INI = b"""[PSAC]
+content_id=EP0001-PPSA02222_00-ADDON00000000001
+download_status=INSTALLED
+
+[PSAL]
+content_id=EP0001-PPSA02222_00-ADDON00000000002
+download_status=NO_EXTRA_DATA
+"""
 
 
 @pytest.fixture(autouse=True)
@@ -95,9 +106,14 @@ def library(tmp_path):
     write(tmp_path / "skip" / "Excluded PPSA09999.exfat", EXFAT)
     # Release extras that must never be catalogued.
     write(tmp_path / "Rel.PS5-PPSA02222[FPKG]" / "backport (4.xx Only)" / "x-4xx.pkg", ps5_pkg(b"junk"))
-    write(tmp_path / "Rel.PS5-PPSA02222[FPKG]" / "DLCs" / "addon.pkg", ps5_pkg(b"junk"))
-    write(tmp_path / "Game.DLC.Unlocker.PS5-GRP" / "unlocker.rar", b"Rar!\x1a\x07")
     write(tmp_path / "Mini_Artbook_PPSA05999-app0" / "sce_sys" / "param.json", b"{}")
+    # DLC: an add-on package (CNT content type 0x21), an unlocker folder, and an archive in a DLC-named folder.
+    write(tmp_path / "Rel.PS5-PPSA02222[FPKG]" / "DLCs" / "addon.pkg", ps5_pkg(cnt(
+        "EP0001-PPSA02222_00-ADDON00000000001", {0x2000: json.dumps({"titleId": "PPSA02222"}).encode()}, content_type=0x21)))
+    write(tmp_path / "Game.DLC.Unlocker.PS5-GRP" / "unlocker.rar", b"Rar!\x1a\x07")
+    unlocker = tmp_path / "duplex-game.dlc.unlocker"
+    write(unlocker / "dlc_emu.ini", UNLOCKER_INI)
+    write(unlocker / "fakelib" / "libSceAppContent.sprx", b"sprx")
     # Mislabeled release: folder says PPSA08888, the package inside is PPSA02222.
     write(tmp_path / "Wrong.PS5-PPSA08888[FPKG]" / "main.pkg", ps5_pkg(cnt("EP0001-PPSA02222_00-EXAMPLEGAME00000", {0x2000: PARAM_JSON})))
     write(tmp_path / "notes.txt", b"hello")
