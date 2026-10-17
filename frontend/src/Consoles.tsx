@@ -18,6 +18,7 @@ function Facts({ c, version, busy, act }: { c: Console; version: string; busy: b
           <button className="small" disabled={busy || c.state === "standby"} title={c.state === "standby" ? "Wake the console first." : undefined}
             onClick={() => act("helper")}>{!helper || helper === "missing" ? "Install helper" : "Update helper"}</button>
         )}
+        {!helperOk && c.connection_type !== "mock" && <span className="muted"> Sent by itself once the console's ELF loader is running.</span>}
       </dd>
       <dt>PS5 app</dt>
       <dd>

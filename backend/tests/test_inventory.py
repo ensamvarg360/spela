@@ -245,3 +245,46 @@ def test_health_check_reads_inventory_once_online():
         inventory.forget(db, con.id)
         db.delete(db.get(Console, con.id))
         db.commit()
+
+
+def test_helper_is_sent_again_after_a_reboot(monkeypatch):
+    """A console that's on without the helper gets it sent once its ELF loader is up, at most once a minute."""
+    from app import inventory
+    from app.consoles import ConsoleStatus, MockConsoleAdapter
+    from app.models import AuditLog
+
+    class Rebooted(MockConsoleAdapter):
+        sent = 0
+        loader_up = False
+
+        async def connect(self):
+            if Rebooted.sent:
+                return await super().connect()
+            return ConsoleStatus("degraded", "The console is on, but the helper isn't running.", {"helper": "missing"})
+
+        async def install_helper(self):
+            if not Rebooted.loader_up:
+                raise AdapterError("loader_unreachable", "No loader.")
+            Rebooted.sent += 1
+            return __version__
+
+    with SessionLocal() as db:
+        con = Console(name="Rebooted", ip_address="10.0.0.2", connection_type="helper", port=7735)
+        db.add(con)
+        db.commit()
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: Rebooted(c))
+    assert asyncio.run(inventory.check(con.id))["state"] == "degraded"  # loader not up yet
+    Rebooted.loader_up = True
+    assert asyncio.run(inventory.check(con.id))["state"] == "degraded"  # tried a moment ago: waits a minute
+    monkeypatch.setitem(inventory._auto_helper_at, con.id, 0.0)
+    monkeypatch.setattr(inventory.time, "monotonic", lambda: 1e9)
+    assert asyncio.run(inventory.check(con.id))["state"] == "online"
+    assert Rebooted.sent == 1
+    with SessionLocal() as db:
+        log = db.scalars(select(AuditLog).where(AuditLog.console_id == con.id)).all()
+        assert [(a.action, a.details["automatic"]) for a in log] == [("helper_install", True)]
+        inventory.forget(db, con.id)
+        for a in log:
+            db.delete(a)
+        db.delete(db.get(Console, con.id))
+        db.commit()

@@ -7,13 +7,15 @@ import time
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from . import config, credentials
-from .consoles import TITLE_ID, AdapterError, ConsoleAdapter, get_adapter
+from . import __version__, config, credentials
+from .consoles import TITLE_ID, AdapterError, ConsoleAdapter, ConsoleStatus, get_adapter
 from .database import SessionLocal
-from .models import Console, Drive, Game, InstalledGame, now
+from .models import AuditLog, Console, Drive, Game, InstalledGame, now
 
 BACKOFF = (2, 5, 10, 30, 60)  # seconds between checks after 1, 2, 3... failures in a row
 status: dict[str, dict] = {}  # console id -> {state, message, checked_at, failures}; live, so in memory
+AUTO_HELPER_SECONDS = 60  # between tries to send the helper to a console that's on without it
+_auto_helper_at: dict[str, float] = {}
 
 
 def adapter_for(db: Session, console: Console) -> ConsoleAdapter:
@@ -108,7 +110,10 @@ async def check(console_id: str) -> dict:
         if not console:
             return {"state": "unknown"}
         try:
-            result = await adapter_for(db, console).connect()
+            adapter = adapter_for(db, console)
+            result = await adapter.connect()
+            if await _auto_helper(db, console, adapter, result):
+                result = await adapter.connect()
         except AdapterError as e:  # unsupported connection type, unreadable password
             record(console_id, "degraded", e.message)
             return status[console_id]
@@ -122,6 +127,25 @@ async def check(console_id: str) -> dict:
                 except AdapterError as e:
                     record(console_id, "degraded", e.message)
         return status[console_id]
+
+
+async def _auto_helper(db: Session, console: Console, adapter: ConsoleAdapter, result: ConsoleStatus) -> bool:
+    """The helper stops when the PS5 restarts. Once the console is on again and the jailbreak's ELF loader is up,
+    this sends the helper (or replaces an outdated one) without the user clicking Install helper. True when it did.
+    The console is on when it's online or degraded; offline and rest mode can't run payloads."""
+    if console.connection_type not in ("helper", "ftp") or result.state not in ("online", "degraded")             or result.helper_status.get("helper") == __version__:
+        return False
+    if time.monotonic() - _auto_helper_at.get(console.id, float("-inf")) < AUTO_HELPER_SECONDS:
+        return False
+    _auto_helper_at[console.id] = time.monotonic()
+    try:
+        version = await adapter.install_helper()
+    except AdapterError:  # usually the loader isn't running yet; tried again in a minute
+        return False
+    # Successes only: a failure every minute until the jailbreak runs would bury the audit log.
+    db.add(AuditLog(action="helper_install", console_id=console.id, result="success", details={"version": version, "automatic": True}))
+    db.commit()
+    return True
 
 
 async def monitor():
