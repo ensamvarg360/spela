@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, formatBytes, formatLabel, SOURCE_LABEL, STATUS_LABEL, type Console, type Drive, type Game, type Job } from "./api";
+import { api, formatBytes, formatLabel, session, SOURCE_LABEL, STATUS_LABEL, type Console, type Drive, type Game, type Job } from "./api";
 import { Cover } from "./Library";
 import { when } from "./Installed";
 
@@ -227,6 +227,7 @@ export default function GameDetail({ id }: { id: string }) {
     <div className="detail">
       <aside>
         <Cover key={game.updated_at} game={game} />
+        {!session.readOnly && <>
         <label className="button secondary">
           Change cover
           <input type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
@@ -234,6 +235,7 @@ export default function GameDetail({ id }: { id: string }) {
         <button className="link" onClick={() => run(api<Game>(`/games/${id}`, { method: "PATCH", json: { favorite: !game.favorite } }), game.favorite ? "Removed from favorites." : "Added to favorites.")}>
           {game.favorite ? "★ Favorite" : "☆ Add to favorites"}
         </button>
+        </>}
       </aside>
 
       <section>
@@ -243,9 +245,11 @@ export default function GameDetail({ id }: { id: string }) {
           <strong>{STATUS_LABEL[game.compatibility_status]}</strong>
           {game.compatibility_reason && <span> — {game.compatibility_reason}</span>}
         </div>
-        <Install game={game} />
-        <HomeLogo game={game} />
-        <Convert game={game} />
+        {!session.readOnly && <>
+          <Install game={game} />
+          <HomeLogo game={game} />
+          <Convert game={game} />
+        </>}
 
         {(game.metadata_confidence === "low" || game.metadata_confidence === "unknown") && (
           <div className="panel needs_attention" role="alert">
@@ -253,7 +257,7 @@ export default function GameDetail({ id }: { id: string }) {
             {game.title_id
               ? `Title ID was derived from the ${game.metadata_source} because package metadata could not be read. Verify before installation.`
               : "No title ID could be identified. Enter it below."}
-            {game.title_id && (
+            {game.title_id && !session.readOnly && (
               <div>
                 <button className="secondary" onClick={() => run(api<Game>(`/games/${id}`, { method: "PATCH", json: { title_id: game.title_id } }), "Title ID confirmed.")}>
                   Confirm {game.title_id} is correct
@@ -278,6 +282,7 @@ export default function GameDetail({ id }: { id: string }) {
         </dl>
 
         <form className="edit" onSubmit={save}>
+          <fieldset disabled={session.readOnly}>
           <h2>Metadata</h2>
           <div className="fields">
             {TEXT_FIELDS.map(([k, label]) => (
@@ -314,10 +319,11 @@ export default function GameDetail({ id }: { id: string }) {
             <textarea rows={3} value={val("provenance_notes") ?? ""} onChange={(e) => set("provenance_notes", e.target.value)} />
           </label>
 
-          <div className="actions">
+          </fieldset>
+          {!session.readOnly && <div className="actions">
             <button type="submit" disabled={!Object.keys(draft).length}>Save</button>
             {msg && <span className={msg.error ? "error" : "muted"} role="status">{msg.text}</span>}
-          </div>
+          </div>}
         </form>
 
         {game.parser_warnings.length > 0 && (
@@ -332,7 +338,7 @@ export default function GameDetail({ id }: { id: string }) {
           <pre>{JSON.stringify(game.detection_evidence, null, 2)}</pre>
         </details>
 
-        <button className="danger" onClick={remove}>Remove from catalog</button>
+        {!session.readOnly && <button className="danger" onClick={remove}>Remove from catalog</button>}
       </section>
     </div>
   );

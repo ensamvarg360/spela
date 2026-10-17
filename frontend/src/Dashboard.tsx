@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, appVersion, formatBytes, type AuditEntry, type Console, type Drive, type Game, type InstalledGame } from "./api";
+import { api, appVersion, formatBytes, session, type AuditEntry, type Console, type Drive, type Game, type InstalledGame } from "./api";
 import { ACTION_LABEL } from "./AuditLog";
 import { Jobs, STATE_BADGE, STATE_LABEL, when } from "./Installed";
 import { useScan } from "./Library";
@@ -39,7 +39,7 @@ function ConsoleCard({ c, version, onRefreshed }: { c: Console; version: string;
         <h2 className="inline-title">{c.name}</h2>
         <span className={`badge ${STATE_BADGE[c.state]}`}>{STATE_LABEL[c.state]}</span>
         <span className="spacer" />
-        <button className="secondary small" disabled={busy || c.state !== "online"} onClick={refresh}>{busy ? "Reading…" : "Refresh inventory"}</button>
+        {!session.readOnly && <button className="secondary small" disabled={busy || c.state !== "online"} onClick={refresh}>{busy ? "Reading…" : "Refresh inventory"}</button>}
       </div>
       {c.status_message && <p className="muted">{c.status_message}</p>}
       <dl className="facts">
@@ -77,7 +77,7 @@ export default function Dashboard() {
 
   const loadGames = () => api<Game[]>("/games").then(setGames, (e) => setError(e.message));
   const loadConsoles = () => api<Console[]>("/consoles").then(setConsoles, (e) => setError(e.message));
-  const loadProblems = () => api<AuditEntry[]>("/maintenance/audit-logs").then((rows) => setProblems(
+  const loadProblems = () => session.readOnly ? Promise.resolve() : api<AuditEntry[]>("/maintenance/audit-logs").then((rows) => setProblems(
     rows.filter((r) => (r.result === "failed" || r.result === "blocked") && Date.now() - new Date(r.created_at).getTime() < WEEK).slice(0, 8)), () => {});
   const [scan, setScan] = useScan(() => (loadGames(), loadProblems()));
   useEffect(() => {
@@ -108,7 +108,7 @@ export default function Dashboard() {
       </ul>
 
       <div className="toolbar">
-        <button onClick={startScan} disabled={scan?.running}>{scan?.running ? <><span className="spinner" aria-hidden />Scanning…</> : "Scan library"}</button>
+        {!session.readOnly && <button onClick={startScan} disabled={scan?.running}>{scan?.running ? <><span className="spinner" aria-hidden />Scanning…</> : "Scan library"}</button>}
         <span className="muted">{scan?.finished_at ? `Last scan ${new Date(scan.finished_at).toLocaleString()}` : "No scan since the app started."}</span>
         {error && <span className="error" role="alert">{error}</span>}
       </div>

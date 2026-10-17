@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { api, appVersion, coverUrl, formatLabel, STATUS_LABEL, type Console, type Game, type Job, type Kind, type ScanStatus, type StoreInfo } from "./api";
+import { api, appVersion, coverUrl, formatLabel, session, STATUS_LABEL, type Console, type Game, type Job, type Kind, type ScanStatus, type StoreInfo } from "./api";
 import { STATE_LABEL } from "./Installed";
 
 export type Sort = "title" | "recent" | "rating" | "released" | "size";
@@ -246,7 +246,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
             {(chips.length > 0 || q) && <li><button className="link" onClick={clear}>Clear all</button></li>}
           </ul>
           <span className="muted">{shown.length === games.length ? `${games.length} ${noun}` : `${shown.length} of ${games.length} ${noun}`}</span>
-          {!picked && <button className="secondary small" onClick={() => setPicked(new Set())}>Select</button>}
+          {!picked && !session.readOnly && <button className="secondary small" onClick={() => setPicked(new Set())}>Select</button>}
           <label className="sort">
             Sort by
             <select value={view.sort} onChange={(e) => setView({ ...view, sort: e.target.value as Sort })}>
@@ -306,7 +306,7 @@ function Tile({ game, onChange, picked, onPick }: { game: Game; onChange: (id: s
       </div>
     </a>
     {/* a sibling, not inside the link: a button can't be nested in a link */}
-    {picked === null && <button className="fav" aria-pressed={game.favorite} title={game.favorite ? "Remove from favorites" : "Add to favorites"}
+    {picked === null && !session.readOnly && <button className="fav" aria-pressed={game.favorite} title={game.favorite ? "Remove from favorites" : "Add to favorites"}
       aria-label={`Favorite ${game.title}`} onClick={favorite}>
       <svg viewBox="0 0 24 24" aria-hidden><path d="M12 2.8l2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3-4.6-4.4 6.3-.9z" /></svg>
     </button>}

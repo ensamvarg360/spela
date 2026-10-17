@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import { api, appVersion, formatBytes, JOB_ACTIVE, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal } from "./api";
+import { api, appVersion, formatBytes, JOB_ACTIVE, session, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal } from "./api";
 
 const JOB_LABEL: Record<JobStatus, [string, string]> = {
   queued: ["Waiting", "unknown"], preflight: ["Checking", "unknown"], extracting: ["Extracting", "needs_attention"], transferring: ["Copying", "needs_attention"],
@@ -49,7 +49,7 @@ export function Jobs({ consoleId, onDone }: { consoleId: string; onDone: () => v
                 </>
               )}
               <span className="muted">{j.message}</span>
-              {JOB_ACTIVE.includes(j.status) && <button className="small secondary" onClick={() => cancel(j)}>Cancel</button>}
+              {JOB_ACTIVE.includes(j.status) && !session.readOnly && <button className="small secondary" onClick={() => cancel(j)}>Cancel</button>}
             </li>
           );
         })}
@@ -287,7 +287,7 @@ export default function Installed() {
         ) : <h2 className="inline-title">{c.name}</h2>}
         <span className={`badge ${STATE_BADGE[c.state]}`}>{STATE_LABEL[c.state]}</span>
         {c.status_message && <span className="muted">{c.status_message}</span>}
-        {(helperBad || consoleAppBad) && <a href="#/settings">Update needed in Settings</a>}
+        {(helperBad || consoleAppBad) && !session.readOnly && <a href="#/settings">Update needed in Settings</a>}
         <span className="spacer" />
         {drives.map((d) => (
           <details key={d.id} className="drive" name="drive">{/* same name: the browser keeps only one open */}
@@ -301,12 +301,12 @@ export default function Installed() {
               {d.total_bytes > 0 && <span>{formatBytes(d.total_bytes - d.free_bytes)} used of {formatBytes(d.total_bytes)}</span>}
               <span className="muted">{d.installed_count} installed · last seen {when(d.last_seen_at)}</span>
               <label className="check">
-                <input type="checkbox" checked={d.is_install_target} onChange={(e) => setTarget(d, e.target.checked)} /> Allow installs here
+                <input type="checkbox" disabled={session.readOnly} checked={d.is_install_target} onChange={(e) => setTarget(d, e.target.checked)} /> Allow installs here
               </label>
             </div>
           </details>
         ))}
-        <button disabled={busy} onClick={rescan}>{busy ? "Working…" : "Refresh inventory"}</button>
+        {!session.readOnly && <button disabled={busy} onClick={rescan}>{busy ? "Working…" : "Refresh inventory"}</button>}
       </div>
       {error && <p className="error" role="alert">{error}</p>}
 
@@ -333,13 +333,13 @@ export default function Installed() {
               return (
                 <li key={g.id}>
                   {g.game_id ? <a className="game" href={`#/game/${g.game_id}`} title={tip}>{body}</a> : <div className="game" title={tip}>{body}</div>}
-                  {g.install_route === "shadowmountplus" && !g.removing && !g.moving && g.status !== "orphaned_icon" && drives.length > 1 && (
+                  {g.install_route === "shadowmountplus" && !g.removing && !g.moving && g.status !== "orphaned_icon" && drives.length > 1 && !session.readOnly && (
                     <button className="fav move" disabled={c.state !== "online"} title={c.state !== "online" ? "The console must be online." : "Move to another drive"}
                       aria-label={`Move ${g.title} to another drive`} onClick={() => setMoving(g)}>
                       <svg viewBox="0 0 24 24" aria-hidden><path d="M4 9h13l-4-4M20 15H7l4 4" /></svg>
                     </button>
                   )}
-                  {g.install_route === "shadowmountplus" && !g.removing && !g.moving && (
+                  {g.install_route === "shadowmountplus" && !g.removing && !g.moving && !session.readOnly && (
                     <button className="fav" disabled={c.state !== "online"} title={c.state !== "online" ? "The console must be online." : "Remove from console"}
                       aria-label={`Remove ${g.title} from console`} onClick={() => setRemoving(g)}>
                       <svg viewBox="0 0 24 24" aria-hidden><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" /></svg>

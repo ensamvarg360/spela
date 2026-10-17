@@ -89,21 +89,36 @@ async def error_body(request: Request, exc: StarletteHTTPException):
     return JSONResponse(body, status_code=exc.status_code)
 
 
-def _password_salt() -> str | None:
-    """Stored in each session at login, so resetting the password (deleting its file) logs every device out."""
+# admin: everything. viewer: looks at everything, changes nothing (optional, project.md §2).
+PASSWORD_FILES = {"admin": config.PASSWORD_FILE, "viewer": config.VIEWER_PASSWORD_FILE}
+
+
+def _password_salt(role: str = "admin") -> str | None:
+    """Stored in each session at login, so resetting a password (deleting or replacing its file) logs out every
+    device that logged in with it."""
     try:
-        return config.PASSWORD_FILE.read_text().split(":")[0]
+        return PASSWORD_FILES[role].read_text().split(":")[0]
     except OSError:
         return None
 
 
-def _log_in(request: Request):
-    request.session.update(user="admin", pw=_password_salt())
+def _log_in(request: Request, role: str = "admin"):
+    request.session.update(user=role, pw=_password_salt(role))
 
 
 def require_user(request: Request):
-    if not request.session.get("user") or request.session.get("pw") != _password_salt():
+    role = request.session.get("user")
+    if role not in PASSWORD_FILES or not request.session.get("pw") or request.session["pw"] != _password_salt(role):
         raise HTTPException(401, {"error": "authentication_required", "message": "Log in first."})
+    if role == "viewer" and request.method not in ("GET", "HEAD"):
+        raise HTTPException(403, {"error": "read_only", "message": "You're logged in to look only. Log in with the admin "
+                                                                   "password to change anything."})
+
+
+def require_admin(request: Request):
+    """For what a view-only login mustn't even read: the PC's folders, the activity log (it holds IP addresses)."""
+    if request.session.get("user") != "admin":
+        raise HTTPException(403, {"error": "admin_only", "message": "This needs the admin password."})
 
 
 public = APIRouter(prefix="/api/v1")
@@ -127,9 +142,17 @@ def _hash(password: str, salt: bytes) -> bytes:
     return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000)
 
 
-def _check_password(password: str) -> bool:
-    salt, digest = config.PASSWORD_FILE.read_text().split(":")
+def _check_password(password: str, role: str = "admin") -> bool:
+    try:
+        salt, digest = PASSWORD_FILES[role].read_text().split(":")
+    except OSError:  # no view-only password set
+        return False
     return hmac.compare_digest(_hash(password, bytes.fromhex(salt)), bytes.fromhex(digest))
+
+
+def _write_password(role: str, password: str):
+    salt = os.urandom(16)
+    PASSWORD_FILES[role].write_text(f"{salt.hex()}:{_hash(password, salt).hex()}")
 
 
 def _require_setup_done():
@@ -161,15 +184,15 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     recent = [t for t in _failures.get(ip, []) if time.time() - t < 60]
     if len(recent) >= 5:
         raise HTTPException(429, {"error": "rate_limited", "message": "Too many attempts. Wait a minute."})
-    ok = _check_password(body.password)
-    db.add(AuditLog(action="login", result="success" if ok else "failed", details={"ip": ip}))
+    role = next((r for r in PASSWORD_FILES if _check_password(body.password, r)), None)
+    db.add(AuditLog(action="login", result="success" if role else "failed", details={"ip": ip, **({"role": role} if role else {})}))
     db.commit()
-    if not ok:
+    if not role:
         _failures[ip] = recent + [time.time()]
         raise HTTPException(401, {"error": "invalid_credentials", "message": "Wrong password."})
     _failures.pop(ip, None)
-    _log_in(request)
-    return {"user": "admin"}
+    _log_in(request, role)
+    return {"user": role}
 
 
 @public.post("/auth/logout")
@@ -183,6 +206,29 @@ def me(request: Request):
     _require_setup_done()
     require_user(request)
     return {"user": request.session["user"]}
+
+
+class ViewerIn(BaseModel):
+    password: str | None = Field(None, min_length=8, max_length=200)  # null turns view-only access off
+
+
+@api.get("/auth/viewer", dependencies=[Depends(require_admin)])
+def viewer_status():
+    return {"enabled": config.VIEWER_PASSWORD_FILE.exists()}
+
+
+@api.post("/auth/viewer")
+def set_viewer(body: ViewerIn, db: Session = Depends(get_db)):
+    """Sets (or replaces, or with null removes) the view-only password. Either way, devices using the old one are logged out."""
+    if body.password is None:
+        config.VIEWER_PASSWORD_FILE.unlink(missing_ok=True)
+    elif _check_password(body.password):
+        raise HTTPException(409, {"error": "same_as_admin", "message": "Choose a different password from the admin password."})
+    else:
+        _write_password("viewer", body.password)
+    db.add(AuditLog(action="viewer_password", result="success", details={"enabled": body.password is not None}))
+    db.commit()
+    return viewer_status()
 
 
 @public.get("/health")
@@ -443,7 +489,7 @@ def delete_root(root_id: str, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@api.get("/library/browse")
+@api.get("/library/browse", dependencies=[Depends(require_admin)])
 def browse(path: str = ""):
     """Subfolders of `path`, for the folder picker. Empty path lists drives (Windows) or `/`."""
     if not path:
@@ -942,7 +988,7 @@ class AuditOut(BaseModel):
     created_at: datetime
 
 
-@api.get("/maintenance/audit-logs", response_model=list[AuditOut])
+@api.get("/maintenance/audit-logs", response_model=list[AuditOut], dependencies=[Depends(require_admin)])
 def audit_logs(before: datetime | None = None, db: Session = Depends(get_db)):
     """Newest first, 100 per page; pass the last row's created_at as `before` for the next page."""
     q = select(AuditLog, Console.name).outerjoin(Console, Console.id == AuditLog.console_id)

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, appVersion } from "./api";
+import { api, ApiError, appVersion, session } from "./api";
 import Library, { NO_VIEW, type View } from "./Library";
 import Dashboard from "./Dashboard";
 import GameDetail from "./GameDetail";
@@ -35,6 +35,7 @@ export default function App() {
 
   if (user === undefined) return null;
   if (!user) return <Login setup={needsSetup} onLogin={setUser} />;
+  session.readOnly = user === "viewer";
 
   const gameId = route.match(/^\/game\/([\w-]+)$/)?.[1];
   const logout = () => api("/auth/logout", { method: "POST" }).then(() => setUser(null));
@@ -58,14 +59,16 @@ export default function App() {
           <a href="#/" aria-current={route === "/" || !!gameId ? "page" : undefined}>Library</a>
           <a href="#/dlc" aria-current={dlc ? "page" : undefined}>DLC</a>
           <a href="#/installed" aria-current={route === "/installed" ? "page" : undefined}>Installed</a>
-          <a href="#/settings" aria-current={route === "/settings" ? "page" : undefined}>Settings</a>
+          {!session.readOnly && <a href="#/settings" aria-current={route === "/settings" ? "page" : undefined}>Settings</a>}
         </nav>
+        {session.readOnly && <span className="badge installed" title="Logged in with the view-only password: you can look, not change anything.">View only</span>}
         <input className="search" type="search" placeholder={dlc ? "Search your DLC" : "Search your library"} aria-label="Search title or title ID"
           value={dlc ? dlcView.q : view.q} onChange={(e) => search(e.target.value)} />
         <button className="link" onClick={logout}>Log out</button>
       </header>
       <main>
-        {gameId ? <GameDetail id={gameId} /> : route === "/dashboard" ? <Dashboard /> : route === "/settings" ? <Settings /> : route === "/installed" ? <Installed />
+        {gameId ? <GameDetail id={gameId} /> : route === "/dashboard" ? <Dashboard /> : route === "/settings" ? (session.readOnly
+          ? <p className="muted">Settings need the admin password. <button className="link" onClick={logout}>Log out</button> and log in with it.</p> : <Settings />) : route === "/installed" ? <Installed />
           : dlc ? <Library key="dlc" kind="dlc" view={dlcView} setView={setDlcView} /> : <Library key="game" kind="game" view={view} setView={setView} />}
       </main>
     </>

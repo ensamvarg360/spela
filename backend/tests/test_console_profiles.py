@@ -57,3 +57,24 @@ def test_console_crud_with_encrypted_password():
             logs = db.scalars(select(AuditLog).where(AuditLog.console_id == con["id"])).all()
             assert [l.action for l in logs].count("credential_update") == 3
             assert not any(PW in str(l.details) for l in logs)
+
+
+def test_view_only_login():
+    with TestClient(app, base_url="http://127.0.0.1") as admin, TestClient(app, base_url="http://127.0.0.1") as viewer:
+        login(admin)
+        assert admin.post("/api/v1/auth/viewer", json={"password": "password1"}).json()["error"] == "same_as_admin"
+        assert admin.post("/api/v1/auth/viewer", json={"password": "lookonly1"}).json() == {"enabled": True}
+
+        assert viewer.post("/api/v1/auth/login", json={"password": "lookonly1"}).json() == {"user": "viewer"}
+        assert viewer.get("/api/v1/auth/me").json() == {"user": "viewer"}
+        assert viewer.get("/api/v1/games").status_code == 200
+        for path in ("/maintenance/audit-logs", "/library/browse", "/auth/viewer"):  # admin-only, even to read
+            assert viewer.get(f"/api/v1{path}").json()["error"] == "admin_only"
+        r = viewer.post("/api/v1/library/scan")
+        assert (r.status_code, r.json()["error"]) == (403, "read_only")
+        assert viewer.post("/api/v1/auth/viewer", json={"password": None}).status_code == 403  # can't turn itself on or off
+        assert admin.get("/api/v1/games").status_code == 200  # the admin session is untouched
+
+        assert admin.post("/api/v1/auth/viewer", json={"password": None}).json() == {"enabled": False}
+        assert viewer.get("/api/v1/games").status_code == 401  # logged out with it
+        assert viewer.post("/api/v1/auth/login", json={"password": "lookonly1"}).status_code == 401

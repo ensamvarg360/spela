@@ -16,6 +16,7 @@ export const ACTION_LABEL: Record<string, string> = {
   credential_update: "Console password changed",
   helper_install: "Helper installed",
   console_app_install: "PS5 app installed",
+  viewer_password: "View-only password changed",
 };
 
 // Internal ids, meaningless to the reader.

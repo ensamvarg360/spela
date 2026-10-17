@@ -76,6 +76,39 @@ function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: (p: Pro
   );
 }
 
+/** A second password that can look at everything but change nothing: for a phone in the living room, or a guest. */
+function ViewOnly() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [password, setPassword] = useState("");
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  useEffect(() => { api<{ enabled: boolean }>("/auth/viewer").then((r) => setEnabled(r.enabled), () => {}); }, []);
+
+  async function save(pw: string | null) {
+    try {
+      setEnabled((await api<{ enabled: boolean }>("/auth/viewer", { json: { password: pw } })).enabled);
+      setPassword("");
+      setMsg({ text: pw ? "Saved. Devices using an older view-only password were logged out." : "View-only access is off. Devices using it were logged out." });
+    } catch (e) {
+      setMsg({ text: (e as Error).message, error: true });
+    }
+  }
+
+  return (
+    <section className="card">
+      <h2>View-only access</h2>
+      <p className="muted">A second password that can browse the library, the dashboard and what's installed, but can't install,
+        remove or change anything, and can't open Settings. {enabled ? "It's on." : enabled === false ? "It's off." : ""}</p>
+      <form className="inline" onSubmit={(e: FormEvent) => (e.preventDefault(), save(password))}>
+        <input type="password" required minLength={8} autoComplete="new-password" aria-label="View-only password"
+          placeholder={enabled ? "New view-only password" : "View-only password (8 or more characters)"} value={password} onChange={(e) => setPassword(e.target.value)} />
+        <button type="submit">{enabled ? "Change" : "Turn on"}</button>
+        {enabled && <button type="button" className="link" onClick={() => save(null)}>Turn off</button>}
+      </form>
+      {msg && <p className={msg.error ? "error" : "muted"} role="status">{msg.text}</p>}
+    </section>
+  );
+}
+
 export default function Settings() {
   const [roots, setRoots] = useState<Root[]>([]);
   const [error, setError] = useState("");
@@ -142,6 +175,7 @@ export default function Settings() {
       </section>
 
       <Consoles />
+      <ViewOnly />
       <AuditLog />
     </div>
   );

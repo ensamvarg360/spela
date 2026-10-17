@@ -185,6 +185,9 @@ export interface ScanStatus {
   report: Record<"added" | "updated" | "missing" | "unknown" | "invalid" | "errors", string[]> | null;
 }
 
+/** Who's logged in. A view-only login (set in Settings) sees everything but every change is refused, so its buttons hide. */
+export const session = { readOnly: false };
+
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
     super(message);
