@@ -117,6 +117,9 @@ class ConsoleAdapter(Protocol):
     async def uninstall_package(self, title_id: str) -> RemovalResult: ...
     async def remove_shadowmount_source(self, installed_game: InstalledGameInfo, progress_callback: ProgressCallback) -> RemovalResult: ...
     async def remove_home_screen_icon(self, title_id: str) -> RemovalResult: ...
+    # Moves a ShadowMountPlus game to another drive's homebrew folder; returns (new path, removal of its old tile).
+    async def move_shadowmount_source(self, game: InstalledGameInfo, drive_id: str, progress_callback: ProgressCallback,
+                                      cancel: threading.Event | None = None) -> tuple[str, RemovalResult]: ...
     async def install_helper(self) -> str: ...
     async def install_console_app(self, files: dict[str, bytes]) -> None: ...  # relative path -> content
     async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
@@ -246,6 +249,20 @@ class MockConsoleAdapter:
         result = self._remove(installed_game.title_id, "shadowmountplus")
         progress_callback(result.bytes_freed, result.bytes_freed)
         return result  # icon stays until remove_home_screen_icon, like the real thing
+
+    async def move_shadowmount_source(self, game: InstalledGameInfo, drive_id: str, progress_callback: ProgressCallback,
+                                      cancel: threading.Event | None = None) -> tuple[str, RemovalResult]:
+        self._check()
+        if cancel and cancel.is_set():
+            raise AdapterError("canceled", "Canceled.")
+        g = next((g for g in self.games if g.source_path == game.source_path and g.title_id == game.title_id), None)
+        if not g:
+            raise AdapterError("not_found", f"{game.source_path} isn't on the console any more.")
+        drive = self._drive(drive_id)
+        progress_callback(g.size_bytes, g.size_bytes)
+        g.drive_external_id = drive.external_id
+        g.installed_path = g.source_path = f"{drive.path}/homebrew/{game.source_path.rpartition('/')[2]}"
+        return g.source_path, RemovalResult(True, "Tile removed.")
 
     async def remove_home_screen_icon(self, title_id: str) -> RemovalResult:
         self._check()
@@ -766,6 +783,98 @@ class FTPConsoleAdapter:
     async def remove_home_screen_icon(self, title_id: str) -> RemovalResult:
         """Asks the helper to remove a ShadowMountPlus tile whose game files are gone (payload/main.c, uninstall_tile)."""
         return await asyncio.to_thread(self._remove_tile, title_id)
+
+    def _ask_helper(self, method: str, op: str, **query) -> dict:
+        """One request to the helper; its JSON answer. Raises AdapterError when it says no or isn't running."""
+        q = f"?{urllib.parse.urlencode(query, quote_via=urllib.parse.quote)}" if query else ""
+        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}{op}{q}", method=method,
+                                     headers={HELPER_KEY_HEADER: self.key})
+        try:
+            with urllib.request.urlopen(req, timeout=self.TIMEOUT) as r:
+                body = r.read()
+            return json.loads(body) if body.strip() else {}
+        except urllib.error.HTTPError as e:
+            try:
+                why = json.loads(e.read())["error"]
+            except (ValueError, KeyError, TypeError):
+                why = e.reason
+            if why == "not_found":  # the helper's answer to an endpoint it doesn't have
+                raise AdapterError("helper_outdated", "The helper is too old to do it. Update it on the Installed page.")
+            raise AdapterError("helper_refused", f"The console refused: {why}")
+        except (OSError, ValueError):
+            raise AdapterError("helper_unreachable", "The helper isn't running. Install it on the Installed page.")
+
+    MOVE_POLL_SECONDS = 1.0
+
+    def _move(self, game: InstalledGameInfo, drive_id: str, progress: ProgressCallback,
+              cancel: threading.Event) -> tuple[str, RemovalResult]:
+        """The helper copies the game into a hidden `.partial` on the other drive (payload/main.c, copy_start), the sizes
+        are checked as after an install, the original is deleted as a removal deletes it, its home-screen tile is
+        removed, and only then is the copy renamed into place, so ShadowMountPlus adds it like a new install."""
+        def plan(ftp):
+            homebrew, name = self._game_entry(ftp, game, "move")
+            target = next((hb for d, _, hb in self._drives(ftp) if d.external_id == drive_id), None)
+            if not target:
+                raise AdapterError("drive_not_found", f"No drive '{drive_id}' on this console.")
+            if target == homebrew:
+                raise AdapterError("same_drive", "It's already on that drive.")
+            try:
+                ftp.mkd(target)  # missing on a fresh USB drive
+            except ftplib.error_perm:
+                pass
+            existing = ftp.ls(target)
+            if name in existing:
+                raise AdapterError("already_installed", f"{target}/{name} already exists on the console.")
+            if f".{name}.partial" in existing:  # left over from an interrupted install or move
+                self._rm_partial(ftp, f"{target}/.{name}.partial")
+            return homebrew, name, target
+
+        homebrew, name, target = self._call(plan)
+        src, tmp, dest = f"{homebrew}/{name}", f"{target}/.{name}.partial", f"{target}/{name}"
+
+        def clean():
+            self._call(lambda ftp: f".{name}.partial" in ftp.ls(target) and self._rm_partial(ftp, tmp))
+
+        self._ask_helper("POST", "/copy", p=src, to=tmp)
+        asked_to_stop = False
+        while True:
+            cancel.wait(self.MOVE_POLL_SECONDS)
+            if cancel.is_set() and not asked_to_stop:
+                self._ask_helper("POST", "/copy/cancel")
+                asked_to_stop = True
+            st = self._ask_helper("GET", "/copy")
+            progress(st["done"], st["total"])
+            if not st["running"]:
+                break
+        if st["error"] or st["to"] != tmp:
+            clean()
+            if st["error"] == "canceled":
+                raise AdapterError("canceled", "Canceled. The game is still on its old drive.")
+            raise AdapterError("copy_failed", f"The console couldn't copy it: {st['error'] or 'another copy took over'}. "
+                                              f"The game is still on its old drive.")
+
+        def check(ftp):
+            if ftp.ls(homebrew).get(name, (False,))[0]:
+                same = self._sizes(ftp, src) == self._sizes(ftp, tmp)
+            else:
+                same = ftp.ls(homebrew)[name][1] == ftp.ls(target)[f".{name}.partial"][1]
+            if not same:
+                self._rm_partial(ftp, tmp)
+                raise AdapterError("verify_failed", "The copy didn't match the original, so it was deleted. The game is "
+                                                    "still on its old drive.")
+        self._call(check)
+        self._call(lambda ftp: self._remove_source(ftp, game, lambda done, total: None))
+        tile = self._remove_tile(game.title_id)
+        try:
+            self._call(lambda ftp: ftp.rename(tmp, dest))
+        except AdapterError as e:
+            raise AdapterError(e.code, f"The game was copied and the original deleted, but the copy couldn't be put in "
+                                       f"place: {e.message} Rename {tmp} to {dest} with an FTP payload.")
+        return dest, tile
+
+    async def move_shadowmount_source(self, game: InstalledGameInfo, drive_id: str, progress_callback: ProgressCallback,
+                                      cancel: threading.Event | None = None) -> tuple[str, RemovalResult]:
+        return await asyncio.to_thread(self._move, game, drive_id, progress_callback, cancel or threading.Event())
 
     async def get_home_db(self) -> bytes:
         if not (data := await self._run(lambda fs: fs.get(HOME_DB))):

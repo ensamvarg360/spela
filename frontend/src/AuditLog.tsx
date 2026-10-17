@@ -9,6 +9,7 @@ export const ACTION_LABEL: Record<string, string> = {
   install: "Install",
   uninstall: "Removal",
   convert: "Converted to .exfat",
+  move: "Moved to another drive",
   console_create: "Console added",
   console_update: "Console changed",
   console_delete: "Console removed",

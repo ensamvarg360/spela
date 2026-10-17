@@ -201,6 +201,17 @@ Also check:
 
 ---
 
+## 17. Helper after a restart, checked copies, moving between drives
+
+- [ ] Restart the PS5, run the jailbreak so the ELF loader is up, and leave the app alone.
+  **Expect:** within about a minute the console shows the helper's notification, and the console turns *Online*. The activity log shows *Helper installed* with `automatic: True`.
+- [ ] Install a folder dump.
+  **Expect:** its message ends with *All N files checked*.
+- [ ] On the **Installed** page, click the arrows on a folder-dump game on the internal drive and move it to a USB drive.
+  **Expect:** a progress bar, then *Moved to USB drive 0*. The old folder is gone from `/data/homebrew`, the game is in `/mnt/usb0/homebrew`, its tile comes back on the home screen with its logo, and it launches with its save data.
+- [ ] Move a disc-image game the same way, and cancel a third move half way.
+  **Expect:** the image moves and launches. The canceled one is still on its old drive and no hidden `.partial` is left on the new one.
+
 ## Problems found
 
 | Step | What happened | `app.log` lines |

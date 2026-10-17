@@ -108,6 +108,22 @@ export interface InstalledGame {
   status: "installed" | "update_available" | "partially_installed" | "orphaned_icon" | "unknown";
   last_verified_at: string | null;
   removing: boolean;
+  moving: boolean;
+}
+
+/** A game being moved to another drive of its console. */
+export interface Move {
+  id: string;
+  installed_game_id: string;
+  title: string;
+  source_path: string | null;
+  drive_label: string;
+  status: "moving" | "success" | "failed" | "canceled";
+  progress: number; // 0..1 while the console copies it
+  bytes_done: number;
+  bytes_total: number;
+  tile_left: boolean; // moved, but its old home-screen tile must still be deleted on the PS5
+  message: string;
 }
 
 /** An uninstall preview, then the removal's progress (project.md §13). */

@@ -61,6 +61,11 @@ Both show a progress bar while the files are deleted. Then the helper removes th
 When it's done, the PC dialog and the PS5 app both say whether the tile is gone. If it isn't (an older helper, or the console refused), they tell you to delete it on the PS5: that removes it for good. Space from a disc image may only come back after the PS5 restarts, if ShadowMountPlus still has it mounted.
 A tile whose files were deleted some other way shows as *Icon only*. **Remove from console** then removes just the tile. A game on a USB drive that isn't plugged in isn't marked, because its files may come back. Games installed as packages can't be removed from the app; delete those on the PS5.
 
+## Moving games between drives
+
+On the **Installed** page, click the arrows on a game's tile to move it to another drive of the same console, for example from the internal SSD to a USB drive. The helper copies it on the console itself (nothing crosses the network), into a hidden `.<name>.partial` folder on the new drive. The app then checks every file's size, deletes the original the same way **Remove from console** does, removes its home-screen tile, and renames the copy into place. ShadowMountPlus adds it again from the new drive, and the app puts its logo back. Save data is kept. Close the game on the PS5 first.
+If the copy fails, is canceled or doesn't match, the copy is deleted and the game stays where it was. Moves need helper 0.7.0 or later, and one runs at a time per console.
+
 ## Home-screen logos
 
 A game you install shows its name in plain text on its PS5 home-screen page, where a store-bought game shows its logo: the console gets logos from PlayStation Network, which a jailbroken console doesn't reach. The app adds the logo itself after each install, once ShadowMountPlus has put the game on the home screen (it waits up to 3 minutes); the install's message on the **Installed** page then says whether it worked. For a game installed earlier, open it in the library and click **Show logo on PS5 home screen**, which does it on every console the game is installed on. It shows right away, with no restart. Removing a game takes its logo away with its home-screen tile.

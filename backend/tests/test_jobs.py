@@ -1,5 +1,6 @@
 """Install engine: FTP and helper staging into ShadowMountPlus folders and the job runner, against a real local FTP server."""
 import asyncio
+import shutil
 import subprocess
 import threading
 import zipfile
@@ -499,3 +500,60 @@ def test_orphaned_tile(ps5, monkeypatch):
         assert j["status"] == "success", j
         assert tiles == ["PPSA05555"]
         assert (root / "data/homebrew/Here PPSA07777").exists()
+
+
+class CopyingHelper(FakeHelper):
+    """The fake helper plus the console-side copy (payload/main.c, copy_start), done at once in the fake console's folder."""
+    root, status = None, {"running": False, "done": 0, "total": 0, "error": "", "to": ""}
+
+    def do_GET(self):
+        if self.path == "/copy":
+            return self._send(CopyingHelper.status)
+        super().do_GET()
+
+    def do_POST(self):
+        url = urlsplit(self.path)
+        if url.path == "/copy":
+            q = {k: v[0] for k, v in parse_qs(url.query).items()}
+            src, dst = CopyingHelper.root / q["p"].lstrip("/"), CopyingHelper.root / q["to"].lstrip("/")
+            (shutil.copytree if src.is_dir() else shutil.copyfile)(src, dst)
+            size = sum(f.stat().st_size for f in dst.rglob("*") if f.is_file()) if dst.is_dir() else dst.stat().st_size
+            CopyingHelper.status = {"running": False, "done": size, "total": size, "error": "", "to": q["to"]}
+        return super().do_POST()
+
+
+def test_move_game_to_another_drive(ps5, monkeypatch):
+    root, port, lib = ps5
+    CopyingHelper.root = root
+    helper = ThreadingHTTPServer(("127.0.0.1", 0), CopyingHelper)
+    threading.Thread(target=helper.serve_forever, daemon=True).start()
+    monkeypatch.setattr(FTPConsoleAdapter, "HELPER_PORT", helper.server_address[1])
+    monkeypatch.setattr(FTPConsoleAdapter, "MOVE_POLL_SECONDS", 0.01)
+    try:
+        with SessionLocal() as db:
+            c, (dump,) = _setup(db, port, lib, (lib / "Dump PPSA03333", "folder_dump"))
+            dump.title_id = "PPSA03333"
+            db.commit()
+            job = jobs.queue(db, c, dump, db.scalar(select(Drive.id).where(Drive.console_id == c.id, Drive.external_id == "internal")))
+            asyncio.run(jobs.run(job.id))
+            row = db.scalar(select(InstalledGame).where(InstalledGame.console_id == c.id, InstalledGame.title_id == "PPSA03333"))
+            internal, usb = (db.scalar(select(Drive).where(Drive.console_id == c.id, Drive.external_id == e)) for e in ("internal", "usb0"))
+            assert jobs.move_blocker(db, row, internal) == "It's already on that drive."
+
+            async def move():
+                m = jobs.start_move(db, c, row.id, usb.id)
+                assert jobs.removal_blocker(db, row) == "It's being moved to another drive. Wait for that to finish."
+                while m["status"] == "moving":
+                    await asyncio.sleep(0.01)
+                return m
+            m = asyncio.run(move())
+            assert m["status"] == "success", m["message"]
+            assert m["message"].startswith("Moved to USB drive 0.")
+            assert (root / "mnt/usb0/homebrew/Dump PPSA03333/sce_sys/about/right.sprx").read_bytes() == b"s" * 50
+            assert list((root / "data/homebrew").iterdir()) == [] and [p.name for p in (root / "mnt/usb0/homebrew").iterdir()] == ["Dump PPSA03333"]
+            db.expire_all()
+            moved = db.scalar(select(InstalledGame).where(InstalledGame.console_id == c.id, InstalledGame.title_id == "PPSA03333"))
+            assert db.get(Drive, moved.drive_id).external_id == "usb0"
+            assert db.scalar(select(AuditLog).where(AuditLog.action == "move")).result == "success"
+    finally:
+        helper.shutdown()

@@ -4,7 +4,8 @@ Archives are extracted on this PC first (archives.py) and the dump or image insi
 Removals (project.md §13) delete that copy again, after a preview and the title ID typed back.
 DLC unlockers (a folder with dlc_emu.ini) are copied over the installed game's folder, as their release notes say.
 DLC packages need a package installer, like game packages.
-Conversions turn a folder dump into an .exfat disc image next to it, on this PC (exfat.py)."""
+Conversions turn a folder dump into an .exfat disc image next to it, on this PC (exfat.py).
+Moves copy an installed game to another drive on the console itself, then delete the original."""
 import asyncio
 import logging
 import os
@@ -246,29 +247,34 @@ LOGO_WAIT_SECONDS = 180  # how long ShadowMountPlus gets to add a new game to th
 LOGO_RETRY_SECONDS = 10
 
 
-async def _add_logo(job_id: str, console_id: str, title_id: str):
-    """After an install: once ShadowMountPlus has added the game to the home screen, puts its PlayStation Store logo
-    there too (logos.apply). The install is already done, so this only adds a note to the job's message."""
+async def _logo_once_listed(db: Session, console: Console, title_id: str) -> str:
+    """Once ShadowMountPlus has added the game to the home screen, puts its PlayStation Store logo there too
+    (logos.apply). Returns a note for the install's or move's message."""
     deadline = time.monotonic() + LOGO_WAIT_SECONDS
+    while True:
+        try:
+            await logos.apply(db, console, title_id)
+            ok, note = True, "Its logo is on the home screen."
+        except AdapterError as e:
+            if e.code == "not_found" and time.monotonic() < deadline:  # not on the home screen yet
+                await asyncio.sleep(LOGO_RETRY_SECONDS)
+                continue
+            ok, note = False, f"No home-screen logo: {e.message}"
+        except Exception as e:  # a bug must not leave the task crashing silently
+            log.exception("home-screen logo for %s", title_id)
+            ok, note = False, f"No home-screen logo: unexpected error: {e}"
+        logos.audit(db, console, title_id, ok, note)
+        db.commit()
+        return note
+
+
+async def _add_logo(job_id: str, console_id: str, title_id: str):
+    """After an install. The install is already done, so this only adds a note to the job's message."""
     with SessionLocal() as db:
-        console = db.get(Console, console_id)
-        while True:
-            try:
-                await logos.apply(db, console, title_id)
-                ok, note = True, "Its logo is on the home screen."
-            except AdapterError as e:
-                if e.code == "not_found" and time.monotonic() < deadline:  # not on the home screen yet
-                    await asyncio.sleep(LOGO_RETRY_SECONDS)
-                    continue
-                ok, note = False, f"No home-screen logo: {e.message}"
-            except Exception as e:  # a bug must not leave the task crashing silently
-                log.exception("home-screen logo for %s", title_id)
-                ok, note = False, f"No home-screen logo: unexpected error: {e}"
-            break
+        note = await _logo_once_listed(db, db.get(Console, console_id), title_id)
         job = db.get(InstallJob, job_id)
         if job:
             job.message = f"{job.message} {note}"
-        logos.audit(db, console, title_id, ok, note)
         db.commit()
 
 
@@ -340,6 +346,8 @@ def removing(installed_game_id: str) -> bool:
 def removal_blocker(db: Session, row: InstalledGame) -> str | None:
     if row.install_route != "shadowmountplus" or not row.source_path:
         return "Only games installed through ShadowMountPlus can be removed from here. Delete this one on the PS5."
+    if moving(row.id):
+        return "It's being moved to another drive. Wait for that to finish."
     if db.scalar(select(InstallJob.id).join(Game, Game.id == InstallJob.game_id).where(
             InstallJob.console_id == row.console_id, InstallJob.status.in_(ACTIVE), Game.title_id == row.title_id)):
         return "An install of this game is queued or running. Cancel it first."
@@ -442,6 +450,104 @@ async def _remove(removal_id: str):
                         details={"removal": removal_id, "message": r["message"], "bytes_freed": r["bytes_total"],
                                  "tile_left": r["tile_left"]}))
         db.commit()
+
+
+# ---------------------------------------------------------------- moving a game to another drive on the console
+
+# ponytail: in memory like removals; the audit log is the lasting record. One at a time per console: the helper copies one.
+moves: dict[str, dict] = {}  # move id -> status: moving|success|failed|canceled, progress, message
+_move_stop: dict[str, threading.Event] = {}
+
+
+def moving(installed_game_id: str) -> bool:
+    return any(m["installed_game_id"] == installed_game_id and m["status"] == "moving" for m in moves.values())
+
+
+def move_blocker(db: Session, row: InstalledGame, drive: Drive | None) -> str | None:
+    if row.install_route != "shadowmountplus" or not row.source_path:
+        return "Only games installed through ShadowMountPlus can be moved."
+    if row.status == "orphaned_icon":
+        return "Its files are already gone from the console, so there's nothing to move."
+    if not drive or drive.console_id != row.console_id:
+        return "That drive isn't on this console."
+    if drive.id == row.drive_id:
+        return "It's already on that drive."
+    if reason := removal_blocker(db, row):
+        return reason
+    if any(m["console_id"] == row.console_id and m["status"] == "moving" for m in moves.values()):
+        return "Another game is being moved on this console. Wait for it to finish."
+    lib = db.get(Game, row.game_id) if row.game_id else None
+    needed = row.size_bytes or (lib.size_bytes if lib else 0)
+    if needed and drive.total_bytes and drive.free_bytes < needed:
+        return f"Not enough free space on {drive.label}: it needs {needed / 1024**3:.1f} GiB."
+    return None
+
+
+def start_move(db: Session, console: Console, installed_game_id: str, drive_id: str) -> dict:
+    """Raises ValueError with the reason when the game can't be moved there."""
+    row, drive = db.get(InstalledGame, installed_game_id), db.get(Drive, drive_id)
+    if not row or row.console_id != console.id:
+        raise ValueError("That game isn't on this console.")
+    if reason := move_blocker(db, row, drive):
+        raise ValueError(reason)
+    if inventory.status.get(console.id, {}).get("state") != "online":
+        raise ValueError("The console isn't online.")
+    move_id = _id()
+    m = moves[move_id] = {"id": move_id, "console_id": console.id, "installed_game_id": row.id, "title_id": row.title_id, "title": row.title,
+                        "source_path": row.source_path, "drive_external_id": drive.external_id, "drive_label": drive.label,
+                        "status": "moving", "progress": 0.0, "bytes_done": 0, "bytes_total": 0, "tile_left": False,
+                        "message": "Copying on the console. Then the copy is checked and the original deleted."}
+    _move_stop[move_id] = threading.Event()
+    _spawn(_move(move_id))
+    return m
+
+
+def cancel_move(move_id: str) -> bool:
+    if (m := moves.get(move_id)) and m["status"] == "moving":
+        _move_stop[move_id].set()
+        return True
+    return False
+
+
+async def _move(move_id: str):
+    m = moves[move_id]
+
+    def progress(done: int, total: int):  # called from the adapter's thread; plain assignments
+        m["bytes_done"], m["bytes_total"], m["progress"] = done, total, done / total if total else 0.0
+
+    with SessionLocal() as db:
+        console = db.get(Console, m["console_id"])
+        game = InstalledGameInfo(m["title_id"], m["title"], None, "shadowmountplus", None, m["source_path"], m["source_path"], 0)
+        dest = None
+        try:
+            if not console:
+                raise AdapterError("not_found", "The console was deleted.")
+            dest, tile = await inventory.adapter_for(db, console).move_shadowmount_source(
+                game, m["drive_external_id"], progress, _move_stop[move_id])
+            m["message"] = "Reading the console's games."
+            try:
+                await inventory.refresh(db, console)
+            except AdapterError:
+                pass  # the move is done; the next inventory read shows it
+            m["status"], m["tile_left"] = "success", not tile.ok
+            m["message"] = (f"Moved to {m['drive_label']}." if tile.ok else
+                            f"Moved to {m['drive_label']}, but its old tile is still on the PS5 home screen: delete it there "
+                            f"(Options, then Delete), and ShadowMountPlus adds the game again from its new drive. ({tile.message})")
+        except AdapterError as e:
+            m["status"], m["message"] = ("canceled" if e.code == "canceled" else "failed"), e.message
+        except Exception as e:  # a bug must fail the move, not leave it "moving"
+            log.exception("move %s", move_id)
+            m["status"], m["message"] = "failed", f"Unexpected error: {e}"
+        finally:
+            _move_stop.pop(move_id, None)
+        db.add(AuditLog(action="move", console_id=m["console_id"], title_id=m["title_id"], target_path=m["source_path"],
+                        result={"success": "success", "canceled": "canceled"}.get(m["status"], "failed"),
+                        details={"to": dest or m["drive_label"], "message": m["message"]}))
+        db.commit()
+        if m["status"] != "canceled":
+            _notify(f"{m['title']}: {'moved' if m['status'] == 'success' else 'move failed'}", m["message"])
+        if m["status"] == "success" and not m["tile_left"]:
+            m["message"] += " " + await _logo_once_listed(db, console, m["title_id"])
 
 
 # ---------------------------------------------------------------- folder dump -> .exfat image (exfat.py)

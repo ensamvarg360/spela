@@ -678,6 +678,7 @@ class InstalledOut(BaseModel):
     status: str
     last_verified_at: datetime | None
     removing: bool = False
+    moving: bool = False
 
 
 @api.get("/consoles/{console_id}/installed", response_model=list[InstalledOut])
@@ -689,7 +690,7 @@ def list_installed(console_id: str, db: Session = Depends(get_db)):
         cover = (f"/api/v1/games/{lib.id}/cover" if lib and lib.cover_path
                  else f"/api/v1/icons/{g.title_id}" if inventory.icon_path(g.title_id).is_file() else None)
         out.append(InstalledOut.model_validate(g).model_copy(update={
-            "cover_url": cover, "library_version": lib and lib.version, "removing": jobs.removing(g.id)}))
+            "cover_url": cover, "library_version": lib and lib.version, "removing": jobs.removing(g.id), "moving": jobs.moving(g.id)}))
     return out
 
 
@@ -750,6 +751,45 @@ async def uninstall(console_id: str, body: UninstallIn, db: Session = Depends(ge
 @api.get("/removal-jobs/{removal_id}", response_model=RemovalOut)
 def get_removal(removal_id: str):
     return jobs.removals.get(removal_id) or _not_found()
+
+
+class MoveIn(BaseModel):
+    installed_game_id: str
+    drive_id: str
+
+
+class MoveOut(BaseModel):
+    id: str
+    installed_game_id: str
+    title_id: str
+    title: str
+    source_path: str | None
+    drive_label: str
+    status: str  # moving|success|failed|canceled
+    progress: float
+    bytes_done: int
+    bytes_total: int
+    tile_left: bool  # moved, but its old home-screen tile must be deleted on the PS5
+    message: str
+
+
+@api.post("/consoles/{console_id}/move", response_model=MoveOut, status_code=202)
+async def move_game(console_id: str, body: MoveIn, db: Session = Depends(get_db)):
+    """Moves an installed game to another drive of the same console (jobs.start_move)."""
+    try:
+        return jobs.start_move(db, db.get(Console, console_id) or _not_found(), body.installed_game_id, body.drive_id)
+    except ValueError as e:
+        raise HTTPException(409, {"error": "cannot_move", "message": str(e)})
+
+
+@api.get("/moves/{move_id}", response_model=MoveOut)
+def get_move(move_id: str):
+    return jobs.moves.get(move_id) or _not_found()
+
+
+@api.post("/moves/{move_id}/cancel")
+def cancel_move(move_id: str):
+    return {"ok": jobs.cancel_move(move_id)}
 
 
 @api.post("/games/{game_id}/home-logo")

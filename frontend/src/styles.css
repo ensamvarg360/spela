@@ -144,6 +144,7 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
 .fav svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
 .fav:hover { background: rgb(7 9 13 / 0.8); }
 .fav[aria-pressed="true"] { color: #facc15; }
+.fav.move { right: auto; left: 0.55rem; }
 .fav[aria-pressed="true"] svg { fill: currentColor; }
 .game {
   --edge: var(--surface-2); --vivid: var(--surface-2); --ease: cubic-bezier(0.22, 1, 0.36, 1);

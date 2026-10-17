@@ -7,6 +7,8 @@
  *   POST /quit                 stops the helper, so a newer copy can take the port (a new copy sends it to an old one itself)
  *   POST /uninstall?id=<title ID>  removes a ShadowMountPlus tile whose game files are gone (uninstall_tile())
  *   POST /logo?id=<title ID>   PNG body: the title logo on the game's home-screen page (set_logo())
+ *   POST /copy?p=<from>&to=<to>  starts copying a file or folder on the console, e.g. to another drive (copy_start())
+ *   GET  /copy                 {"running", "done", "total", "error", "to"} of that copy;  POST /copy/cancel stops it
  * Paths are percent-encoded. Every request needs this console's key in X-Storefront-Key (authorized()); even so,
  * writes are refused outside the homebrew folders (writable()), and /logo changes only the one file and database column it names. One thread per connection: /info still answers during a long upload.
  * Build with ./build.ps1; VERSION comes from backend/app/__init__.py. */
@@ -406,6 +408,142 @@ static int is_dir(const char *path) {
   return !lstat(path, &st) && S_ISDIR(st.st_mode);
 }
 
+/* One copy on the console at a time (POST /copy), so a game moves between drives without crossing the network. */
+static pthread_mutex_t copy_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+  int running;
+  volatile int cancel;
+  long long done, total;
+  char src[PATH_MAX], dst[PATH_MAX], error[256];
+} cp;
+
+/* Bytes in the regular files under `path` (or of `path` itself). */
+static long long tree_size(const char *path) {
+  struct stat st;
+  if (lstat(path, &st)) return 0;
+  if (!S_ISDIR(st.st_mode)) return S_ISREG(st.st_mode) ? st.st_size : 0;
+  long long n = 0;
+  char full[PATH_MAX];
+  struct dirent *e;
+  DIR *d = opendir(path);
+  while (d && (e = readdir(d))) {
+    if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+    if (snprintf(full, sizeof full, "%s/%s", path, e->d_name) < (int)sizeof full) n += tree_size(full);
+  }
+  if (d) closedir(d);
+  return n;
+}
+
+/* Copies a file or folder tree to `dst`, which must not exist. NULL when done, else what went wrong. Symlinks and other
+ * special files are refused, never followed. */
+static const char *copy_tree(const char *src, const char *dst, char *chunk) {
+  struct stat st;
+  if (lstat(src, &st)) return strerror(errno);
+  if (S_ISDIR(st.st_mode)) {
+    if (mkdir(dst, 0777)) return strerror(errno);
+    DIR *d = opendir(src);
+    if (!d) return strerror(errno);
+    const char *err = NULL;
+    char s[PATH_MAX], t[PATH_MAX];
+    struct dirent *e;
+    while (!err && (e = readdir(d))) {
+      if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+      if (snprintf(s, sizeof s, "%s/%s", src, e->d_name) >= (int)sizeof s ||
+          snprintf(t, sizeof t, "%s/%s", dst, e->d_name) >= (int)sizeof t) err = "path too long";
+      else err = copy_tree(s, t, chunk);
+    }
+    closedir(d);
+    return err;
+  }
+  if (!S_ISREG(st.st_mode)) return "not a file or folder";
+  int in = open(src, O_RDONLY), out = in < 0 ? -1 : open(dst, O_WRONLY | O_CREAT | O_EXCL, 0666);
+  const char *err = in < 0 || out < 0 ? strerror(errno) : NULL;
+  ssize_t r;
+  while (!err && (r = read(in, chunk, BLOCK)) != 0) {
+    errno = 0;
+    if (r < 0) err = strerror(errno);
+    else if (write(out, chunk, r) != r) err = errno ? strerror(errno) : "write cut short";
+    else if (cp.cancel) err = "canceled";
+    else {
+      pthread_mutex_lock(&copy_lock);
+      cp.done += r;
+      pthread_mutex_unlock(&copy_lock);
+    }
+  }
+  if (in >= 0) close(in);
+  if (out >= 0 && close(out) && !err) err = strerror(errno);
+  return err;
+}
+
+static void *copy_thread(void *arg) {
+  (void)arg;
+  long long total = tree_size(cp.src);
+  pthread_mutex_lock(&copy_lock);
+  cp.total = total;
+  pthread_mutex_unlock(&copy_lock);
+  char *chunk = malloc(BLOCK);
+  const char *err = chunk ? copy_tree(cp.src, cp.dst, chunk) : "out of memory";
+  free(chunk);
+  pthread_mutex_lock(&copy_lock);
+  snprintf(cp.error, sizeof cp.error, "%s", err ? err : "");
+  cp.running = 0;
+  pthread_mutex_unlock(&copy_lock);
+  return NULL;
+}
+
+/* Starts copying `path` to the query's `to`; both inside the homebrew folders. The copy runs on after the reply:
+ * GET /copy reports it. A failed or canceled copy leaves what it wrote, for the PC app to delete. */
+static void copy_start(int c, const char *path, const char *query) {
+  char to[PATH_MAX];
+  struct stat st;
+  if (!param(query, "to", to, sizeof to) || !writable(to)) {
+    fail(c, "403 Forbidden", "only the homebrew folders can be changed");
+    return;
+  }
+  if (!lstat(to, &st)) {
+    fail(c, "409 Conflict", "the destination already exists");
+    return;
+  }
+  pthread_mutex_lock(&copy_lock);
+  int busy = cp.running;
+  if (!busy) {
+    cp.running = 1;
+    cp.cancel = 0;
+    cp.done = cp.total = 0;
+    cp.error[0] = 0;
+    snprintf(cp.src, sizeof cp.src, "%s", path);
+    snprintf(cp.dst, sizeof cp.dst, "%s", to);
+  }
+  pthread_mutex_unlock(&copy_lock);
+  if (busy) {
+    fail(c, "409 Conflict", "another copy is running");
+    return;
+  }
+  pthread_t t;
+  if (pthread_create(&t, NULL, copy_thread, NULL)) {
+    pthread_mutex_lock(&copy_lock);
+    cp.running = 0;
+    pthread_mutex_unlock(&copy_lock);
+    fail(c, "500 Internal Server Error", "can't start the copy");
+    return;
+  }
+  pthread_detach(t);
+  ok(c);
+}
+
+static void copy_status(int c) {
+  buf_t b = {0};
+  pthread_mutex_lock(&copy_lock);
+  put(&b, "{\"running\":%s,\"done\":%lld,\"total\":%lld,\"error\":", cp.running ? "true" : "false", cp.done, cp.total);
+  put_str(&b, cp.error);
+  put(&b, ",\"to\":");
+  put_str(&b, cp.dst);
+  pthread_mutex_unlock(&copy_lock);
+  put(&b, "}");
+  reply(c, "200 OK", &b);
+  free(b.s);
+}
+
 /* Shows a title logo on `id`'s home-screen page instead of its name in plain text: writes the PNG body to
  * /user/appmeta/<id>/logo.png and points the title's logoImageInfo in the home screen's database at it. The home
  * screen can't read files under /data/homebrew, hence appmeta. Only that one file and that one column change, and
@@ -535,6 +673,11 @@ static void handle(int c) {
     uninstall_tile(c, query);
   } else if (post && !strcmp(target, "/logo")) {
     set_logo(c, query, head, end + 4, got - (end + 4 - head));
+  } else if (get && !strcmp(target, "/copy")) {
+    copy_status(c);
+  } else if (post && !strcmp(target, "/copy/cancel")) {
+    cp.cancel = 1;
+    ok(c);
   } else if (!has_path && (get || post || !strcmp(method, "PUT"))) {
     fail(c, "400 Bad Request", "p must be an absolute path");
   } else if (get && !strcmp(target, "/ls")) {
@@ -543,6 +686,8 @@ static void handle(int c) {
     download(c, path);
   } else if (!writable(path)) {
     fail(c, "403 Forbidden", "only the homebrew folders can be changed");
+  } else if (post && !strcmp(target, "/copy")) {
+    copy_start(c, path, query);
   } else if (!strcmp(method, "PUT") && !strcmp(target, "/file")) {
     upload(c, path, head, end + 4, got - (end + 4 - head));
   } else if (post && !strcmp(target, "/mkdir")) {
