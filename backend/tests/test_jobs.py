@@ -183,6 +183,17 @@ def test_helper_adapter_stages_scans_and_removes(ps5, monkeypatch):
                                                     lambda d, t: d > 60 and stop.set(), stop))
         assert list((root / "data/homebrew").iterdir()) == []  # partial cleaned up
 
+        write(root / "user/home/1a2b3c4d/savedata_prospero/PPSA03333/sdimg_SAVE0", b"v" * 3000)
+        write(root / "user/home/1a2b3c4d/savedata_prospero_meta/PPSA03333", b"meta")  # a file, not a folder
+        write(root / "user/home/1a2b3c4d/savedata_prospero/PPSA09999/sdimg_SAVE0", b"other game")
+        dest = root.parent / "backup"
+        assert asyncio.run(a.backup_saves("PPSA03333", dest, lambda d, t: None)) == 2
+        assert (dest / "user/home/1a2b3c4d/savedata_prospero/PPSA03333/sdimg_SAVE0").read_bytes() == b"v" * 3000
+        assert (dest / "user/home/1a2b3c4d/savedata_prospero_meta/PPSA03333").read_bytes() == b"meta"
+        assert not (dest / "user/home/1a2b3c4d/savedata_prospero/PPSA09999").exists()
+        with pytest.raises(AdapterError, match="no save data"):
+            asyncio.run(a.backup_saves("PPSA04444", dest, lambda d, t: None))
+
         # an older helper has no file API: degraded with a reason, never an empty console
         monkeypatch.setattr(FileHelper, "version", "0.0.1")
         status = asyncio.run(a.connect())
@@ -563,3 +574,26 @@ def test_move_game_to_another_drive(ps5, monkeypatch):
             assert db.scalar(select(AuditLog).where(AuditLog.action == "move")).result == "success"
     finally:
         helper.shutdown()
+
+
+def test_save_backup_job(ps5, monkeypatch, tmp_path):
+    root, port, lib = ps5
+    write(root / "user/home/1a2b3c4d/savedata/CUSA00001/sdimg_SAVEDATA00", b"ps4 save")
+    monkeypatch.setattr(config, "SAVE_BACKUP_DIR", tmp_path / "saves")
+    with SessionLocal() as db:
+        c, _ = _setup(db, port, lib)
+
+        async def backup(title_id):
+            b = jobs.start_save_backup(db, c, title_id)
+            while b["status"] == "copying":
+                await asyncio.sleep(0.01)
+            return b
+        b = asyncio.run(backup("CUSA00001"))
+        assert b["status"] == "success", b["message"]
+        [listed] = jobs.list_save_backups("CUSA00001")
+        assert (listed["files"], listed["bytes"], listed["name"].endswith(" PS5")) == (1, 8, True)
+        assert (tmp_path / "saves/CUSA00001" / listed["name"] / "user/home/1a2b3c4d/savedata/CUSA00001/sdimg_SAVEDATA00").exists()
+
+        b = asyncio.run(backup("PPSA07777"))
+        assert b["status"] == "failed" and "no save data" in b["message"]
+        assert jobs.list_save_backups("PPSA07777") == []  # nothing half-made left behind

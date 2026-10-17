@@ -875,6 +875,30 @@ def cancel_move(move_id: str):
     return {"ok": jobs.cancel_move(move_id)}
 
 
+class SaveBackupIn(BaseModel):
+    title_id: str = Field(pattern=r"^[A-Z]{4}\d{5}$")
+
+
+@api.post("/consoles/{console_id}/save-backups", status_code=202)
+async def backup_saves(console_id: str, body: SaveBackupIn, db: Session = Depends(get_db)):
+    """Copies a title's save data from the console to this PC (jobs.start_save_backup). Nothing on the console changes."""
+    try:
+        return jobs.start_save_backup(db, db.get(Console, console_id) or _not_found(), body.title_id)
+    except ValueError as e:
+        raise HTTPException(409, {"error": "cannot_back_up", "message": str(e)})
+
+
+@api.get("/save-backups/{backup_id}")
+def get_save_backup(backup_id: str):
+    return jobs.save_backups.get(backup_id) or _not_found()
+
+
+@api.get("/save-backups", dependencies=[Depends(require_admin)])
+def list_save_backups(title_id: str):
+    """The backups of one title on this PC, newest first. Admin only: it shows folders of this PC."""
+    return jobs.list_save_backups(title_id)
+
+
 @api.get("/games/{game_id}/history")
 def game_history(game_id: str, db: Session = Depends(get_db)):
     """Where the game is installed now, and its installs, removals and moves, newest first (the latest 50)."""

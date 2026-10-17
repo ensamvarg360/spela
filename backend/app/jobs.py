@@ -9,6 +9,7 @@ Moves copy an installed game to another drive on the console itself, then delete
 import asyncio
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -548,6 +549,75 @@ async def _move(move_id: str):
             _notify(f"{m['title']}: {'moved' if m['status'] == 'success' else 'move failed'}", m["message"])
         if m["status"] == "success" and not m["tile_left"]:
             m["message"] += " " + await _logo_once_listed(db, console, m["title_id"])
+
+
+# ---------------------------------------------------------------- save data backups (read from the console only)
+
+# ponytail: in memory like removals; the backups themselves are folders in SAVE_BACKUP_DIR, listed from disk.
+save_backups: dict[str, dict] = {}  # backup id -> status: copying|success|failed, progress, message, folder
+
+
+def backup_folder(title_id: str, console: Console) -> Path:
+    stamp = now().astimezone().strftime("%Y-%m-%d %H%M%S")
+    name = re.sub(r'[<>:"/\\|?*]', "_", console.name).strip(" .") or "console"
+    return config.SAVE_BACKUP_DIR / title_id / f"{stamp} {name}"
+
+
+def list_save_backups(title_id: str) -> list[dict]:
+    """This title's backups on this PC, newest first."""
+    folder = config.SAVE_BACKUP_DIR / title_id
+    if not scanner.TITLE_ID_RE.fullmatch(title_id) or not folder.is_dir():
+        return []
+    out = []
+    for d in sorted(folder.iterdir(), reverse=True):
+        if d.is_dir():
+            files = [f for f in d.rglob("*") if f.is_file()]
+            out.append({"name": d.name, "path": str(d), "files": len(files), "bytes": sum(f.stat().st_size for f in files)})
+    return out
+
+
+def start_save_backup(db: Session, console: Console, title_id: str) -> dict:
+    if inventory.status.get(console.id, {}).get("state") != "online":
+        raise ValueError("The console isn't online.")
+    if any(b["status"] == "copying" and b["console_id"] == console.id for b in save_backups.values()):
+        raise ValueError("A backup from this console is already running.")
+    backup_id = _id()
+    b = save_backups[backup_id] = {"id": backup_id, "console_id": console.id, "title_id": title_id, "status": "copying",
+                                   "progress": 0.0, "bytes_done": 0, "bytes_total": 0, "files": 0,
+                                   "folder": str(backup_folder(title_id, console)), "message": "Looking for save data."}
+    _spawn(_save_backup(backup_id))
+    return b
+
+
+async def _save_backup(backup_id: str):
+    b = save_backups[backup_id]
+    dest = Path(b["folder"])
+
+    def progress(done: int, total: int):  # called from the adapter's thread; plain assignments
+        b["bytes_done"], b["bytes_total"], b["progress"] = done, total, done / total if total else 1.0
+        b["message"] = "Copying save data to this PC."
+
+    with SessionLocal() as db:
+        console = db.get(Console, b["console_id"])
+        try:
+            if not console:
+                raise AdapterError("not_found", "The console was deleted.")
+            b["files"] = await inventory.adapter_for(db, console).backup_saves(b["title_id"], dest, progress)
+            b["status"] = "success"
+            b["message"] = f"Backed up {b['files']} file(s), {b['bytes_total'] / 1e6:.1f} MB, to {dest}."
+        except AdapterError as e:
+            b["status"], b["message"] = "failed", e.message
+        except OSError as e:
+            b["status"], b["message"] = "failed", f"Couldn't write the backup: {e.strerror or e}"
+        except Exception as e:  # a bug must fail the backup, not leave it "copying"
+            log.exception("save backup %s", backup_id)
+            b["status"], b["message"] = "failed", f"Unexpected error: {e}"
+        if b["status"] != "success":
+            await asyncio.to_thread(shutil.rmtree, dest, True)  # a half backup must not pass for a whole one
+        db.add(AuditLog(action="save_backup", console_id=b["console_id"], title_id=b["title_id"], target_path=str(dest),
+                        result="success" if b["status"] == "success" else "failed",
+                        details={"files": b["files"], "bytes": b["bytes_total"], "message": b["message"]}))
+        db.commit()
 
 
 # ---------------------------------------------------------------- folder dump -> .exfat image (exfat.py)

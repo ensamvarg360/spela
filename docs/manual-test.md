@@ -215,6 +215,9 @@ Also check:
 - [ ] Save the console's RP-RegistKey (from Chiaki-ng) under its Remote Play key, put the PS5 in rest mode, and click **Wake** on the Dashboard.
   **Expect:** the PS5 turns on and the console leaves *Rest mode* within about 30 seconds.
 
+- [ ] On a game's page, click **Back up saves** for a game with save data.
+  **Expect:** a backup listed with one or more files, under `save-backups/<title ID>` in the data folder, mirroring `/user/home/<user>/savedata_prospero/<title ID>`. Note the folders it found here if they differ.
+
 ## Problems found
 
 | Step | What happened | `app.log` lines |

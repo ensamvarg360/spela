@@ -10,6 +10,7 @@ COVERS_DIR = DATA_DIR / "covers"
 # Archives are extracted here before they're sent to the console; it needs room for the unpacked game.
 STAGING_DIR = Path(os.environ.get("STAGING_DIR") or DATA_DIR / "staging")
 STATIC_DIR = Path(os.environ.get("STATIC_DIR", Path(__file__).parent / "static"))
+SAVE_BACKUP_DIR = DATA_DIR / "save-backups"  # copies of save data read from consoles, one folder per title ID
 PASSWORD_FILE = DATA_DIR / "admin_password"  # delete it to reset the password
 VIEWER_PASSWORD_FILE = DATA_DIR / "viewer_password"  # optional view-only login, set in Settings; delete it to turn that off
 

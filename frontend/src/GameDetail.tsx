@@ -174,6 +174,57 @@ function InstallHistory({ game }: { game: Game }) {
   );
 }
 
+type SaveBackup = { id: string; status: "copying" | "success" | "failed"; progress: number; bytes_done: number; bytes_total: number; message: string };
+type SavedBackup = { name: string; path: string; files: number; bytes: number };
+
+/** Copies the game's save data from a console to this PC. The console is only read; restoring is by hand. */
+function SaveBackups({ game }: { game: Game }) {
+  const [consoles, setConsoles] = useState<Console[]>([]);
+  const [cid, setCid] = useState("");
+  const [list, setList] = useState<SavedBackup[]>([]);
+  const [b, setB] = useState<SaveBackup | null>(null);
+  const [error, setError] = useState("");
+  const tid = game.title_id;
+  const load = () => tid && api<SavedBackup[]>(`/save-backups?title_id=${tid}`).then(setList, () => {});
+  useEffect(() => {
+    load();
+    api<Console[]>("/consoles").then((cs) => {
+      setConsoles(cs);
+      setCid((cs.find((c) => c.enabled) ?? cs[0])?.id ?? "");
+    }, () => {});
+  }, [tid]);
+  useEffect(() => {
+    if (b?.status !== "copying") return;
+    const t = setInterval(() => api<SaveBackup>(`/save-backups/${b.id}`).then((nb) => { setB(nb); if (nb.status !== "copying") load(); }, () => {}), 1000);
+    return () => clearInterval(t);
+  }, [b?.id, b?.status]);
+
+  if (!tid || game.kind !== "game" || !consoles.length) return null;
+  const start = () => (setError(""), api<SaveBackup>(`/consoles/${cid}/save-backups`, { json: { title_id: tid } }).then(setB, (e) => setError(e.message)));
+
+  return (
+    <section className="history">
+      <h2>Save data</h2>
+      <p className="muted">Copies this game's saves from the console to this PC, for every user. They stay encrypted and only work on the
+        same console and account; to restore, copy the folder back with an FTP payload.</p>
+      <div className="toolbar">
+        {consoles.length > 1 && (
+          <select aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
+            {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        )}
+        <button className="secondary" disabled={b?.status === "copying"} onClick={start}>{b?.status === "copying" ? "Backing up…" : "Back up saves"}</button>
+        {b?.status === "copying" && <progress max={1} value={b.progress} aria-label="Backing up" />}
+        {b && <span className={b.status === "failed" ? "error" : "muted"} role="status">{b.message}</span>}
+        {error && <span className="error" role="alert">{error}</span>}
+      </div>
+      {list.length > 0 && <ul>{list.map((s) => (
+        <li key={s.name}><strong>{s.name}</strong> · {s.files} file(s), {formatBytes(s.bytes)} <code>{s.path}</code></li>
+      ))}</ul>}
+    </section>
+  );
+}
+
 const TEXT_FIELDS = [
   ["title", "Title"],
   ["title_id", "Title ID"],
@@ -268,6 +319,7 @@ export default function GameDetail({ id }: { id: string }) {
         )}
 
         <InstallHistory game={game} />
+        {!session.readOnly && <SaveBackups game={game} />}
 
         <dl className="facts">
           <dt>Metadata source</dt>

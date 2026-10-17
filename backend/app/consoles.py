@@ -125,6 +125,8 @@ class ConsoleAdapter(Protocol):
     async def install_helper(self) -> str: ...
     async def install_console_app(self, files: dict[str, bytes]) -> None: ...  # relative path -> content
     async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
+    # Copies every save folder of `title_id` (all users) under `dest`, mirroring console paths. Reads only. Returns files copied.
+    async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int: ...
     async def set_home_logo(self, title_id: str, png: bytes) -> None: ...  # raises AdapterError
 
 
@@ -281,6 +283,14 @@ class MockConsoleAdapter:
         self._check()
         self.console_app = dict(files)
 
+    async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int:
+        self._check()
+        save = dest / "user/home/10000000/savedata_prospero" / title_id / f"sdimg_SAVE{title_id}"
+        save.parent.mkdir(parents=True, exist_ok=True)
+        save.write_bytes(b"mock save")
+        progress_callback(9, 9)
+        return 1
+
     async def get_home_db(self) -> bytes:
         self._check()
         db = sqlite3.connect(":memory:")
@@ -353,6 +363,7 @@ CONSOLE_APP_TITLE_ID = "PPSA99787"
 CONSOLE_APP_DIR = Path(__file__).parent / "console_app" / CONSOLE_APP_TITLE_ID
 CONSOLE_APP_PATH = f"/data/homebrew/{CONSOLE_APP_TITLE_ID}"
 HOME_DB = "/system_data/priv/mms/app.db"  # the home screen's database: titles, concept IDs, tile images
+SAVE_HOME = "/user/home"  # one folder per user, holding their save data (FTPConsoleAdapter._backup_saves)
 
 
 class _FTP(ftplib.FTP):
@@ -379,6 +390,10 @@ class _FTP(ftplib.FTP):
         except ftplib.error_perm:
             return None
         return buf.getvalue()
+
+    def fetch(self, path: str, write: Callable[[bytes], object]):
+        """Streams a file to `write` in chunks, for files too big to hold in memory."""
+        self.retrbinary(f"RETR {path}", write)
 
 
 class FTPConsoleAdapter:
@@ -907,6 +922,38 @@ class FTPConsoleAdapter:
                                       cancel: threading.Event | None = None) -> tuple[str, RemovalResult]:
         return await asyncio.to_thread(self._move, game, drive_id, progress_callback, cancel or threading.Event())
 
+    def _backup_saves(self, ftp, title_id: str, dest: Path, progress: ProgressCallback) -> int:
+        """Save data lives per user in /user/home/<user id>/: PS5 games' in savedata_prospero/<title ID>, PS4 games' in
+        savedata/<title ID>, with metadata folders beside them. Any folder there holding a <title ID> entry is copied."""
+        files = []  # (console path, size)
+        for user, (is_dir, _) in ftp.ls(SAVE_HOME).items():
+            for kind, (sub, _) in (ftp.ls(f"{SAVE_HOME}/{user}") if is_dir else {}).items():
+                if entry := (ftp.ls(f"{SAVE_HOME}/{user}/{kind}") if sub else {}).get(title_id):
+                    path = f"{SAVE_HOME}/{user}/{kind}/{title_id}"
+                    files += [(path + rel, size) for rel, size in self._sizes(ftp, path).items()] if entry[0] else [(path, entry[1])]
+        if not files:
+            raise AdapterError("no_saves", f"The console has no save data for {title_id}.")
+        total, done = sum(size for _, size in files), 0
+        progress(0, total)
+        for path, size in files:
+            local = dest / path.lstrip("/")
+            local.parent.mkdir(parents=True, exist_ok=True)
+            with open(local, "wb") as f:
+                def write(block: bytes):
+                    nonlocal done
+                    f.write(block)
+                    done += len(block)
+                    progress(done, total)
+                ftp.fetch(path, write)
+            if local.stat().st_size != size:
+                raise AdapterError("backup_incomplete", f"{path} came back with {local.stat().st_size} of {size} bytes.")
+        return len(files)
+
+    async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int:
+        if not TITLE_ID.fullmatch(title_id):
+            raise AdapterError("bad_title_id", f"{title_id} isn't a title ID.")
+        return await self._run(lambda ftp: self._backup_saves(ftp, title_id, dest, progress_callback))
+
     async def get_home_db(self) -> bytes:
         if not (data := await self._run(lambda fs: fs.get(HOME_DB))):
             raise AdapterError("home_db_unreadable", "Can't read the home screen's database on the console.")
@@ -988,6 +1035,19 @@ class HelperFS:
             return self._req("GET", "file", path)
         except ftplib.error_perm:
             return None
+
+    def fetch(self, path: str, write: Callable[[bytes], object]):
+        query = urllib.parse.urlencode({"p": path}, quote_via=urllib.parse.quote)
+        conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
+        try:
+            conn.request("GET", f"/file?{query}", headers={HELPER_KEY_HEADER: self.key})
+            r = conn.getresponse()
+            if r.status >= 400:
+                raise ftplib.error_perm(f"{r.status} {r.read()[:200]!r}")
+            while block := r.read(1 << 20):
+                write(block)
+        finally:
+            conn.close()
 
     def storbinary(self, cmd: str, f, block: int, callback=None):
         self._req("PUT", "file", cmd.removeprefix("STOR "), f=f, block=block, callback=callback)
