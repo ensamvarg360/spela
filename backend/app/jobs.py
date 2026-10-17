@@ -12,6 +12,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,6 +26,15 @@ ACTIVE = ("queued", "preflight", "extracting", "transferring", "registering")
 RUNNING = ACTIVE[1:]
 _cancel: dict[str, threading.Event] = {}  # job id -> set to stop its transfer
 log = logging.getLogger(__name__)
+notify: Callable[[str, str], None] | None = None  # (title, message); the launcher shows it as a Windows notification
+
+
+def _notify(title: str, message: str):
+    if notify:
+        try:
+            notify(title, message)
+        except Exception:  # a notification must never fail the job
+            log.exception("notification")
 # Highest firmware where fake packages launch (Kstuff Lite 1.11 + ArkSama's 11.60 fix, Oct 2026).
 # Raise a row when a payload release confirms more; 12.x-13.60 install but PS5 packages don't launch yet.
 PKG_MAX_FIRMWARE = {"ps4_pkg": "11.60", "ps5_pkg": "11.60"}
@@ -117,6 +127,9 @@ def _finish(db: Session, job: InstallJob, status: str, message: str, error: dict
                     target_path=game and game.source_path, result="success" if status == "success" else
                     "canceled" if status == "canceled" else "failed", details={"job": job.id, "status": status, **(error or {})}))
     db.commit()
+    if status != "canceled":  # the user canceled it, so they know
+        title = game.title if game else "Install"
+        _notify(f"{title}: {'installed' if status == 'success' else status}", message)
 
 
 def _pick_drive(db: Session, console: Console, job: InstallJob, drives: list[DriveInfo], needed: int) -> DriveInfo:
@@ -512,6 +525,8 @@ async def _convert(game_id: str):
             c["status"], c["message"] = "failed", f"Unexpected error: {e}"
         finally:
             _convert_stop.pop(game_id, None)
+        if c["status"] != "canceled":
+            _notify(f"{dest.name}: {'converted' if c['status'] == 'success' else 'conversion failed'}", c["message"])
         db.add(AuditLog(action="convert", title_id=title_id, target_path=str(dest),
                         result={"success": "success", "canceled": "canceled"}.get(c["status"], "failed"),
                         details={"source": source, "message": c["message"]}))

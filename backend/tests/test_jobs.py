@@ -189,8 +189,10 @@ def _setup(db, port, lib, *formats):
     return c, games
 
 
-def test_job_runs_to_success_then_blocks_reinstall(ps5):
+def test_job_runs_to_success_then_blocks_reinstall(ps5, monkeypatch):
     root, port, lib = ps5
+    told = []
+    monkeypatch.setattr(jobs, "notify", lambda title, message: told.append((title, message)))
     with SessionLocal() as db:
         c, (dump, pkg) = _setup(db, port, lib, (lib / "Dump PPSA03333", "folder_dump"), (lib / "x.pkg", "ps5_pkg"))
         dump.title_id = "PPSA03333"
@@ -206,6 +208,7 @@ def test_job_runs_to_success_then_blocks_reinstall(ps5):
         assert (root / "mnt/usb0/homebrew/Dump PPSA03333/eboot.bin").exists()
         assert db.scalar(select(InstalledGame).where(InstalledGame.console_id == c.id, InstalledGame.title_id == "PPSA03333"))
         assert jobs.blocker(db, c, dump) == "Already installed on this console."
+        assert told == [("Dump PPSA03333: installed", "Installed on USB drive 0.")]
 
 
 def test_dlc_unlocker_is_copied_into_the_game_folder(ps5):

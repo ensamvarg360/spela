@@ -17,7 +17,7 @@ import uvicorn
 import webview
 from PIL import Image, ImageDraw
 
-from app import config
+from app import config, jobs
 from app.main import APP_ID, app
 
 try:
@@ -175,6 +175,7 @@ def main():
         pystray.MenuItem("Restart", restart),
         pystray.MenuItem("Quit", quit_),
     ))
+    jobs.notify = lambda title, message: icon.notify(message, title)  # installs and conversions that end
     thread.start()
 
     def load_when_ready():  # runs once the window is on screen
