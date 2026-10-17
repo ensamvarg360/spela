@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { api, coverUrl, formatLabel, STATUS_LABEL, type Game, type StoreInfo } from "./api";
+import { api, appVersion, coverUrl, formatLabel, STATUS_LABEL, type Console, type Game, type StoreInfo } from "./api";
+import { STATE_LABEL } from "./Installed";
 
 export type Sort = "title" | "recent" | "rating" | "released" | "size";
 /** What the library shows: the header's search, the sidebar's ticked values per filter, and the order. */
@@ -36,6 +37,35 @@ const COMPARE: Record<Sort, (a: Game, b: Game) => number> = {
 
 const matches = (g: Game, picked: View["picked"], skip?: string) =>
   FILTERS.every((f) => f.key === skip || !picked[f.key]?.length || f.values(g).some((v) => v && picked[f.key].includes(v)));
+
+const LIGHT = { online: "ok", standby: "warn", degraded: "warn", offline: "bad" } as Record<string, string>;
+
+/** Status lights for the first enabled PS5 and its helper payload, refreshed every 15 s. */
+function Connection() {
+  const [c, setC] = useState<Console | null | undefined>();
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    appVersion.then(setVersion);
+    const load = () => api<Console[]>("/consoles").then((cs) => setC(cs.find((x) => x.enabled) ?? null), () => setC(undefined));
+    load();
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
+  }, []);
+  if (c === null) return <p className="connection muted"><a href="#/settings">Add a PS5</a> to connect</p>;
+  if (!c) return null;
+  const online = c.state === "online";
+  const helper = c.helper_status.helper; // "missing", a version, or absent before the first check
+  const [light, label] = !online ? ["off", "Unknown"]
+    : !helper || helper === "missing" ? ["bad", "Not running"]
+    : version && helper !== version ? ["warn", `v${helper}, needs v${version}`]
+    : ["ok", `v${helper}`];
+  return (
+    <ul className="connection" aria-label="Connection">
+      <li title={c.status_message}><i className={`light ${LIGHT[c.state] ?? "off"}`} />{c.name}<span className="muted">{STATE_LABEL[c.state]}</span></li>
+      <li><i className={`light ${light}`} />Helper<span className="muted">{label}</span></li>
+    </ul>
+  );
+}
 
 export default function Library({ view, setView }: { view: View; setView: (v: View) => void }) {
   const [games, setGames] = useState<Game[] | null>(null);
@@ -109,6 +139,7 @@ export default function Library({ view, setView }: { view: View; setView: (v: Vi
             )}
           </details>
         ))}
+        <Connection />
       </aside>
       <section className="results">
         <div className="results-bar">

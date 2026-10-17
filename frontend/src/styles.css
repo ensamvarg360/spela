@@ -288,3 +288,11 @@ dialog.remove progress { width: 100%; }
 
 /* Subtle topographic contour backdrop */
 body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: url("./topo.svg") center / cover no-repeat; }
+
+.connection { list-style: none; margin: 0; padding: 0.8rem 0 0; font-size: 0.82rem; }
+.connection li { display: flex; align-items: center; gap: 0.5rem; padding: 0.15rem 0; }
+.connection li .muted { margin-left: auto; font-size: 0.75rem; }
+.light { width: 0.55rem; height: 0.55rem; border-radius: 50%; flex: none; background: var(--muted); }
+.light.ok { background: var(--ready); box-shadow: 0 0 6px var(--ready); }
+.light.warn { background: var(--attention); box-shadow: 0 0 6px var(--attention); }
+.light.bad { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
