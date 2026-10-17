@@ -23,7 +23,7 @@ The app checks each console every 15 seconds and reads its drives and installed 
 *Rest mode* means the console is asleep (detected only when the PS5's rest mode setting *Stay connected to the internet* is on); *Degraded* means the console is on but the helper isn't running or is outdated; *Offline* means it doesn't answer at all.
 Installed games are matched to your library by title ID, and marked *Update in library* when your library holds a newer version.
 
-The helper only changes files inside the `homebrew` folders (`/data/homebrew`, `/mnt/usbN/homebrew`, `/mnt/extN/homebrew`), plus one exception for [home-screen logos](#home-screen-logos); anything else on the console is read-only to it. It has no password, so keep the console on a network you trust.
+The helper only changes files inside the `homebrew` folders (`/data/homebrew`, `/mnt/usbN/homebrew`, `/mnt/extN/homebrew`), plus one exception for [home-screen logos](#home-screen-logos); anything else on the console is read-only to it. It answers only to the PC that installed it: each copy the app sends carries a key for that console, and every request must include it. Web pages are refused too, so a website you visit can't control the console through your browser. If you move the app to another PC or lose its data folder, click **Install helper** again.
 **FTP (fallback)** still works: pick it with the port of an FTP payload (often 2121 or 1337). File access then goes over FTP, and the helper still reports firmware and drive space.
 The helper's version always equals the app's version. If they differ, the button changes to **Update helper**, and clicking it replaces the running copy.
 What the app can't tell yet: the size of folder dumps.

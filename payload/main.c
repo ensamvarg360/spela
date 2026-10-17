@@ -7,8 +7,8 @@
  *   POST /quit                 stops the helper, so a newer copy can take the port (a new copy sends it to an old one itself)
  *   POST /uninstall?id=<title ID>  removes a ShadowMountPlus tile whose game files are gone (uninstall_tile())
  *   POST /logo?id=<title ID>   PNG body: the title logo on the game's home-screen page (set_logo())
- * Paths are percent-encoded. Anyone on the network can reach this port, so writes are refused outside the
- * homebrew folders (writable()); /logo changes only the one file and database column it names. One thread per connection: /info still answers during a long upload.
+ * Paths are percent-encoded. Every request needs this console's key in X-Storefront-Key (authorized()); even so,
+ * writes are refused outside the homebrew folders (writable()), and /logo changes only the one file and database column it names. One thread per connection: /info still answers during a long upload.
  * Build with ./build.ps1; VERSION comes from backend/app/__init__.py. */
 #include <dirent.h>
 #include <dlfcn.h>
@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -63,6 +64,13 @@ int sceKernelSendNotificationRequest(int, notify_request_t *, size_t, int);
 
 /* The PC app finds the bundled helper's version by searching the .elf for this string. */
 __attribute__((used)) static const char VERSION_MARKER[] = "storefront-helper-version:" VERSION;
+
+/* This console's key, which every request must carry. The PC app writes it over the ?s in the copy it sends
+ * (helper_elf() in backend/app/consoles.py). volatile: read the patched bytes, never the placeholder folded in. */
+#define KEY_PREFIX "storefront-helper-key:"
+#define KEY_LEN 64
+__attribute__((used)) static volatile const char KEY_SLOT[] =
+    KEY_PREFIX "????????????????????????????????????????????????????????????????";
 
 typedef struct {
   char *s;
@@ -458,6 +466,43 @@ static void set_logo(int c, const char *query, const char *head, const char *bod
   pthread_mutex_unlock(&lock);
 }
 
+/* The value of header `name` (any case) in `head`, which ends at the blank line; NULL without one. */
+static const char *header(const char *head, const char *name) {
+  size_t n = strlen(name);
+  for (const char *l = strstr(head, "\r\n"); l; l = strstr(l + 2, "\r\n"))
+    if (!strncasecmp(l + 2, name, n) && l[2 + n] == ':') {
+      for (l += 3 + n; *l == ' ' || *l == '\t'; l++);
+      return l;
+    }
+  return NULL;
+}
+
+/* An IPv4 address, optionally with a port, or localhost: how the PC addresses us, never a web site's name. */
+static int ip_host(const char *h) {
+  size_t n = strcspn(h, "\r\n:");
+  if (n == 9 && !strncasecmp(h, "localhost", 9)) return 1;
+  if (!n || strspn(h, "0123456789.") != n) return 0;
+  return h[n] != ':' || strspn(h + n + 1, "0123456789") == strcspn(h + n + 1, "\r\n");
+}
+
+/* Whether the request may run. The PC app sends this console's key. Web pages are refused outright: a browser marks
+ * its requests with Origin or Sec-Fetch-Site, and DNS rebinding shows as a name in Host. Only a copy of the helper on
+ * this console (stop_old_copy(), which may hold an older key) may ask for /quit without the key. */
+static int authorized(int c, const char *head, int quit) {
+  const char *host = header(head, "Host"), *key = header(head, "X-Storefront-Key");
+  if (header(head, "Origin") || header(head, "Sec-Fetch-Site") || (host && !ip_host(host))) return 0;
+  struct sockaddr_in peer;
+  socklen_t len = sizeof peer;
+  if (quit && !getpeername(c, (struct sockaddr *)&peer, &len) && peer.sin_family == AF_INET &&
+      peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK))
+    return 1;
+  const volatile char *want = KEY_SLOT + sizeof KEY_PREFIX - 1;
+  if (!key || want[0] == '?' || strcspn(key, "\r\n \t") != KEY_LEN) return 0;  /* unpatched: the placeholder is public */
+  unsigned char diff = 0;
+  for (int i = 0; i < KEY_LEN; i++) diff |= key[i] ^ want[i];  /* the same time whichever byte differs */
+  return !diff;
+}
+
 /* Answers one request on connection `c`. */
 static void handle(int c) {
   char head[8192], method[8] = "", target[4096] = "", path[PATH_MAX], to[PATH_MAX], *end = NULL;
@@ -475,7 +520,9 @@ static void handle(int c) {
   if (query) *query++ = 0;
   int get = !strcmp(method, "GET"), post = !strcmp(method, "POST"), has_path = query && param(query, "p", path, sizeof path) && path[0] == '/';
 
-  if (get && !strcmp(target, "/info")) {
+  if (!authorized(c, head, post && !strcmp(target, "/quit"))) {
+    fail(c, "401 Unauthorized", "wrong key: install the helper again from the PC app");
+  } else if (get && !strcmp(target, "/info")) {
     buf_t b = {0};
     info(&b);
     reply(c, "200 OK", &b);

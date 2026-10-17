@@ -2,6 +2,7 @@
 through a ConsoleAdapter; console-specific paths and endpoints stay in here."""
 import asyncio
 import ftplib
+import hmac
 import http.client
 import io
 import json
@@ -19,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Literal, Protocol
 
-from . import __version__
+from . import __version__, config
 from .models import Console
 from .pkg import PkgMetadata, _read_param_json, _read_param_sfo
 
@@ -271,6 +272,21 @@ FTP_DRIVES = [
 ]
 IMAGE_EXTS = (".exfat", ".ffpkg", ".ffpfs", ".ffpfsc")
 HELPER_ELF = Path(__file__).parent / "payload" / "storefront-helper.elf"  # built from payload/ by payload/build.ps1
+HELPER_KEY_SLOT = b"storefront-helper-key:" + b"?" * 64  # KEY_SLOT in payload/main.c
+HELPER_KEY_HEADER = "X-Storefront-Key"
+
+
+def helper_key(console_id: str | None) -> str:
+    """The key the helper on this console demands on every request. Derived, not stored: one per console and PC."""
+    return hmac.new(config.SECRET_KEY.encode(), f"helper:{console_id}".encode(), "sha256").hexdigest()
+
+
+def helper_elf(key: str) -> bytes:
+    """The bundled helper with `key` written into it, so it answers only to this PC."""
+    elf = HELPER_ELF.read_bytes()
+    if elf.count(HELPER_KEY_SLOT) != 1:
+        raise AdapterError("helper_broken", "The bundled helper has no place for its key. Rebuild it with payload/build.ps1.")
+    return elf.replace(HELPER_KEY_SLOT, HELPER_KEY_SLOT[:-64] + key.encode())
 # The PS5 app (console-app/, built by console-app/build.ps1). ShadowMountPlus shows it as a home-screen title.
 CONSOLE_APP_TITLE_ID = "PPSA99787"
 CONSOLE_APP_DIR = Path(__file__).parent / "console_app" / CONSOLE_APP_TITLE_ID
@@ -316,6 +332,7 @@ class FTPConsoleAdapter:
     def __init__(self, console: Console, password: str | None = None):
         self.host, self.port = console.ip_address, console.port
         self.user, self.password = console.username or "anonymous", password or ""
+        self.key = helper_key(console.id)
 
     def _session(self) -> ftplib.FTP:
         ftp = _FTP(timeout=self.TIMEOUT, encoding="utf-8")
@@ -349,7 +366,8 @@ class FTPConsoleAdapter:
 
     def _helper(self, path: str = "/info", method: str = "GET") -> dict | None:
         """Calls the helper payload; None when it isn't running. It reports what FTP can't: firmware and drive space."""
-        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}{path}", method=method)
+        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}{path}", method=method,
+                                     headers={HELPER_KEY_HEADER: self.key})
         try:
             with urllib.request.urlopen(req, timeout=3) as r:
                 return json.loads(r.read())
@@ -468,7 +486,7 @@ class FTPConsoleAdapter:
         self._helper("/quit", "POST")  # a running copy frees the port for the new one
         try:
             with socket.create_connection((self.host, self.LOADER_PORT), timeout=self.TIMEOUT) as s:
-                s.sendall(HELPER_ELF.read_bytes())
+                s.sendall(helper_elf(self.key))
         except OSError:
             raise AdapterError("loader_unreachable", f"The console's ELF loader isn't running (port {self.LOADER_PORT}). "
                                                      "Start it with your jailbreak, then try again.")
@@ -651,7 +669,8 @@ class FTPConsoleAdapter:
         return await self._run(lambda ftp: self._remove_source(ftp, installed_game, progress_callback))
 
     def _remove_tile(self, title_id: str) -> RemovalResult:
-        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/uninstall?id={title_id}", method="POST")
+        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/uninstall?id={title_id}", method="POST",
+                                     headers={HELPER_KEY_HEADER: self.key})
         try:
             with urllib.request.urlopen(req, timeout=30):
                 return RemovalResult(True, "Tile removed.")
@@ -674,7 +693,8 @@ class FTPConsoleAdapter:
         return data
 
     def _set_logo(self, title_id: str, png: bytes):
-        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/logo?id={title_id}", data=png, method="POST")
+        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/logo?id={title_id}", data=png, method="POST",
+                                     headers={HELPER_KEY_HEADER: self.key})
         try:
             with urllib.request.urlopen(req, timeout=60):
                 return
@@ -706,8 +726,8 @@ class HelperFS:
     """The helper payload's file API (payload/main.c), with the methods of _FTP the adapter uses, so both
     connections share the adapter code. The console saying no raises ftplib.error_perm, as over FTP."""
 
-    def __init__(self, host: str, port: int, timeout: float, info: dict):
-        self.host, self.port, self.timeout, self.info = host, port, timeout, info
+    def __init__(self, host: str, port: int, timeout: float, info: dict, key: str):
+        self.host, self.port, self.timeout, self.info, self.key = host, port, timeout, info, key
 
     def _req(self, method: str, op: str, path: str, to: str | None = None, f=None, block: int = 0, callback=None) -> bytes:
         query = urllib.parse.urlencode({"p": path, **({"to": to} if to else {})}, quote_via=urllib.parse.quote)
@@ -718,6 +738,7 @@ class HelperFS:
             if f:
                 f.seek(0)
             conn.putheader("Content-Length", str(size))
+            conn.putheader(HELPER_KEY_HEADER, self.key)
             conn.endheaders()
             while f and (chunk := f.read(block)):
                 conn.send(chunk)
@@ -771,7 +792,7 @@ class HelperConsoleAdapter(FTPConsoleAdapter):
     so it works before the helper runs."""
 
     def __init__(self, console: Console, password: str | None = None):
-        self.host = console.ip_address
+        self.host, self.key = console.ip_address, helper_key(console.id)
 
     def _session(self) -> HelperFS:
         info = self._helper()
@@ -780,7 +801,7 @@ class HelperConsoleAdapter(FTPConsoleAdapter):
         if info.get("version") != __version__:  # an older helper has no file API; its 404s would read as an empty console
             raise AdapterError("helper_outdated", f"The console runs helper v{info.get('version')}; this app needs "
                                                   f"v{__version__}. Update it on the Installed page.")
-        return HelperFS(self.host, self.HELPER_PORT, self.TIMEOUT, info)
+        return HelperFS(self.host, self.HELPER_PORT, self.TIMEOUT, info, self.key)
 
     async def _helper_status(self) -> tuple[dict, dict | None]:
         info, app = await self._run(lambda fs: (fs.info, fs.get(f"{CONSOLE_APP_PATH}/assets/version.txt")))

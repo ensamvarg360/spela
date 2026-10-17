@@ -17,7 +17,7 @@ from sqlalchemy import select
 from test_console_profiles import login
 
 from app import __version__
-from app.consoles import HELPER_ELF, AdapterError, FTPConsoleAdapter
+from app.consoles import HELPER_ELF, HELPER_KEY_HEADER, HELPER_KEY_SLOT, AdapterError, FTPConsoleAdapter, helper_elf
 from app.database import SessionLocal
 from app.main import app
 from app.models import Console, Drive, Game, InstalledGame
@@ -83,6 +83,14 @@ class FakeHelper(BaseHTTPRequestHandler):
     """The helper payload's API; `version` changes when the fake loader receives a new .elf."""
     version, quits = "0.0.1", 0
 
+    def parse_request(self):  # the real helper answers 401 to any request without its key
+        if not super().parse_request():
+            return False
+        if len(self.headers.get(HELPER_KEY_HEADER, "")) != 64:
+            self._send({"error": "wrong key"}, 401)
+            return False
+        return True
+
     def do_GET(self):
         G = 1024**3
         self._send({"version": type(self).version, "firmware": "4.03", "model": "CFI-1216A", "mounts": [
@@ -127,7 +135,8 @@ def test_ftp_adapter_helper(ps5):
         assert (info.firmware, info.helper_status["helper"]) == ("4.03", "0.0.1")
 
         assert asyncio.run(a.install_helper()) == __version__
-        assert received == [HELPER_ELF.read_bytes()] and FakeHelper.quits == 1  # old copy told to quit first
+        assert received == [helper_elf(a.key)] and FakeHelper.quits == 1  # old copy told to quit first
+        assert b"storefront-helper-key:" + a.key.encode() in received[0] and HELPER_KEY_SLOT not in received[0]
         assert asyncio.run(a.connect()).helper_status["helper"] == __version__
 
         # loader not running: a clear error. Helper gone: drives listed, space and firmware unknown.
