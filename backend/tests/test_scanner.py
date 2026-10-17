@@ -76,7 +76,7 @@ def test_scan_sync_statuses_and_missing(library):
         assert status["Other"] == "needs_attention"  # title ID only from filename
         assert status["fake"] == "incompatible"
         assert status["Example Game"] == "needs_attention"  # duplicate PPSA01234 with the .ffpkg copy
-        assert status["Old Game"] == "needs_attention"  # package needs confirmation
+        assert status["Old Game"] == "ready"  # packages are confirmed at install time
         assert status["Half"] == "needs_attention"  # partial transfer
         assert {g.kind for g in db.scalars(select(Game).where(Game.title_id == "PPSA02222"))} == {"game", "dlc"}
         unlocker = db.scalar(select(Game).where(Game.format == "unlocker"))

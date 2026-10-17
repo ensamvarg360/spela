@@ -25,6 +25,9 @@ function Install({ game }: { game: Game }) {
 
   async function install() {
     if (game.format === "archive" && !confirm("This archive will be extracted to the private staging folder on this PC before it's installed. Make sure the PC has room for the unpacked game.")) return;
+    if ((game.format === "ps5_pkg" || game.format === "ps4_pkg") && !confirm(
+      `This will submit a package file to the PS5 package installer. Confirm the title ID (${game.title_id ?? "unknown"}) ` +
+      `and version (${game.version ?? "unknown"}) before continuing.`)) return;
     if (game.kind === "dlc" && game.format !== "ps5_pkg" && game.format !== "ps4_pkg" && !confirm(
       "The unlocker's files are copied into the installed game's folder and replace files there with the same names. " +
       "Close the game on the PS5 first. To undo it, remove the game and install it again.")) return;

@@ -362,8 +362,6 @@ def evaluate(game: Game, duplicate_ids: set[str], game_ids: set[str] = frozenset
         reasons.append("Source looks like an incomplete transfer.")
     if game.format == "archive":
         reasons.append("Archive: it is extracted on this PC before it is installed.")
-    if game.format in ("ps4_pkg", "ps5_pkg"):
-        reasons.append("Package install requires confirmation.")
     if game.kind == "dlc" and game.title_id and game.title_id not in game_ids:
         reasons.append(f"Its game ({game.title_id}) isn't in your library.")
     prefix = PLATFORM_PREFIX.get(game.format)

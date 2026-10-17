@@ -20,6 +20,11 @@ from PIL import Image, ImageDraw
 from app import config
 from app.main import APP_ID, app
 
+try:
+    import pyi_splash  # only exists in the built .exe (build.ps1 --splash)
+except ImportError:
+    pyi_splash = None
+
 URL = f"http://127.0.0.1:{config.PORT}"
 APP_NAME = "PS5 Local Storefront"
 logging.basicConfig(filename=config.DATA_DIR / "app.log", level=logging.WARNING,
@@ -88,6 +93,8 @@ def _show_running_window() -> bool:
 
 def main():
     owner = _port_owner()
+    if pyi_splash and owner != "free":  # no window of our own coming, so don't leave the splash over the message box
+        pyi_splash.close()
     if owner == "us":  # already running: just show it
         _show_running_window() or webbrowser.open(URL)
         return
@@ -108,7 +115,8 @@ def main():
             icon.notify(f"Couldn't start. Details are in {config.DATA_DIR / 'app.log'}", "PS5 Local Storefront")
 
     thread = threading.Thread(target=serve)
-    window = webview.create_window(APP_NAME, html="<body style='background:#0b0e1a'></body>",
+    window = webview.create_window(APP_NAME, html="<body style='background:#0d1017;color:#8a93a6;font:14px Segoe UI;"
+                                   "display:grid;place-items:center;height:100vh;margin:0'>Starting…</body>",
                                    width=1280, height=860, min_size=(720, 480))
     quitting = False
 
@@ -169,7 +177,9 @@ def main():
     ))
     thread.start()
 
-    def load_when_ready():
+    def load_when_ready():  # runs once the window is on screen
+        if pyi_splash:
+            pyi_splash.close()
         while not server.started and thread.is_alive():
             time.sleep(0.1)
         if server.started:
