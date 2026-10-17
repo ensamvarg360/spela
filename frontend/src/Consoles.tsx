@@ -28,6 +28,11 @@ function Facts({ c, version, busy, act }: { c: Console; version: string; busy: b
             onClick={() => act("console-app")}>{!consoleApp || consoleApp === "missing" ? "Install PS5 app" : "Update PS5 app"}</button>
         )}
       </dd>
+      <dt>Wake from rest mode</dt>
+      <dd>
+        {c.has_wake_key ? "Remote Play key saved" : "Add its Remote Play key (Edit) to wake it from here"}
+        {c.has_wake_key && c.state === "standby" && <button className="small" disabled={busy} onClick={() => act("wake")}>Wake</button>}
+      </dd>
       <dt>Connections</dt><dd>{Object.entries(c.helper_status).filter(([k]) => !["banner", "helper", "console_app"].includes(k)).map(([k, v]) => `${k}: ${v}`).join(", ") || c.connection_type}</dd>
       <dt>Last seen</dt><dd>{when(c.last_seen_at)}</dd>
       <dt>Last inventory</dt><dd>{when(c.last_inventory_scan_at)}</dd>
@@ -35,23 +40,26 @@ function Facts({ c, version, busy, act }: { c: Console; version: string; busy: b
   );
 }
 
-const EMPTY = { name: "", ip_address: "", connection_type: "helper", port: "7735", username: "", password: "" };
+const EMPTY = { name: "", ip_address: "", connection_type: "helper", port: "7735", username: "", password: "", wake_key: "" };
 type Draft = typeof EMPTY;
 
 function ConsoleForm({ console: c, onDone }: { console?: Console; onDone: () => void }) {
   const [d, setD] = useState<Draft>(c ? {
-    name: c.name, ip_address: c.ip_address, connection_type: c.connection_type, port: String(c.port), username: c.username ?? "", password: "",
+    name: c.name, ip_address: c.ip_address, connection_type: c.connection_type, port: String(c.port), username: c.username ?? "", password: "", wake_key: "",
   } : EMPTY);
   const [forget, setForget] = useState(false);
+  const [forgetWake, setForgetWake] = useState(false);
   const [error, setError] = useState("");
   const field = (k: keyof Draft) => ({ value: d[k], onChange: (e: { target: { value: string } }) => setD({ ...d, [k]: e.target.value }) });
 
   async function save(e: FormEvent) {
     e.preventDefault();
-    const { password, ...rest } = d;
+    const { password, wake_key, ...rest } = d;
     const body: Record<string, unknown> = { ...rest, port: d.connection_type === "helper" ? 7735 : Number(d.port), username: d.username || null };
     if (password) body.password = password; // blank = keep the saved one
     else if (forget || !c) body.password = null;
+    if (wake_key) body.wake_key = wake_key; // same
+    else if (forgetWake || !c) body.wake_key = null;
     try {
       await (c ? api(`/consoles/${c.id}`, { method: "PATCH", json: body }) : api("/consoles", { json: body }));
       onDone();
@@ -85,6 +93,16 @@ function ConsoleForm({ console: c, onDone }: { console?: Console; onDone: () => 
           </label>
         </>}
       </div>
+      <label>
+        Remote Play key <span className="muted">(optional: wakes the console from rest mode)</span>
+        <input autoComplete="off" spellCheck={false} disabled={forgetWake} placeholder={c?.has_wake_key ? "Saved. Leave blank to keep it" : "RP-RegistKey, e.g. 1a2b3c4d"} {...field("wake_key")} />
+      </label>
+      <p className="muted">Register this PC's Remote Play once with Chiaki-ng (PS5 Settings → System → Remote Play → Link Device), then copy the
+        console's <em>RP-RegistKey</em> from it. The PS5 must have <em>Stay connected to the internet</em> and <em>Enable turning on PS5 from
+        network</em> on in its rest-mode settings.</p>
+      {c?.has_wake_key && (
+        <label className="check"><input type="checkbox" checked={forgetWake} onChange={(e) => setForgetWake(e.target.checked)} /> Forget saved Remote Play key</label>
+      )}
       {c?.has_password && d.connection_type !== "helper" && (
         <label className="check"><input type="checkbox" checked={forget} onChange={(e) => setForget(e.target.checked)} /> Forget saved password</label>
       )}

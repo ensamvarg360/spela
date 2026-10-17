@@ -92,6 +92,7 @@ class Console(Base):
     port: Mapped[int] = mapped_column(Integer)
     username: Mapped[str | None] = mapped_column(String)
     credentials_secret_id: Mapped[str | None] = mapped_column(String(36))  # -> secrets.id
+    wake_secret_id: Mapped[str | None] = mapped_column(String(36))  # -> secrets.id: the Remote Play key that wakes it
     firmware: Mapped[str | None] = mapped_column(String)
     helper_status: Mapped[dict] = mapped_column(JSON, default=dict)
     last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

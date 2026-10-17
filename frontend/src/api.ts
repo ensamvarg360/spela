@@ -68,6 +68,7 @@ export interface Console {
   port: number;
   username: string | null;
   has_password: boolean;
+  has_wake_key: boolean; // its Remote Play key is saved, so it can be woken from rest mode
   firmware: string | null;
   helper_status: Record<string, string>;
   last_seen_at: string | null;
@@ -212,6 +213,9 @@ export async function api<T>(path: string, opts: { method?: string; json?: unkno
 
 // The console helper payload must report this same version (backend/app/__init__.py).
 export const appVersion: Promise<string> = api<{ version: string }>("/health").then((h) => h.version, () => "");
+
+/** Wakes a console in rest mode with its saved Remote Play key; resolves once it's up (or after about 30 s). */
+export const wakeConsole = (c: Console) => api<Console>(`/consoles/${c.id}/wake`, { method: "POST" });
 
 export const coverUrl = (g: Game) => (g.has_cover ? `/api/v1/games/${g.id}/cover?v=${encodeURIComponent(g.updated_at)}` : null);
 

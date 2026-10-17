@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import { api, appVersion, formatBytes, JOB_ACTIVE, session, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal } from "./api";
+import { api, appVersion, formatBytes, JOB_ACTIVE, session, wakeConsole, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal } from "./api";
 
 const JOB_LABEL: Record<JobStatus, [string, string]> = {
   queued: ["Waiting", "unknown"], preflight: ["Checking", "unknown"], extracting: ["Extracting", "needs_attention"], transferring: ["Copying", "needs_attention"],
@@ -273,6 +273,21 @@ export default function Installed() {
     }
   }
 
+  async function wake() {
+    setBusy(true);
+    setError("");
+    try {
+      const woken = await wakeConsole(c);
+      setConsoles((cs) => cs!.map((x) => (x.id === woken.id ? woken : x)));
+      if (woken.state === "standby") setError("It's still in rest mode. Check its Remote Play key and rest-mode settings.");
+      else await loadInventory(c.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const setTarget = (d: Drive, on: boolean) =>
     api<Drive>(`/consoles/${c.id}/drives/${d.id}`, { method: "PATCH", json: { is_install_target: on } })
       .then((nd) => setDrives((ds) => ds.map((x) => (x.id === nd.id ? { ...nd, installed_count: x.installed_count } : x))), (e) => setError(e.message));
@@ -287,6 +302,7 @@ export default function Installed() {
         ) : <h2 className="inline-title">{c.name}</h2>}
         <span className={`badge ${STATE_BADGE[c.state]}`}>{STATE_LABEL[c.state]}</span>
         {c.status_message && <span className="muted">{c.status_message}</span>}
+        {c.state === "standby" && c.has_wake_key && !session.readOnly && <button className="small" disabled={busy} onClick={wake}>{busy ? "Waking…" : "Wake"}</button>}
         {(helperBad || consoleAppBad) && !session.readOnly && <a href="#/settings">Update needed in Settings</a>}
         <span className="spacer" />
         {drives.map((d) => (

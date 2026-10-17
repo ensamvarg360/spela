@@ -78,3 +78,34 @@ def test_view_only_login():
         assert admin.post("/api/v1/auth/viewer", json={"password": None}).json() == {"enabled": False}
         assert viewer.get("/api/v1/games").status_code == 401  # logged out with it
         assert viewer.post("/api/v1/auth/login", json={"password": "lookonly1"}).status_code == 401
+
+
+def test_wake_key_and_wake(monkeypatch):
+    import socket
+
+    from app import consoles, main
+    from app.models import AuditLog
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        login(c)
+        con = c.post("/api/v1/consoles", json={"name": "Sleepy", "ip_address": "127.0.0.1", "connection_type": "ftp",
+                                               "port": 2121, "wake_key": "1a2b3c4d"}).json()
+        assert con["has_wake_key"] and "1a2b3c4d" not in str(con)
+        assert c.patch(f"/api/v1/consoles/{con['id']}", json={"wake_key": "not a key"}).json()["error"] == "invalid_wake_key"
+        with SessionLocal() as db:
+            assert credentials.get_password(db, db.get(Console, con["id"]), "wake_secret_id") == "439041101"
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.settimeout(5)
+        monkeypatch.setattr(consoles, "DDP_PORT", listener.getsockname()[1])
+        monkeypatch.setattr(main, "WAKE_WAIT_SECONDS", 0)
+        assert c.post(f"/api/v1/consoles/{con['id']}/wake").status_code == 200
+        assert listener.recv(1024) == (b"WAKEUP * HTTP/1.1\nclient-type:vr\nauth-type:R\nmodel:w\napp-type:r\n"
+                                       b"user-credential:439041101\ndevice-discovery-protocol-version:00030010\n")
+        listener.close()
+
+        assert c.patch(f"/api/v1/consoles/{con['id']}", json={"wake_key": ""}).json()["has_wake_key"] is False
+        assert c.post(f"/api/v1/consoles/{con['id']}/wake").json()["error"] == "no_wake_key"
+        with SessionLocal() as db:
+            assert db.scalar(select(AuditLog).where(AuditLog.console_id == con["id"], AuditLog.action == "wake"))
+        assert c.delete(f"/api/v1/consoles/{con['id']}").status_code == 200

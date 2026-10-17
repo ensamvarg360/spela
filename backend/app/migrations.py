@@ -27,7 +27,12 @@ def _2_dlc_kind(c: Connection):
     c.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_games_kind ON games (kind)")
 
 
-STEPS = [_1_games_seen_at, _2_dlc_kind]
+def _3_console_wake_key(c: Connection):
+    if "wake_secret_id" not in _columns(c, "consoles"):
+        c.exec_driver_sql("ALTER TABLE consoles ADD COLUMN wake_secret_id VARCHAR(36)")
+
+
+STEPS = [_1_games_seen_at, _2_dlc_kind, _3_console_wake_key]
 
 
 def upgrade(engine: Engine):

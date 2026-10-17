@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, appVersion, formatBytes, session, type AuditEntry, type Console, type Drive, type Game, type InstalledGame } from "./api";
+import { api, appVersion, formatBytes, session, wakeConsole, type AuditEntry, type Console, type Drive, type Game, type InstalledGame } from "./api";
 import { ACTION_LABEL } from "./AuditLog";
 import { Jobs, STATE_BADGE, STATE_LABEL, when } from "./Installed";
 import { useScan } from "./Library";
@@ -17,6 +17,20 @@ function ConsoleCard({ c, version, onRefreshed }: { c: Console; version: string;
     api<InstalledGame[]>(`/consoles/${c.id}/installed`).then((gs) => setCount(gs.length)),
   ]).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [c.id, c.last_inventory_scan_at]);
+
+  async function wake() {
+    setBusy(true);
+    setError("");
+    try {
+      const woken = await wakeConsole(c);
+      if (woken.state === "standby") setError("It's still in rest mode. Check its Remote Play key and rest-mode settings.");
+      onRefreshed();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function refresh() {
     setBusy(true);
@@ -39,6 +53,7 @@ function ConsoleCard({ c, version, onRefreshed }: { c: Console; version: string;
         <h2 className="inline-title">{c.name}</h2>
         <span className={`badge ${STATE_BADGE[c.state]}`}>{STATE_LABEL[c.state]}</span>
         <span className="spacer" />
+        {!session.readOnly && c.state === "standby" && c.has_wake_key && <button className="small" disabled={busy} onClick={wake}>{busy ? "Waking…" : "Wake"}</button>}
         {!session.readOnly && <button className="secondary small" disabled={busy || c.state !== "online"} onClick={refresh}>{busy ? "Reading…" : "Refresh inventory"}</button>}
       </div>
       {c.status_message && <p className="muted">{c.status_message}</p>}

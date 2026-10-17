@@ -14,10 +14,12 @@ def test_old_database_is_upgraded(tmp_path):
     with engine.begin() as c:  # games as 0.6.0 made it, before seen_at
         c.exec_driver_sql("CREATE TABLE games (id VARCHAR(36) PRIMARY KEY, created_at DATETIME)")
         c.exec_driver_sql("INSERT INTO games VALUES ('g1', '2026-10-01 00:00:00')")
+        c.exec_driver_sql("CREATE TABLE consoles (id VARCHAR(36) PRIMARY KEY, name VARCHAR)")  # before wake keys
     migrations.upgrade(engine)
     with engine.connect() as c:
         assert c.exec_driver_sql("SELECT seen_at FROM games").scalar() == "2026-10-01 00:00:00"
         assert c.exec_driver_sql("SELECT kind FROM games").scalar() == "game"
+        assert "wake_secret_id" in migrations._columns(c, "consoles")
     assert _version(engine) == len(migrations.STEPS)
     migrations.upgrade(engine)  # running again changes nothing
 

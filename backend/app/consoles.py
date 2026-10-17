@@ -1,6 +1,8 @@
 """Console adapter interface (project.md §9). Everything that talks to a PS5 goes
 through a ConsoleAdapter; console-specific paths and endpoints stay in here."""
 import asyncio
+import base64
+import binascii
 import ftplib
 import hmac
 import http.client
@@ -306,6 +308,35 @@ HELPER_KEY_SLOT = b"storefront-helper-key:" + b"?" * 64  # KEY_SLOT in payload/m
 HELPER_KEY_HEADER = "X-Storefront-Key"
 
 
+DDP_PORT = 9302  # Sony's device discovery (UDP), what Remote Play uses to find and wake a PS5
+
+
+def wake_credential(key: str) -> str:
+    """The number a wake-up message carries, from the console's RP-RegistKey as Remote Play apps show it: 8 hex
+    characters (as Chiaki shows it), that key base64-encoded (as Chiaki's settings file keeps it), or already the
+    decimal number. Raises ValueError for anything else."""
+    k = key.strip()
+    if re.fullmatch(r"\d{9,20}", k):  # decimal: a hex key has at most 8 characters
+        return str(int(k))
+    if not re.fullmatch(r"[0-9a-fA-F]{1,16}", k):
+        try:
+            k = base64.b64decode(k, validate=True).rstrip(b"\0").decode("ascii")
+        except (binascii.Error, UnicodeDecodeError):
+            k = ""
+        if not re.fullmatch(r"[0-9a-fA-F]{1,16}", k):
+            raise ValueError("That isn't a Remote Play key. Paste the RP-RegistKey: 8 letters and digits, like 1a2b3c4d.")
+    return str(int(k, 16))
+
+
+def send_wake(host: str, credential: str):
+    """Sends Sony's wake-up message (the one Remote Play sends) to a console in rest mode. No answer comes back;
+    the console turns on if the key is the one it registered."""
+    msg = (f"WAKEUP * HTTP/1.1\nclient-type:vr\nauth-type:R\nmodel:w\napp-type:r\nuser-credential:{credential}\n"
+           "device-discovery-protocol-version:00030010\n").encode()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.sendto(msg, (host, DDP_PORT))
+
+
 def helper_key(console_id: str | None) -> str:
     """The key the helper on this console demands on every request. Derived, not stored: one per console and PC."""
     return hmac.new(config.SECRET_KEY.encode(), f"helper:{console_id}".encode(), "sha256").hexdigest()
@@ -357,7 +388,7 @@ class FTPConsoleAdapter:
     TIMEOUT = 10
     HELPER_PORT = 7735  # our helper payload (payload/main.c)
     LOADER_PORT = 9021  # the jailbreak's ELF loader
-    DDP_PORT = 9302  # Sony's device discovery (UDP); answers in rest mode too
+    DDP_PORT = DDP_PORT  # answers in rest mode too
 
     def __init__(self, console: Console, password: str | None = None):
         self.host, self.port = console.ip_address, console.port

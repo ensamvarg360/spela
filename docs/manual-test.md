@@ -212,6 +212,9 @@ Also check:
 - [ ] Move a disc-image game the same way, and cancel a third move half way.
   **Expect:** the image moves and launches. The canceled one is still on its old drive and no hidden `.partial` is left on the new one.
 
+- [ ] Save the console's RP-RegistKey (from Chiaki-ng) under its Remote Play key, put the PS5 in rest mode, and click **Wake** on the Dashboard.
+  **Expect:** the PS5 turns on and the console leaves *Rest mode* within about 30 seconds.
+
 ## Problems found
 
 | Step | What happened | `app.log` lines |

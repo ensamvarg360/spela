@@ -17,6 +17,7 @@ export const ACTION_LABEL: Record<string, string> = {
   helper_install: "Helper installed",
   console_app_install: "PS5 app installed",
   viewer_password: "View-only password changed",
+  wake: "Woken from rest mode",
 };
 
 // Internal ids, meaningless to the reader.

@@ -22,7 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import __version__, config, credentials, inventory, jobs, logos, migrations, scanner
-from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError
+from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError, send_wake, wake_credential
 from .database import SessionLocal, engine, get_db
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id, now
 
@@ -519,6 +519,7 @@ class ConsoleIn(BaseModel):
     port: int = Field(ge=1, le=65535)
     username: str | None = Field(None, max_length=100)
     password: str | None = Field(None, max_length=200)
+    wake_key: str | None = Field(None, max_length=200)  # RP-RegistKey (consoles.wake_credential)
     enabled: bool = True
 
 
@@ -532,6 +533,7 @@ class ConsolePatch(BaseModel):
     port: int = Field(None, ge=1, le=65535)
     username: str | None = Field(None, max_length=100)
     password: str | None = Field(None, max_length=200)
+    wake_key: str | None = Field(None, max_length=200)  # like password: a string replaces it, "" or null forgets it
     enabled: bool = None
 
 
@@ -544,6 +546,7 @@ class ConsoleOut(BaseModel):
     port: int
     username: str | None
     has_password: bool = False
+    has_wake_key: bool = False
     firmware: str | None
     helper_status: dict
     last_seen_at: datetime | None
@@ -557,24 +560,32 @@ def _console_out(c: Console) -> ConsoleOut:
     s = inventory.status.get(c.id, {})
     return ConsoleOut.model_validate(c).model_copy(update={
         "has_password": bool(c.credentials_secret_id),
+        "has_wake_key": bool(c.wake_secret_id),
         "state": s.get("state", "unknown") if c.enabled else "disabled",
         "status_message": s.get("message", ""),
     })
 
 
 def _audit_console(db: Session, action: str, c: Console, fields: list[str]):
-    # Field names only, never values: the password must not reach the audit log.
+    # Field names only, never values: the password and wake key must not reach the audit log.
     db.add(AuditLog(action=action, console_id=c.id, result="success", details={"name": c.name, "fields": fields}))
-    if "password" in fields:
+    if "password" in fields or "wake_key" in fields:
         db.add(AuditLog(action="credential_update", console_id=c.id, result="success", details={"name": c.name}))
 
 
 def _save_console(db: Session, c: Console, changes: dict):
     if "ip_address" in changes:
         changes["ip_address"] = str(changes["ip_address"])
+    if changes.get("wake_key"):
+        try:
+            changes["wake_key"] = wake_credential(changes["wake_key"])
+        except ValueError as e:
+            raise HTTPException(422, {"error": "invalid_wake_key", "message": str(e)})
     for k, v in changes.items():
         if k == "password":
             credentials.set_password(db, c, v)
+        elif k == "wake_key":
+            credentials.set_password(db, c, v, "wake_secret_id")
         else:
             setattr(c, k, v)
 
@@ -617,6 +628,7 @@ def delete_console(console_id: str, db: Session = Depends(get_db)):
         raise HTTPException(409, {"error": "job_active", "message": "Cancel this console's installs first."})
     inventory.forget(db, c.id)
     credentials.set_password(db, c, None)
+    credentials.set_password(db, c, None, "wake_secret_id")
     _audit_console(db, "console_delete", c, [])
     db.delete(c)
     db.commit()
@@ -636,6 +648,31 @@ async def test_connection(console_id: str, db: Session = Depends(get_db)):
     await inventory.check(console_id)
     db.expire_all()  # check() wrote through its own session
     return _console_out(db.get(Console, console_id))
+
+
+@api.post("/consoles/{console_id}/wake", response_model=ConsoleOut)
+async def wake_console(console_id: str, db: Session = Depends(get_db)):
+    """Wakes a console in rest mode with its saved Remote Play key, then checks on it until it's up (about 30 s)."""
+    c = db.get(Console, console_id) or _not_found()
+    try:
+        credential = credentials.get_password(db, c, "wake_secret_id")
+    except AdapterError as e:
+        raise HTTPException(409, {"error": e.code, "message": e.message})
+    if not credential:
+        raise HTTPException(409, {"error": "no_wake_key", "message": "Add the console's Remote Play key in Settings → Consoles first."})
+    if c.connection_type != "mock":
+        await asyncio.to_thread(send_wake, c.ip_address, credential)
+    db.add(AuditLog(action="wake", console_id=c.id, result="success", details={"name": c.name}))
+    db.commit()
+    for _ in range(WAKE_WAIT_SECONDS // 3):
+        if (await inventory.check(console_id)).get("state") != "standby":
+            break
+        await asyncio.sleep(3)
+    db.expire_all()  # check() wrote through its own session
+    return _console_out(db.get(Console, console_id))
+
+
+WAKE_WAIT_SECONDS = 30
 
 
 @api.post("/consoles/{console_id}/rescan", response_model=ConsoleOut)
