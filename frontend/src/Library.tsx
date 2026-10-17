@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { api, appVersion, coverUrl, formatLabel, STATUS_LABEL, type Console, type Game, type Kind, type StoreInfo } from "./api";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { api, appVersion, coverUrl, formatLabel, STATUS_LABEL, type Console, type Game, type Kind, type ScanStatus, type StoreInfo } from "./api";
 import { STATE_LABEL } from "./Installed";
 
 export type Sort = "title" | "recent" | "rating" | "released" | "size";
@@ -38,6 +38,23 @@ const COMPARE: Record<Sort, (a: Game, b: Game) => number> = {
 const matches = (g: Game, picked: View["picked"], skip?: string) =>
   FILTERS.every((f) => f.key === skip || !picked[f.key]?.length || f.values(g).some((v) => v && picked[f.key].includes(v)));
 
+/** The library scan's status, polled while one runs. `onDone` fires when a scan this page saw running ends. */
+export function useScan(onDone?: (s: ScanStatus) => void) {
+  const [scan, setScan] = useState<ScanStatus | null>(null);
+  const done = useRef(onDone);
+  done.current = onDone;
+  useEffect(() => { api<ScanStatus>("/library/scan-status").then(setScan, () => {}); }, []);
+  useEffect(() => {
+    if (!scan?.running) return;
+    const t = setTimeout(() => api<ScanStatus>("/library/scan-status").then((s) => {
+      setScan(s);
+      if (!s.running) done.current?.(s);
+    }, () => {}), 1500);
+    return () => clearTimeout(t);
+  }, [scan]);
+  return [scan, setScan] as const;
+}
+
 const LIGHT = { online: "ok", standby: "warn", degraded: "warn", offline: "bad" } as Record<string, string>;
 
 /** Status lights for the first enabled PS5 and its helper payload, refreshed every 15 s. */
@@ -74,9 +91,9 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
   const [expanded, setExpanded] = useState<Record<string, boolean>>({}); // filters showing all their values
   const [filtersOpen, setFiltersOpen] = useState(false); // phones only: the sidebar sits behind a button
 
-  useEffect(() => {
-    api<Game[]>("/games").then((gs) => setGames(gs.filter((g) => g.kind === kind)), (e) => setError(e.message));
-  }, [kind]);
+  const load = () => api<Game[]>("/games").then((gs) => setGames(gs.filter((g) => g.kind === kind)), (e) => setError(e.message));
+  useEffect(() => { load(); }, [kind]);
+  const [scan] = useScan(load); // a scan started in Settings: show it, and its finds once it ends
   // a tile's store lookup, so the sidebar's genres, years and ratings fill in as tiles come into view
   const changed = (id: string, changes: Partial<Game>) => setGames((gs) => gs && gs.map((g) => (g.id === id ? { ...g, ...changes } : g)));
 
@@ -101,8 +118,11 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
 
   if (error) return <p className="error" role="alert">{error}</p>;
   if (!games) return <p className="muted">Loading…</p>;
+  const scanning = scan?.running && (
+    <p className="scan-banner" role="status"><span className="spinner" aria-hidden />Scanning your folders. New {kind === "dlc" ? "DLC" : "games"} show up here when it's done.</p>
+  );
   if (!games.length)
-    return kind === "dlc" ? (
+    return scanning || (kind === "dlc" ? (
       <div className="empty card">
         <h2>No DLC yet</h2>
         <p>Add your DLC folder in <a href="#/settings">Settings</a>, then run a scan. DLC packages and DLC unlocker folders
@@ -113,7 +133,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
         <h2>Your library is empty</h2>
         <p>Add a library folder in <a href="#/settings">Settings</a>, then run a scan.</p>
       </div>
-    );
+    ));
 
   const toggle = (key: string, v: string) => {
     const now = view.picked[key] ?? [];
@@ -154,6 +174,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
         <Connection />
       </aside>
       <section className="results">
+        {scanning}
         <div className="results-bar">
           <ul className="chips">
             {q && <li><button className="chip" onClick={() => setView({ ...view, q: "" })} aria-label={`Clear search ${q}`}>“{q}” <span aria-hidden>×</span></button></li>}

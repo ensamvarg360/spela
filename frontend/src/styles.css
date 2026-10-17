@@ -319,3 +319,10 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .light.ok { background: var(--ready); box-shadow: 0 0 6px var(--ready); }
 .light.warn { background: var(--attention); box-shadow: 0 0 6px var(--attention); }
 .light.bad { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
+
+/* scan feedback: Settings' scan button and the banner on the Library and DLC pages */
+.scan-bar { margin-top: 1rem; }
+.scan-banner { display: flex; align-items: center; gap: 0.5rem; border-left: 4px solid var(--accent); background: var(--surface); padding: 0.6rem 1rem; border-radius: 6px; margin: 0 0 1rem; }
+.spinner { display: inline-block; width: 0.9em; height: 0.9em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; margin-right: 0.45em; vertical-align: -0.1em; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }

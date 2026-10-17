@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, type Kind, type Root, type ScanStatus } from "./api";
 import AuditLog from "./AuditLog";
+import { useScan } from "./Library";
 import Consoles from "./Consoles";
 
 interface Listing { path: string; parent: string | null; dirs: string[] }
@@ -78,21 +79,15 @@ function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: (p: Pro
 export default function Settings() {
   const [roots, setRoots] = useState<Root[]>([]);
   const [error, setError] = useState("");
-  const [scan, setScan] = useState<ScanStatus | null>(null);
+  const [finished, setFinished] = useState(false); // a scan started or seen running here has ended
+  const [scan, setScan] = useScan(() => setFinished(true));
 
   const load = () => api<Root[]>("/library/roots").then(setRoots, (e) => setError(e.message));
-  const pollScan = () => api<ScanStatus>("/library/scan-status").then(setScan);
 
   useEffect(() => {
     load();
-    pollScan();
   }, []);
 
-  useEffect(() => {
-    if (!scan?.running) return;
-    const t = setTimeout(pollScan, 1500);
-    return () => clearTimeout(t);
-  }, [scan]);
 
   async function act(p: Promise<unknown>) {
     setError("");
@@ -104,7 +99,9 @@ export default function Settings() {
     }
   }
 
-  const startScan = () => act(api("/library/scan", { method: "POST" }).then(() => setScan((s) => ({ ...s!, running: true }))));
+  const startScan = () => act(api("/library/scan", { method: "POST" }).then(() => (setFinished(false), setScan((s) => ({ ...s!, running: true })))));
+  const counts = (r: NonNullable<ScanStatus["report"]>) =>
+    `${r.added.length} added, ${r.updated.length} updated, ${r.missing.length} missing${r.errors.length ? `, ${r.errors.length} errors` : ""}`;
 
   return (
     <div className="settings">
@@ -117,7 +114,16 @@ export default function Settings() {
           shows on the DLC page either way.</p>
         <Folders kind="dlc" roots={roots} act={act} />
         {error && <p className="error" role="alert">{error}</p>}
-        <button style={{ marginTop: "1rem" }} onClick={startScan} disabled={scan?.running || !roots.length}>{scan?.running ? "Scanning…" : "Scan now"}</button>
+        <div className="toolbar scan-bar">
+          <button onClick={startScan} disabled={scan?.running || !roots.length}>
+            {scan?.running ? <><span className="spinner" aria-hidden />Scanning…</> : "Scan now"}
+          </button>
+          <span role="status" className={finished && scan?.report?.errors.length ? "error" : "muted"}>
+            {scan?.running ? "Scanning every folder in both lists. A large drive can take a few minutes; you can leave this page."
+              : finished && scan?.report ? <>Scan finished: {counts(scan.report)}. See them in the <a href="#/">Library</a> or on the <a href="#/dlc">DLC</a> page.</>
+              : null}
+          </span>
+        </div>
         {scan?.report && !scan.running && (
           <>
             <p className="muted">Last scan finished {new Date(scan.finished_at!).toLocaleString()}</p>
