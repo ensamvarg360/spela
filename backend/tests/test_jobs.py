@@ -85,6 +85,22 @@ def test_stage_folder_dump_and_image(ps5):
     assert e.value.code == "already_installed"
 
 
+def test_stage_deletes_a_copy_that_came_out_short(ps5, monkeypatch):
+    """A file the console stored short fails the install before ShadowMountPlus sees it, and nothing is left behind."""
+    import ftplib
+    import io
+    root, port, lib = ps5
+    real = ftplib.FTP.storbinary
+
+    def short(self, cmd, fp, *args, **kwargs):
+        return real(self, cmd, io.BytesIO(fp.read()[:-5]) if cmd.endswith("eboot.bin") else fp, *args, **kwargs)
+    monkeypatch.setattr(ftplib.FTP, "storbinary", short)
+    with pytest.raises(AdapterError) as e:
+        asyncio.run(adapter(port).stage_shadowmount_content(str(lib / "Dump PPSA03333"), INTERNAL, lambda d, t: None))
+    assert e.value.code == "verify_failed" and "eboot.bin" in e.value.message
+    assert list((root / "data/homebrew").iterdir()) == []
+
+
 def test_stage_cancel_and_leftovers(ps5):
     root, port, lib = ps5
     write(root / "data/homebrew/.Dump PPSA03333.partial/old", b"stale")  # an interrupted earlier attempt
@@ -208,7 +224,7 @@ def test_job_runs_to_success_then_blocks_reinstall(ps5, monkeypatch):
         assert (root / "mnt/usb0/homebrew/Dump PPSA03333/eboot.bin").exists()
         assert db.scalar(select(InstalledGame).where(InstalledGame.console_id == c.id, InstalledGame.title_id == "PPSA03333"))
         assert jobs.blocker(db, c, dump) == "Already installed on this console."
-        assert told == [("Dump PPSA03333: installed", "Installed on USB drive 0.")]
+        assert told == [("Dump PPSA03333: installed", "Installed on USB drive 0. All 3 files checked.")]
 
 
 def test_dlc_unlocker_is_copied_into_the_game_folder(ps5):

@@ -215,7 +215,7 @@ async def run(job_id: str):
             job.status, job.message = "transferring", f"Copying to {drive.label}."
             db.commit()
 
-            await adapter.stage_shadowmount_content(source, drive, _progress(job.id, time.monotonic()), stop)
+            staged = await adapter.stage_shadowmount_content(source, drive, _progress(job.id, time.monotonic()), stop)
 
             db.refresh(job)
             job.status, job.message = "registering", "Reading the console's games."
@@ -224,7 +224,8 @@ async def run(job_id: str):
                 await inventory.refresh(db, console)
             except AdapterError:
                 pass  # the copy is done; the next inventory read will show it
-            _finish(db, job, "success", f"Installed on {drive.label}.")
+            checked = f" All {staged.checked_files} files checked." if staged and staged.checked_files else ""
+            _finish(db, job, "success", f"Installed on {drive.label}.{checked}")
             if game.title_id:
                 _spawn(_add_logo(job.id, console.id, game.title_id))
         except AdapterError as e:

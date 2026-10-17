@@ -89,6 +89,7 @@ class InstallResult:
     ok: bool
     message: str = ""
     installed: InstalledGameInfo | None = None
+    checked_files: int = 0  # files whose size on the console was compared with the source after copying
 
 
 @dataclass
@@ -591,10 +592,32 @@ class FTPConsoleAdapter:
         for local, remote in files:
             with open(local, "rb") as f:
                 ftp.storbinary(f"STOR {remote}", f, self.BLOCK, chunk)
+        # Every file must be on the console at its full size before ShadowMountPlus may see it. Catches copies cut short
+        # or files the console dropped; it doesn't read the data back, which would take as long as the copy.
+        want = {remote[len(tmp):]: local.stat().st_size for local, remote in files}
+        got = {"": ftp.ls(homebrew).get(f".{src.name}.partial", (False, -1))[1]} if src.is_file() else self._sizes(ftp, tmp)
+        if got != want:
+            bad = sorted(k for k in want.keys() | got.keys() if want.get(k) != got.get(k))
+            self._rm_partial(ftp, tmp)
+            raise AdapterError("verify_failed", f"The copy on the console didn't match the game on this PC ({len(bad)} "
+                                                f"file(s) differ, e.g. {(bad[0] or src.name).lstrip('/')}), so it was deleted. Install it again.")
         ftp.rename(tmp, dest)  # only now does ShadowMountPlus see it
         m = TITLE_ID.search(src.name)
         return InstallResult(True, "Installed.", InstalledGameInfo(
-            m[0] if m else "", src.name, None, "shadowmountplus", drive_id, dest, dest, total))
+            m[0] if m else "", src.name, None, "shadowmountplus", drive_id, dest, dest, total), len(files))
+
+    @staticmethod
+    def _sizes(ftp: ftplib.FTP, folder: str) -> dict[str, int]:
+        """{"/relative/path": size} of every file under a folder on the console."""
+        sizes, todo = {}, [""]
+        while todo:
+            rel = todo.pop()
+            for name, (is_dir, size) in ftp.ls(folder + rel).items():
+                if is_dir:
+                    todo.append(f"{rel}/{name}")
+                else:
+                    sizes[f"{rel}/{name}"] = size
+        return sizes
 
     def _stage_or_clean(self, source_path: str, drive_id: str, progress: ProgressCallback, cancel: threading.Event) -> InstallResult:
         src = Path(source_path)
