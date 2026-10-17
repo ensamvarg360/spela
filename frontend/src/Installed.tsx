@@ -8,7 +8,7 @@ const JOB_LABEL: Record<JobStatus, [string, string]> = {
 };
 
 /** Installs on this console: polls every 2 s while one is running. `onDone` re-reads the inventory. */
-function Jobs({ consoleId, onDone }: { consoleId: string; onDone: () => void }) {
+export function Jobs({ consoleId, onDone }: { consoleId: string; onDone: () => void }) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const active = jobs.some((j) => JOB_ACTIVE.includes(j.status));
 

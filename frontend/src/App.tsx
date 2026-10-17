@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, appVersion } from "./api";
 import Library, { NO_VIEW, type View } from "./Library";
+import Dashboard from "./Dashboard";
 import GameDetail from "./GameDetail";
 import Installed from "./Installed";
 import Settings from "./Settings";
 
-// ponytail: hash routing, five routes. Swap in react-router when nested routes show up.
+// ponytail: hash routing, six routes. Swap in react-router when nested routes show up.
 function useHash() {
   const [hash, setHash] = useState(location.hash);
   useEffect(() => {
@@ -53,6 +54,7 @@ export default function App() {
           <span>PS5 Local Storefront{version && <small>v{version}</small>}</span>
         </a>
         <nav>
+          <a href="#/dashboard" aria-current={route === "/dashboard" ? "page" : undefined}>Dashboard</a>
           <a href="#/" aria-current={route === "/" || !!gameId ? "page" : undefined}>Library</a>
           <a href="#/dlc" aria-current={dlc ? "page" : undefined}>DLC</a>
           <a href="#/installed" aria-current={route === "/installed" ? "page" : undefined}>Installed</a>
@@ -63,7 +65,7 @@ export default function App() {
         <button className="link" onClick={logout}>Log out</button>
       </header>
       <main>
-        {gameId ? <GameDetail id={gameId} /> : route === "/settings" ? <Settings /> : route === "/installed" ? <Installed />
+        {gameId ? <GameDetail id={gameId} /> : route === "/dashboard" ? <Dashboard /> : route === "/settings" ? <Settings /> : route === "/installed" ? <Installed />
           : dlc ? <Library key="dlc" kind="dlc" view={dlcView} setView={setDlcView} /> : <Library key="game" kind="game" view={view} setView={setView} />}
       </main>
     </>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type AuditEntry } from "./api";
 
-const ACTION_LABEL: Record<string, string> = {
+export const ACTION_LABEL: Record<string, string> = {
   setup: "Password set",
   login: "Log in",
   scan: "Library scan",
