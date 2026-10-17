@@ -21,21 +21,16 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, config, credentials, inventory, jobs, logos, scanner
+from . import __version__, config, credentials, inventory, jobs, logos, migrations, scanner
 from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError
-from .database import Base, SessionLocal, engine, get_db
+from .database import SessionLocal, engine, get_db
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id, now
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config.COVERS_DIR.mkdir(parents=True, exist_ok=True)
-    # ponytail: create_all instead of Alembic; add migrations before the first schema change after v1.
-    Base.metadata.create_all(engine)
-    with engine.begin() as c:  # columns added after v1
-        if "seen_at" not in {r[1] for r in c.exec_driver_sql("PRAGMA table_info(games)")}:
-            c.exec_driver_sql("ALTER TABLE games ADD COLUMN seen_at DATETIME")
-            c.exec_driver_sql("UPDATE games SET seen_at = created_at")  # games already there aren't new
+    migrations.upgrade(engine)
     tasks = [asyncio.create_task(jobs.worker())]
     if config.SCAN_INTERVAL_MINUTES > 0:
         tasks.append(asyncio.create_task(_scheduled_scans()))
@@ -310,11 +305,13 @@ def delete_game(game_id: str, db: Session = Depends(get_db)):
 
 def _cover_file(g: Game) -> str:
     """The cover's file. An uploaded one is found in COVERS_DIR by name too, since a data folder copied to another
-    PC (or another Windows user) keeps the old absolute path."""
-    if g.cover_path and os.path.isfile(g.cover_path):
+    PC (or another Windows user) keeps the old absolute path. Only image files, whatever an older scan stored."""
+    if not g.cover_path or Path(g.cover_path).suffix.lower() not in scanner.COVER_SUFFIXES:
+        raise HTTPException(404, {"error": "not_found", "message": "No cover."})
+    if os.path.isfile(g.cover_path):
         return g.cover_path
-    moved = config.COVERS_DIR / Path(g.cover_path or "").name
-    if g.cover_path and moved.is_file():
+    moved = config.COVERS_DIR / Path(g.cover_path).name
+    if moved.is_file():
         return str(moved)
     raise HTTPException(404, {"error": "not_found", "message": "No cover."})
 

@@ -88,3 +88,11 @@ def test_scan_sync_statuses_and_missing(library):
         report = scanner.run_scan(db)
         assert report["errors"] and report["missing"] == []
         assert db.scalar(select(Game).where(Game.title == "fake")).missing is False
+
+
+def test_sidecar_cover_must_be_an_image(tmp_path):
+    for name in ("cover.jpg", "cover.html", "cover.svg"):
+        (tmp_path / name).write_bytes(b"x")
+    assert scanner._safe_child(tmp_path, "cover.jpg").endswith("cover.jpg")
+    assert scanner._safe_child(tmp_path, "cover.html") is None  # would run script on the app's origin
+    assert scanner._safe_child(tmp_path, "cover.svg") is None

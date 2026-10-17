@@ -130,12 +130,16 @@ def _load_sidecar(path: Path) -> dict:
         return {}
 
 
+COVER_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")  # covers are served from the app's origin: never HTML or SVG
+
+
 def _safe_child(base: Path, rel) -> str | None:
-    """Resolve a sidecar-supplied relative path, refusing anything that escapes base."""
+    """Resolve a sidecar-supplied cover path, refusing anything that escapes base or isn't a plain image."""
     if not isinstance(rel, str) or not rel:
         return None
     p = (base / rel).resolve()
-    return str(p) if p.is_relative_to(base.resolve()) and p.is_file() else None
+    ok = p.is_relative_to(base.resolve()) and p.suffix.lower() in COVER_SUFFIXES and p.is_file()
+    return str(p) if ok else None
 
 
 def detect_folder(path: Path) -> Item | None:
