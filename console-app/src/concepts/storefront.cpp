@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -39,6 +40,8 @@ const Color kGood = Color::rgb(0x3ccf8e);
 const Color kWarn = Color::rgb(0xffb347);
 const Color kBad = Color::rgb(0xff6b6b);
 const Color kTransparent = Color::rgb(0x000000, 0.0f);
+const Color kWhite = Color::rgb(0xffffff);
+const Color kNight = Color::rgb(0x06070f);
 
 constexpr float kMargin = 96.0f;
 constexpr int kColumns = 5;
@@ -51,12 +54,15 @@ constexpr float kGridBottom = 950.0f;
 constexpr float kPanelX = 1368.0f;
 constexpr float kPanelW = 1920.0f - kMargin - kPanelX;
 constexpr float kMessageSeconds = 5.0f;
+constexpr float kLift = 0.06f;  // how much the focused card grows
+constexpr float kArtH = 260.0f; // the focused game's art at the top of the panel
 
 constexpr const char *kTechniques[] = {
     "Library from the PC app over HTTP, on a background thread",
     "Covers arrive as raw RGBA and become textures as they load",
     "Installs run on the PC; this screen polls their progress",
     "Removals show the PC's preview and wait for a second press",
+    "The backdrop eases toward the focused cover's colours",
 };
 
 // Shown in the PC preview: the tour waits, moves, and installs one game.
@@ -98,6 +104,36 @@ StateLook look(const store::Game &g)
     return {"Can't install", kBad};
 }
 
+// A cover's two main colours, top and bottom half: backdrop, glow, placeholder.
+struct Tones
+{
+    Color top;
+    Color bottom;
+};
+
+Color average(const std::vector<std::uint8_t> &rgba, int from_row, int to_row)
+{
+    float sum[3] = {};
+    int n = 0;
+    for (int y = from_row; y < to_row; y += 4)
+        for (int x = 0; x < store::kCoverWidth; x += 4, ++n)
+            for (int c = 0; c < 3; ++c)
+                sum[c] += rgba[static_cast<std::size_t>((y * store::kCoverWidth + x) * 4 + c)];
+    const float k = 1.0f / (255.0f * static_cast<float>(std::max(n, 1)));
+    return {sum[0] * k, sum[1] * k, sum[2] * k, 1.0f};
+}
+
+// Games without a cover still get colours of their own, picked by title.
+Tones placeholder_tones(const std::string &title)
+{
+    static const Tones kTones[] = {
+        {Color::rgb(0x3b4fd8), Color::rgb(0x1a1446)}, {Color::rgb(0xc2416b), Color::rgb(0x2a0f2c)},
+        {Color::rgb(0x1f9e8f), Color::rgb(0x0b2630)}, {Color::rgb(0xd9822b), Color::rgb(0x2d140c)},
+        {Color::rgb(0x7b4ae2), Color::rgb(0x170f3a)}, {Color::rgb(0x2f8fd8), Color::rgb(0x0c1f3d)},
+    };
+    return kTones[std::hash<std::string>{}(title) % std::size(kTones)];
+}
+
 bool removable(const store::Game &g)
 {
     return g.state == "installed" || g.state == "update";
@@ -108,7 +144,10 @@ class Storefront final : public app::Concept
   public:
     explicit Storefront(app::Context &context) : context_(context)
     {
-        focus_ring_.snap(card_rect(0));
+        focus_ring_.snap(card_rect(0).inset(-kCardW * kLift * 0.5f));
+        const Color night[4] = {kNight, Color::rgb(0x0f1026), Color::rgb(0x1d2a6b), Color::rgb(0x3a1d5c)};
+        for (int i = 0; i < 4; ++i)
+            palette_[i].snap(night[i]);
     }
 
     const app::ConceptInfo &info() const override
@@ -139,6 +178,8 @@ class Storefront final : public app::Concept
         std::string error;
         if (client_.take_library(&games_, &error))
         {
+            if (!loaded_ && error.empty())
+                age_ = 0.0f; // the cards' entrance starts when they arrive
             loaded_ = loaded_ || error.empty();
             error_ = error;
             focus_ = std::min(focus_, std::max(0, static_cast<int>(games_.size()) - 1));
@@ -169,6 +210,7 @@ class Storefront final : public app::Concept
             else
             {
                 confirm_ = removal;
+                modal_.snap(0.0f);
                 feedback.play(audio::Cue::modal_open);
             }
         }
@@ -177,6 +219,7 @@ class Storefront final : public app::Concept
         while (done_.id.empty() && client_.take_removal_result(&result))
         {
             done_ = result;
+            modal_.snap(0.0f);
             done_title_ = removal_titles_[result.id];
             removal_titles_.erase(result.id);
             client_.refresh(); // the game's new state
@@ -197,16 +240,37 @@ class Storefront final : public app::Concept
         }
         else
         {
+            const int before = focus_;
             update_grid(input, feedback, static_cast<int>(games_.size()));
+            if (focus_ != before)
+                lift_.snap(0.0f);
         }
 
         request_covers();
         const Rect card = card_rect(focus_);
         scroll_.reveal(card.y - kGridTop, card.y - kGridTop + kPitch, kGridBottom - kGridTop, 24.0f);
         scroll_.update(dt);
-        focus_ring_.target(card);
+        focus_ring_.target(card.inset(-kCardW * kLift * 0.5f));
         focus_ring_.update(dt, 20.0f);
         refusal_.update(dt, 9.0f);
+        lift_.target = 1.0f;
+        lift_.update(dt, 14.0f);
+        modal_.target = confirm_.id.empty() && done_.id.empty() ? 0.0f : 1.0f;
+        if (modal_.target == 0.0f)
+            modal_.snap(0.0f); // what it showed is gone, so it can't fade out
+        modal_.update(dt, 16.0f);
+
+        // The backdrop takes the focused cover's colours, eased.
+        if (!games_.empty())
+        {
+            const Tones t = tones(games_[static_cast<std::size_t>(focus_)]);
+            const Color targets[4] = {gfx::mix(t.bottom, kNight, 0.7f), gfx::mix(t.top, kNight, 0.55f),
+                                      gfx::mix(t.top, kNight, 0.1f), gfx::mix(t.bottom, kWhite, 0.1f)};
+            for (int i = 0; i < 4; ++i)
+                palette_[i].target(targets[i]);
+        }
+        for (ui::SpringColor &colour : palette_)
+            colour.update(dt, 3.0f);
     }
 
     void update_confirm(const InputFrame &input, app::Feedback &feedback)
@@ -295,13 +359,48 @@ class Storefront final : public app::Concept
 
     void draw(app::Frame &frame) const override
     {
-        frame.backdrop.mode = gfx::BackdropMode::gradient;
-        frame.backdrop.colors[0] = Color::rgb(0x0b0e1a);
-        frame.backdrop.colors[1] = Color::rgb(0x161034);
-        frame.backdrop.time = clock_;
+        frame.backdrop.mode = gfx::BackdropMode::aurora;
+        for (int i = 0; i < 4; ++i)
+            frame.backdrop.colors[i] = palette_[i].value();
+        frame.backdrop.time = context_.settings.reduced_motion ? 0.0f : clock_;
+        frame.post.mode = gfx::BackdropMode::vignette;
+        frame.post.colors[0] = kNight;
+        frame.post.params[0] = 0.55f;
 
         gfx::DrawList &list = frame.scene;
         const ui::Fonts &fonts = context_.fonts;
+        // A dialog pushes the screen back a little.
+        list.push_transform(1.0f - 0.03f * modal_.value, 960, 540, 0, 0);
+        draw_screen(list);
+        list.pop_transform();
+        if (!confirm_.id.empty() || !done_.id.empty())
+        {
+            list.rounded_rect({0, 0, 1920, 1080}, 0, kNight.with_alpha(0.55f * modal_.value));
+            frame.glass = true;
+            if (!confirm_.id.empty())
+                return draw_confirm(frame.overlay, frame.glass_texture);
+            return draw_done(frame.overlay, frame.glass_texture);
+        }
+        if (!client_.paired() || !loaded_ || games_.empty())
+            return;
+        const bool can_remove = removable(games_[static_cast<std::size_t>(focus_)]);
+        const ui::Hint hints[] = {{ui::Button::cross, "Install"},
+                                  {ui::Button::triangle, "Refresh"},
+                                  {ui::Button::square, "Remove"}};
+        ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, can_remove ? 3 : 2, 1824, true);
+    }
+
+    std::span<const app::TourStep> tour() const override
+    {
+        return kTour;
+    }
+
+  private:
+    void draw_screen(gfx::DrawList &list) const
+    {
+        const ui::Fonts &fonts = context_.fonts;
+        ui::text(list, fonts.semibold, "PS5 LOCAL STOREFRONT", kMargin + 2, 84, 18, kInk.with_alpha(0.55f),
+                 gfx::Align::left, 4.0f);
         ui::text(list, fonts.display, "Your games", kMargin, 150, 56, kInk);
 
         if (!client_.paired())
@@ -317,7 +416,11 @@ class Storefront final : public app::Concept
 
         char count[64];
         std::snprintf(count, sizeof(count), "%zu games", games_.size());
-        ui::text(list, fonts.regular, count, kPanelX - kGap, 150, 26, kMuted, gfx::Align::right);
+        const float count_w = fonts.semibold.measure(count, 22) + 40;
+        const Rect pill{kPanelX - kGap - count_w, 112, count_w, 44};
+        list.rounded_rect(pill, 22, kWhite.with_alpha(0.08f));
+        list.bordered_rect(pill, 22, kTransparent, 1.5f, kWhite.with_alpha(0.14f));
+        ui::text(list, fonts.semibold, count, pill.cx(), pill.y + 30, 22, kInk, gfx::Align::center);
         if (!error_.empty()) // a later poll failed; the last good list stays up
             ui::text(list, fonts.regular, list_fit(fonts, error_, 24, 1200), kMargin, 190, 24, kBad);
 
@@ -332,23 +435,14 @@ class Storefront final : public app::Concept
                      message_ok_ ? kGood : kBad);
             list.pop_opacity();
         }
-        if (!confirm_.id.empty())
-            return draw_confirm(list);
-        if (!done_.id.empty())
-            return draw_done(list);
-        const bool can_remove = removable(games_[static_cast<std::size_t>(focus_)]);
-        const ui::Hint hints[] = {{ui::Button::cross, "Install"},
-                                  {ui::Button::triangle, "Refresh"},
-                                  {ui::Button::square, "Remove"}};
-        ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, can_remove ? 3 : 2, 1824, true);
     }
 
-    std::span<const app::TourStep> tour() const override
+    Tones tones(const store::Game &g) const
     {
-        return kTour;
+        const auto found = tones_.find(g.id);
+        return found != tones_.end() ? found->second : placeholder_tones(g.title);
     }
 
-  private:
     static Rect card_rect(int index)
     {
         const int row = index / kColumns;
@@ -370,8 +464,11 @@ class Storefront final : public app::Concept
         {
             gfx::GlBatch *batch = store::texture_batch();
             // ponytail: textures are never freed; a few hundred covers is ~100 MB of GPU memory.
-            if (batch != nullptr)
-                covers_[id] = batch->create_texture(store::kCoverWidth, store::kCoverHeight, rgba.data());
+            if (batch == nullptr)
+                continue;
+            covers_[id] = batch->create_texture(store::kCoverWidth, store::kCoverHeight, rgba.data());
+            constexpr int kHalf = store::kCoverHeight / 2;
+            tones_[id] = {average(rgba, 0, kHalf), average(rgba, kHalf, store::kCoverHeight)};
         }
     }
 
@@ -393,6 +490,9 @@ class Storefront final : public app::Concept
     void draw_notice(gfx::DrawList &list, const char *title, const std::string &detail) const
     {
         const ui::Fonts &fonts = context_.fonts;
+        list.glow({960 - 40, 360, 80, 80}, 40, 60, kAccent.with_alpha(0.25f + 0.2f * ui::breathe(clock_)));
+        list.circle(960, 400, 40, kWhite.with_alpha(0.06f));
+        list.ring(960, 400, 40, 3, kAccent.with_alpha(0.8f));
         ui::text(list, fonts.semibold, title, 960, 500, 44, kInk, gfx::Align::center);
         ui::paragraph(list, fonts.regular, detail, 960 - 600, 560, 28, 1200, 40, kMuted, 4,
                       gfx::Align::center);
@@ -400,16 +500,35 @@ class Storefront final : public app::Concept
         ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 1, 1824, true);
     }
 
-    void draw_confirm(gfx::DrawList &list) const
+    // A frosted dialog box that grows in; end_dialog() closes what it opened.
+    Rect draw_dialog(gfx::DrawList &list, std::uint32_t glass, float top, float height, Color edge) const
+    {
+        const float t = modal_.value;
+        const Rect box{960 - 520, top, 1040, height};
+        list.push_opacity(std::min(1.0f, t * 1.5f));
+        list.push_transform(0.94f + 0.06f * t, box.cx(), box.cy(), 0, 24.0f * (1.0f - t));
+        list.shadow({box.x, box.y + 24, box.w, box.h}, 28, 70, Color::rgb(0x000000, 0.6f));
+        list.glass(glass, box, 28, kWhite);
+        list.rounded_rect(box, 28, Color::rgb(0x12152a, 0.72f));
+        list.gradient_rect(box, 28, edge.with_alpha(0.16f), kTransparent);
+        list.bordered_rect(box, 28, kTransparent, 1.5f, edge.with_alpha(0.4f));
+        return box;
+    }
+
+    static void end_dialog(gfx::DrawList &list)
+    {
+        list.pop_transform();
+        list.pop_opacity();
+    }
+
+    void draw_confirm(gfx::DrawList &list, std::uint32_t glass) const
     {
         const ui::Fonts &fonts = context_.fonts;
         std::string title = "this game";
         for (const store::Game &g : games_)
             if (g.id == confirm_.game_id)
                 title = g.title_id.empty() ? g.title : g.title + " (" + g.title_id + ")";
-        list.rounded_rect({0, 0, 1920, 1080}, 0, Color::rgb(0x05070d, 0.75f));
-        const Rect box{960 - 520, 300, 1040, 480};
-        list.rounded_rect(box, 24, Color::rgb(0x161a2b));
+        const Rect box = draw_dialog(list, glass, 300, 480, kBad);
         const float x = box.x + 48;
         const float width = box.w - 96;
         float y = ui::paragraph(list, fonts.semibold, "Remove " + title + "?", x, box.y + 76, 36, width, 46, kInk, 2);
@@ -423,72 +542,107 @@ class Storefront final : public app::Concept
                           x, y + 20, 24, width, 34, kMuted, 4);
         if (!confirm_.warnings.empty())
             ui::paragraph(list, fonts.regular, confirm_.warnings, x, y + 12, 24, width, 34, kWarn, 4);
+        end_dialog(list);
         const ui::Hint hints[] = {{ui::Button::square, "Remove"}, {ui::Button::circle, "Keep"}};
         ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 2, 1824, true);
     }
 
-    void draw_done(gfx::DrawList &list) const
+    void draw_done(gfx::DrawList &list, std::uint32_t glass) const
     {
         const ui::Fonts &fonts = context_.fonts;
         const std::string title = done_title_.empty() ? std::string("the game") : done_title_;
-        list.rounded_rect({0, 0, 1920, 1080}, 0, Color::rgb(0x05070d, 0.75f));
-        const Rect box{960 - 520, 340, 1040, 400};
-        list.rounded_rect(box, 24, Color::rgb(0x161a2b));
+        const Color edge = !done_.ok ? kBad : done_.tile_left ? kWarn : kGood;
+        const Rect box = draw_dialog(list, glass, 340, 400, edge);
         const float x = box.x + 48;
         const float width = box.w - 96;
         const float y = ui::paragraph(list, fonts.semibold, (done_.ok ? "Removed " : "Couldn't remove ") + title,
                                       x, box.y + 76, 36, width, 46, done_.ok ? kInk : kBad, 2);
         ui::paragraph(list, fonts.regular, done_.message, x, y + 12, 26, width, 38,
                       done_.ok && !done_.tile_left ? kMuted : done_.ok ? kWarn : kBad, 6);
+        end_dialog(list);
         const ui::Hint hints[] = {{ui::Button::cross, "OK"}};
         ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 1, 1824, true);
     }
 
     void draw_grid(gfx::DrawList &list) const
     {
-        const ui::Fonts &fonts = context_.fonts;
         list.push_clip({0, kGridTop - 40, kPanelX - 8, kGridBottom - kGridTop + 80});
         list.push_transform(1.0f, 0.0f, 0.0f, 0.0f, -scroll_.offset());
         const int count = static_cast<int>(games_.size());
         for (int i = 0; i < count; ++i)
-        {
-            const Rect r = card_rect(i);
-            if (r.y - scroll_.offset() > kGridBottom + 40 || r.y + kPitch - scroll_.offset() < kGridTop - 40)
-                continue;
-            const store::Game &g = games_[static_cast<std::size_t>(i)];
-            const auto cover = covers_.find(g.id);
-            if (cover != covers_.end())
-            {
-                list.image(cover->second, r, gfx::kFullUv, Color::rgb(0xffffff), 14);
-            }
-            else
-            {
-                list.rounded_rect(r, 14, Color::rgb(0x232a45));
-                const std::string initial = g.title.substr(0, 1);
-                ui::text(list, fonts.display, initial, r.cx(), r.cy() + 30, 96, kMuted, gfx::Align::center);
-            }
-            const StateLook state = look(g);
-            if (g.state != "installable")
-            {
-                const Rect badge{r.x + 10, r.y + 10, fonts.semibold.measure(state.label, 18) + 24, 32};
-                list.rounded_rect(badge, 16, Color::rgb(0x0b0e1a, 0.85f));
-                ui::text(list, fonts.semibold, state.label, badge.x + 12, badge.y + 22, 18, state.color);
-            }
-            if (g.state == "installing" || g.state == "removing")
-            {
-                const Rect bar{r.x + 12, r.y + r.h - 22, r.w - 24, 10};
-                list.rounded_rect(bar, 5, Color::rgb(0x0b0e1a, 0.85f));
-                list.rounded_rect({bar.x, bar.y, std::max(10.0f, bar.w * g.progress), bar.h}, 5, kWarn);
-            }
-            const Color title = i == focus_ ? kInk : kMuted;
-            ui::text(list, fonts.semibold, fonts.semibold.font->fit(g.title, 22, kCardW), r.x, r.y + r.h + 36,
-                     22, title);
-        }
-        Rect ring = focus_ring_.value().inset(-7);
+            if (i != focus_)
+                draw_card(list, i);
+        draw_card(list, focus_); // last, so it rises over its neighbours
+        Rect ring = focus_ring_.value().inset(-6);
         ring.x += ui::shake(refusal_.value, clock_);
-        list.bordered_rect(ring, 20, kTransparent, 4, kInk);
+        list.bordered_rect(ring, 20, kTransparent, 3, kWhite.with_alpha(0.75f + 0.25f * ui::breathe(clock_)));
         list.pop_transform();
         list.pop_clip();
+    }
+
+    void draw_card(gfx::DrawList &list, int i) const
+    {
+        const ui::Fonts &fonts = context_.fonts;
+        const Rect r = card_rect(i);
+        if (r.y - scroll_.offset() > kGridBottom + 40 || r.y + kPitch - scroll_.offset() < kGridTop - 40)
+            return;
+        const store::Game &g = games_[static_cast<std::size_t>(i)];
+        const Tones colours = tones(g);
+        const bool focused = i == focus_;
+        const float lift = focused ? lift_.value : 0.0f;
+        // Cards rise into place one after another when the library arrives.
+        const float appear = context_.settings.reduced_motion ? 1.0f : tween::stagger(age_, i, 0.035f, 0.45f);
+        list.push_opacity(appear);
+        list.push_transform(1.0f + kLift * lift, r.cx(), r.cy(), 0, 40.0f * (1.0f - appear));
+
+        list.shadow({r.x, r.y + 12 + 14 * lift, r.w, r.h}, 14, 26 + 20 * lift, Color::rgb(0x000000, 0.5f));
+        if (focused)
+            list.glow(r, 14, 46 * lift, gfx::mix(colours.top, kWhite, 0.35f).with_alpha(0.55f * lift));
+        const Color tint = focused ? kWhite : Color::rgb(0xbfc3d4);
+        const auto cover = covers_.find(g.id);
+        if (cover != covers_.end())
+        {
+            list.image(cover->second, r, gfx::kFullUv, tint, 14);
+        }
+        else
+        {
+            list.gradient_rect(r, 14, colours.top, colours.bottom);
+            const std::string initial = g.title.substr(0, 1);
+            ui::text(list, fonts.display, initial, r.cx(), r.cy() + 34, 110, kWhite.with_alpha(0.75f),
+                     gfx::Align::center);
+        }
+        // A sheen across the top edge makes the card read as a glossy box.
+        list.gradient_rect({r.x, r.y, r.w, r.h * 0.4f}, 14, kWhite.with_alpha(0.12f), kTransparent);
+        list.bordered_rect(r, 14, kTransparent, 1.0f, kWhite.with_alpha(focused ? 0.3f : 0.1f));
+
+        const StateLook state = look(g);
+        if (g.state != "installable")
+        {
+            const Rect badge{r.x + 10, r.y + 10, fonts.semibold.measure(state.label, 17) + 40, 32};
+            list.rounded_rect(badge, 16, kNight.with_alpha(0.82f));
+            list.glow({badge.x + 13, badge.y + 11, 10, 10}, 5, 6, state.color.with_alpha(0.6f));
+            list.circle(badge.x + 18, badge.cy(), 5, state.color);
+            ui::text(list, fonts.semibold, state.label, badge.x + 30, badge.y + 22, 17, kInk);
+        }
+        if (g.state == "installing" || g.state == "removing")
+        {
+            list.gradient_rect({r.x, r.y + r.h - 60, r.w, 60}, 14, kTransparent, kNight.with_alpha(0.8f));
+            draw_progress(list, {r.x + 14, r.y + r.h - 22, r.w - 28, 8}, g.progress);
+        }
+        list.pop_transform();
+        ui::text(list, fonts.semibold, fonts.semibold.font->fit(g.title, 22, kCardW), r.x,
+                 r.y + r.h + 36 + r.h * kLift * 0.5f * lift, 22, focused ? kInk : kMuted);
+        list.pop_opacity();
+    }
+
+    // A bar that fills with a warm gradient and glows at its leading edge.
+    void draw_progress(gfx::DrawList &list, const Rect &bar, float progress) const
+    {
+        const float radius = bar.h * 0.5f;
+        list.rounded_rect(bar, radius, kWhite.with_alpha(0.14f));
+        const Rect fill{bar.x, bar.y, std::max(bar.h, bar.w * progress), bar.h};
+        list.glow(fill, radius, 10 + 4 * ui::breathe(clock_, 1.4f), kWarn.with_alpha(0.45f));
+        list.gradient_rect_h(fill, radius, Color::rgb(0xff8a3d), Color::rgb(0xffd166));
     }
 
     void draw_panel(gfx::DrawList &list) const
@@ -496,13 +650,29 @@ class Storefront final : public app::Concept
         const ui::Fonts &fonts = context_.fonts;
         const store::Game &g = games_[static_cast<std::size_t>(focus_)];
         const Rect panel{kPanelX, kGridTop - 40, kPanelW, kGridBottom - kGridTop + 40};
-        list.rounded_rect(panel, 24, kPanel);
+        const Tones colours = tones(g);
+        list.shadow({panel.x, panel.y + 20, panel.w, panel.h}, 24, 50, Color::rgb(0x000000, 0.45f));
+        list.rounded_rect(panel, 24, kPanel.with_alpha(0.7f));
+        // The focused game's art, fading into the panel.
+        const Rect art{panel.x, panel.y, panel.w, kArtH};
+        const auto cover = covers_.find(g.id);
+        if (cover != covers_.end())
+        {
+            const float shown = kArtH / (panel.w * store::kCoverHeight / store::kCoverWidth);
+            list.image_gradient(cover->second, art, {0, 0.12f, 1, shown}, kWhite, kWhite.with_alpha(0.0f), 24);
+        }
+        else
+        {
+            list.gradient_rect(art, 24, colours.top, colours.top.with_alpha(0.0f));
+        }
+        list.gradient_rect({panel.x, panel.y, panel.w, kArtH + 40}, 24, kTransparent, kPanel.with_alpha(0.6f));
+        list.bordered_rect(panel, 24, kTransparent, 1.5f, kWhite.with_alpha(0.12f));
         const float x = panel.x + 36;
         const float width = panel.w - 72;
-        float y = panel.y + 70;
+        float y = panel.y + kArtH + 30;
         const auto lines = ui::paragraph_lines(fonts.semibold, g.title, 36, width, 3);
         ui::paragraph(list, fonts.semibold, lines, x, y, 36, 46, kInk);
-        y += 46.0f * static_cast<float>(lines.lines.size()) + 16;
+        y += 46.0f * static_cast<float>(lines.lines.size()) + 8;
 
         std::string meta = g.title_id.empty() ? std::string("Title ID unknown") : g.title_id;
         if (!g.version.empty())
@@ -513,16 +683,19 @@ class Storefront final : public app::Concept
         y += 56;
 
         const StateLook state = look(g);
-        ui::text(list, fonts.semibold, state.label, x, y, 28, state.color);
+        const Rect pill{x, y - 32, fonts.semibold.measure(state.label, 24) + 52, 46};
+        list.rounded_rect(pill, 23, state.color.with_alpha(0.16f));
+        list.bordered_rect(pill, 23, kTransparent, 1.5f, state.color.with_alpha(0.45f));
+        list.glow({pill.x + 16, pill.cy() - 6, 12, 12}, 6, 8, state.color.with_alpha(0.7f));
+        list.circle(pill.x + 22, pill.cy(), 6, state.color);
+        ui::text(list, fonts.semibold, state.label, pill.x + 38, pill.y + 32, 24, kInk);
         y += 44;
         if (g.state == "installing" || g.state == "removing")
         {
-            const Rect bar{x, y - 16, width, 14};
-            list.rounded_rect(bar, 7, Color::rgb(0x0b0e1a));
-            list.rounded_rect({bar.x, bar.y, std::max(14.0f, bar.w * g.progress), bar.h}, 7, kWarn);
+            draw_progress(list, {x, y - 6, width, 12}, g.progress);
             char percent[16];
             std::snprintf(percent, sizeof(percent), "%d%%", static_cast<int>(g.progress * 100.0f + 0.5f));
-            ui::text(list, fonts.mono, percent, x + width, y - 44, 22, kMuted, gfx::Align::right);
+            ui::text(list, fonts.mono, percent, x + width, y - 44, 22, kInk, gfx::Align::right);
         }
         const char *detail = g.state == "installable"  ? "Press Cross to copy it from your PC to this console."
                              : g.state == "installed"  ? "It's on the home screen. Press Square to remove it."
@@ -532,7 +705,7 @@ class Storefront final : public app::Concept
                              : g.state == "removing"   ? "Your PC is deleting it from this console, then its tile."
                                                        : nullptr;
         ui::paragraph(list, fonts.regular, detail != nullptr ? std::string(detail) : g.reason, x, y + 40,
-                      24, width, 34, kMuted, 6);
+                      24, width, 34, kMuted, 4);
     }
 
     app::Context &context_;
@@ -541,6 +714,7 @@ class Storefront final : public app::Concept
     std::string error_;
     bool loaded_ = false;
     std::unordered_map<std::string, std::uint32_t> covers_;
+    std::unordered_map<std::string, Tones> tones_;
     std::unordered_set<std::string> requested_;
     std::string message_;
     bool message_ok_ = false;
@@ -556,6 +730,9 @@ class Storefront final : public app::Concept
     ui::SpringRect focus_ring_;
     ui::Scroller scroll_;
     ui::Pulse refusal_;
+    tween::Spring lift_;  // 0..1: the focused card growing
+    tween::Spring modal_; // 0..1: a dialog coming in
+    ui::SpringColor palette_[4];
 };
 
 } // namespace
