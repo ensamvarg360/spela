@@ -103,11 +103,7 @@ export default function Settings() {
         </form>
         {browsing && <FolderPicker start={path} onPick={addPath} onClose={() => setBrowsing(false)} />}
         {error && <p className="error" role="alert">{error}</p>}
-      </section>
-
-      <section className="card">
-        <h2>Scan</h2>
-        <button onClick={startScan} disabled={scan?.running || !roots.length}>{scan?.running ? "Scanning…" : "Scan now"}</button>
+        <button style={{ marginTop: "1rem" }} onClick={startScan} disabled={scan?.running || !roots.length}>{scan?.running ? "Scanning…" : "Scan now"}</button>
         {scan?.report && !scan.running && (
           <>
             <p className="muted">Last scan finished {new Date(scan.finished_at!).toLocaleString()}</p>
