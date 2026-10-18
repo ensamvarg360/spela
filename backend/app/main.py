@@ -1088,7 +1088,8 @@ def _field(v) -> str:
 
 @console_api.get("/library", response_class=PlainTextResponse)
 def console_library(c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
-    """id, title, title ID, version, size, state, progress (0-1 while installing or removing), has cover (1/0), kind, format.
+    """id, title, title ID, version, size, state, progress (0-1 while installing or removing), has cover (1/0), kind, format,
+    then while installing or removing: bytes done, bytes total, bytes/s, seconds left, the step it's on (empty when unknown).
     state: installable | installed | update | queued | installing | removing | blocked:<reason>
     kind: game | dlc. DLC shares its game's title ID, so it never shows as installed or removable."""
     installed = {g.title_id: g for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
@@ -1096,20 +1097,23 @@ def console_library(c: Console = Depends(console_from_token), db: Session = Depe
         InstallJob.console_id == c.id, InstallJob.status.in_(jobs.ACTIVE)))}
     lines = []
     for g in db.scalars(select(Game).where(Game.format != "unknown", Game.missing.is_(False)).order_by(Game.title)):
-        j, progress = active.get(g.id), None
+        j, progress, detail = active.get(g.id), None, ("",) * 5
         if j:
             state, progress = "queued" if j.status == "queued" else "installing", j.progress
+            detail = (j.bytes_transferred, j.total_bytes, j.transfer_rate_bps, j.eta_seconds, j.message)
         elif g.kind == "game" and g.title_id in installed:
             row = installed[g.title_id]
             r = jobs.active_removal(row.id)
             state = "removing" if r else "update" if row.status == "update_available" else "installed"
             progress = r and r["progress"]
+            if r:
+                detail = (r["bytes_done"], r["bytes_total"], "", "", r["message"])
         else:
             reason = jobs.blocker(db, c, g)
             state = f"blocked:{reason}" if reason else "installable"
         lines.append("\t".join(map(_field, (g.id, g.title, g.title_id, g.version, g.size_bytes, state,
                                              f"{progress:.3f}" if progress is not None else "",
-                                             int(bool(g.cover_path)), g.kind, g.format))))
+                                             int(bool(g.cover_path)), g.kind, g.format, *detail))))
     return "".join(f"{line}\n" for line in lines)
 
 

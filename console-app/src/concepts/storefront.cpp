@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // A grid of covers on the left and the focused game on the right; L1 and R1
-// switch between games, what's installed, and DLC. Cross opens the install
+// switch between games, what's installed, DLC and the cart. Cross opens the install
 // dialog (pick a drive, read any warning), and Cross again asks the PC to
 // install it; the PC does the copying and this screen follows its progress.
+// Options puts a game in the cart (a fourth tab), and Cross there installs
+// everything in it, one after another, to one drive.
 // Square on an install in progress offers to stop it. Square on an installed
 // game asks the PC what removing it would delete, shows it, and Square again
 // removes it; a dialog says how it ended, and whether its home-screen tile
@@ -60,13 +62,17 @@ constexpr float kMessageSeconds = 5.0f;
 constexpr float kLift = 0.06f;  // how much the focused card grows
 constexpr float kArtH = 260.0f; // the focused game's art at the top of the panel
 constexpr int kMaxDrives = 5;   // rows in the install dialog
-constexpr const char *kTabs[] = {"Games", "Installed", "DLC"};
-constexpr const char *kTabCounts[] = {"games", "installed", "DLC"};
+constexpr const char *kTabs[] = {"Games", "Installed", "DLC", "Cart"};
+constexpr const char *kTabCounts[] = {"games", "installed", "DLC", "in cart"};
+constexpr int kTabCount = 4;
+constexpr int kCartTab = 3;
+constexpr int kCheckoutNames = 5; // titles listed in the install-all dialog
 
 constexpr const char *kTechniques[] = {
     "Library from the PC app over HTTP, on a background thread",
     "Covers arrive as raw RGBA and become textures as they load",
-    "L1 and R1 switch between games, installed games and DLC",
+    "L1 and R1 switch between games, installed games, DLC and the cart",
+    "The cart queues all its games at once; the PC copies them one after another",
     "Installs run on the PC, to the drive picked here; this screen polls their progress",
     "Removals show the PC's preview and wait for a second press",
     "The backdrop eases toward the focused cover's colours",
@@ -89,10 +95,19 @@ constexpr app::TourStep kTour[] = {
     {0.8f, action_bit(Action::confirm), Direction::none, "removed"},
     {0.3f, action_bit(Action::page_next), Direction::none},
     {0.8f, 0, Direction::right, "installed"}, // to the one installing
+    {0.8f, 0, Direction::none, "progress"},
     {0.4f, action_bit(Action::west), Direction::none},
     {0.6f, action_bit(Action::west), Direction::none, "stop"},
     {0.3f, action_bit(Action::page_next), Direction::none},
     {0.8f, 0, Direction::none, "dlc"},
+    {0.4f, action_bit(Action::menu), Direction::none}, // the DLC into the cart
+    {0.3f, action_bit(Action::page_prev), Direction::none},
+    {0.3f, action_bit(Action::page_prev), Direction::none},
+    {0.6f, action_bit(Action::menu), Direction::none, "cart-add"}, // and the first game
+    {0.3f, action_bit(Action::page_prev), Direction::none},
+    {0.8f, 0, Direction::none, "cart"},
+    {0.6f, action_bit(Action::confirm), Direction::none, "checkout"},
+    {0.6f, action_bit(Action::confirm), Direction::none, "checked-out"},
 };
 
 struct StateLook
@@ -158,12 +173,18 @@ bool installing(const store::Game &g)
     return g.state == "queued" || g.state == "installing";
 }
 
+bool fits_bytes(const store::Drive &d, std::uint64_t bytes)
+{
+    return d.total_bytes == 0 || d.free_bytes >= bytes; // unknown space: the PC checks
+}
+
 bool fits(const store::Drive &d, const store::Game &g)
 {
-    return d.total_bytes == 0 || d.free_bytes >= g.size_bytes; // unknown space: the PC checks
+    return fits_bytes(d, g.size_bytes);
 }
 
 // Games: all games. Installed: games on this console, or on their way in or out. DLC: all DLC.
+// The cart tab lists the cart (Storefront::show_tab).
 bool in_tab(const store::Game &g, int tab)
 {
     if (tab == 2 || g.kind == "dlc")
@@ -216,6 +237,11 @@ class Storefront final : public app::Concept
                 age_ = 0.0f; // the cards' entrance starts when they arrive
             loaded_ = loaded_ || error.empty();
             error_ = error;
+            // Whatever stopped being installable (queued from the PC, installed, gone) leaves the cart.
+            std::erase_if(cart_, [this](const std::string &id) {
+                const store::Game *g = find(id);
+                return g == nullptr || g->state != "installable";
+            });
             show_tab(keep);
         }
         std::string text;
@@ -280,6 +306,10 @@ class Storefront final : public app::Concept
         else if (!stop_id_.empty())
         {
             update_stop(input, feedback);
+        }
+        else if (checkout_)
+        {
+            update_checkout(input, feedback);
         }
         else
         {
@@ -391,12 +421,58 @@ class Storefront final : public app::Concept
         }
     }
 
+    void update_checkout(const InputFrame &input, app::Feedback &feedback)
+    {
+        const int rows = cart_games() > 0 ? drive_rows() : 0;
+        drive_ = std::clamp(drive_, 0, std::max(0, rows - 1));
+        if (rows > 1 && (input.nav == Direction::up || input.nav == Direction::down))
+        {
+            const int next = std::clamp(drive_ + (input.nav == Direction::down ? 1 : -1), 0, rows - 1);
+            if (next != drive_)
+            {
+                drive_ = next;
+                feedback.play(audio::Cue::focus);
+            }
+            else if (!input.nav_repeat)
+            {
+                feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+            }
+        }
+        if (input.is_pressed(Action::confirm) && !cart_.empty())
+        {
+            const store::Drive *drive = rows > 0 ? &drives_[static_cast<std::size_t>(drive_)] : nullptr;
+            if (drive != nullptr && !fits_bytes(*drive, cart_bytes(true)))
+            {
+                feedback.play(audio::Cue::error);
+                return;
+            }
+            // The client sends each ahead of what's waiting, so the last goes first and they queue in cart order.
+            for (auto it = cart_.rbegin(); it != cart_.rend(); ++it)
+                if (store::Game *g = find(*it))
+                {
+                    client_.install(g->id, g->kind == "game" && drive != nullptr ? drive->id : std::string());
+                    g->state = "queued"; // until the PC's list says otherwise
+                }
+            cart_.clear();
+            checkout_ = false;
+            tab_ = 1; // where they can be followed
+            show_tab({});
+            age_ = 0.0f;
+            feedback.play(audio::Cue::select);
+        }
+        else if (cart_.empty() || input.is_pressed(Action::back))
+        {
+            checkout_ = false;
+            feedback.play(audio::Cue::modal_close);
+        }
+    }
+
     void update_grid(const InputFrame &input, app::Feedback &feedback, int count)
     {
-        const int tab_step = input.is_pressed(Action::page_next) ? 1 : input.is_pressed(Action::page_prev) ? 2 : 0;
+        const int tab_step = input.is_pressed(Action::page_next) ? 1 : input.is_pressed(Action::page_prev) ? kTabCount - 1 : 0;
         if (tab_step != 0)
         {
-            tab_ = (tab_ + tab_step) % 3;
+            tab_ = (tab_ + tab_step) % kTabCount;
             show_tab({});
             age_ = 0.0f; // the new tab's cards rise in (the shell plays the tab sound)
             return;
@@ -424,16 +500,20 @@ class Storefront final : public app::Concept
                 refusal_.trigger();
             }
         }
-        if (count > 0 && input.is_pressed(Action::confirm))
+        if (tab_ == kCartTab && count > 0 && input.is_pressed(Action::confirm))
+        {
+            checkout_ = true;
+            drive_ = most_free_drive();
+            modal_.snap(0.0f);
+            feedback.play(audio::Cue::modal_open);
+        }
+        else if (count > 0 && input.is_pressed(Action::confirm))
         {
             const store::Game &g = *focused();
             if (g.state == "installable")
             {
                 install_id_ = g.id;
-                drive_ = 0; // the one with the most free space, like the PC's own pick
-                for (int i = 1; i < drive_rows(); ++i)
-                    if (drives_[static_cast<std::size_t>(i)].free_bytes > drives_[static_cast<std::size_t>(drive_)].free_bytes)
-                        drive_ = i;
+                drive_ = most_free_drive();
                 modal_.snap(0.0f);
                 feedback.play(audio::Cue::modal_open);
             }
@@ -457,6 +537,28 @@ class Storefront final : public app::Concept
                 stop_id_ = g.id;
                 modal_.snap(0.0f);
                 feedback.play(audio::Cue::modal_open);
+            }
+            else
+            {
+                feedback.play(audio::Cue::error);
+                refusal_.trigger();
+            }
+        }
+        if (count > 0 && input.is_pressed(Action::menu))
+        {
+            const store::Game &g = *focused();
+            const auto at = std::find(cart_.begin(), cart_.end(), g.id);
+            if (at != cart_.end())
+            {
+                cart_.erase(at);
+                if (tab_ == kCartTab)
+                    show_tab({}); // it leaves this tab
+                feedback.play(audio::Cue::toggle);
+            }
+            else if (g.state == "installable")
+            {
+                cart_.push_back(g.id);
+                feedback.play(audio::Cue::toggle);
             }
             else
             {
@@ -497,15 +599,23 @@ class Storefront final : public app::Concept
                 return draw_done(frame.overlay, frame.glass_texture);
             if (!install_id_.empty())
                 return draw_install(frame.overlay, frame.glass_texture);
+            if (checkout_)
+                return draw_checkout(frame.overlay, frame.glass_texture);
             return draw_stop(frame.overlay, frame.glass_texture);
         }
         if (!client_.paired() || !loaded_ || games_.empty())
             return;
-        ui::Hint hints[4];
+        ui::Hint hints[5];
         int count = 0;
         const store::Game *g = focused();
-        if (g != nullptr && g->state == "installable")
+        if (g != nullptr && tab_ == kCartTab)
+            hints[count++] = {ui::Button::cross, "Install all"};
+        else if (g != nullptr && g->state == "installable")
             hints[count++] = {ui::Button::cross, g->kind == "dlc" ? "Add" : "Install"};
+        if (g != nullptr && in_cart(g->id))
+            hints[count++] = {ui::Button::options, "Take out"};
+        else if (g != nullptr && g->state == "installable")
+            hints[count++] = {ui::Button::options, "Add to cart"};
         if (g != nullptr && removable(*g))
             hints[count++] = {ui::Button::square, "Remove"};
         if (g != nullptr && installing(*g))
@@ -541,7 +651,40 @@ class Storefront final : public app::Concept
 
     bool dialog_open() const
     {
-        return !confirm_.id.empty() || !done_.id.empty() || !install_id_.empty() || !stop_id_.empty();
+        return !confirm_.id.empty() || !done_.id.empty() || !install_id_.empty() || !stop_id_.empty() || checkout_;
+    }
+
+    bool in_cart(const std::string &id) const
+    {
+        return std::find(cart_.begin(), cart_.end(), id) != cart_.end();
+    }
+
+    // The cart's size; `games_only`: what lands on the picked drive (DLC goes onto its game's).
+    std::uint64_t cart_bytes(bool games_only) const
+    {
+        std::uint64_t n = 0;
+        for (const std::string &id : cart_)
+            if (const store::Game *g = find(id); g != nullptr && (!games_only || g->kind == "game"))
+                n += g->size_bytes;
+        return n;
+    }
+
+    int cart_games() const
+    {
+        return static_cast<int>(std::count_if(cart_.begin(), cart_.end(), [this](const std::string &id) {
+            const store::Game *g = find(id);
+            return g != nullptr && g->kind == "game";
+        }));
+    }
+
+    // The one with the most free space, like the PC's own pick.
+    int most_free_drive() const
+    {
+        int best = 0;
+        for (int i = 1; i < drive_rows(); ++i)
+            if (drives_[static_cast<std::size_t>(i)].free_bytes > drives_[static_cast<std::size_t>(best)].free_bytes)
+                best = i;
+        return best;
     }
 
     int drive_rows() const
@@ -555,7 +698,7 @@ class Storefront final : public app::Concept
         shown_.clear();
         focus_ = 0;
         for (std::size_t i = 0; i < games_.size(); ++i)
-            if (in_tab(games_[i], tab_))
+            if (tab_ == kCartTab ? in_cart(games_[i].id) : in_tab(games_[i], tab_))
             {
                 if (games_[i].id == keep)
                     focus_ = static_cast<int>(shown_.size());
@@ -570,7 +713,7 @@ class Storefront final : public app::Concept
         float x = kMargin;
         ui::draw_button(list, fonts, style, ui::Button::l1, x, 134, 34);
         x += ui::button_width(ui::Button::l1, 34) + 28;
-        for (int i = 0; i < 3; ++i)
+        for (int i = 0; i < kTabCount; ++i)
         {
             const float w = fonts.semibold.measure(kTabs[i], 44);
             ui::text(list, fonts.semibold, kTabs[i], x, 150, 44, i == tab_ ? kInk : kMuted.with_alpha(0.7f));
@@ -616,7 +759,9 @@ class Storefront final : public app::Concept
         {
             const char *empty = tab_ == 0   ? "No games on your PC yet, only DLC. On the PC, add a folder under Settings and scan it."
                                 : tab_ == 1 ? "Nothing from your PC is on this PS5 yet. Install a game from Games."
-                                            : "No DLC on your PC. On the PC, add a DLC folder under Settings and scan it.";
+                                : tab_ == 2 ? "No DLC on your PC. On the PC, add a DLC folder under Settings and scan it."
+                                            : "Your cart is empty. In Games or DLC, press Options on the ones you want, "
+                                              "then come back here and install them all at once.";
             ui::paragraph(list, fonts.regular, empty, kMargin, kGridTop + 60, 28, 1200, 40, kMuted, 3);
         }
         else
@@ -825,6 +970,73 @@ class Storefront final : public app::Concept
         ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, count, 1824, true);
     }
 
+    // What's in the cart, its size, and the drive the games go to.
+    void draw_checkout(gfx::DrawList &list, std::uint32_t glass) const
+    {
+        const ui::Fonts &fonts = context_.fonts;
+        const int names = std::min(kCheckoutNames, static_cast<int>(cart_.size()));
+        const bool more = static_cast<int>(cart_.size()) > names;
+        const int rows = cart_games() > 0 ? drive_rows() : 0;
+        const bool no_drive = cart_games() > 0 && rows == 0;
+        const float height = 250.0f + 38.0f * static_cast<float>(names + (more ? 1 : 0)) + 68.0f * static_cast<float>(rows) +
+                             (no_drive ? 80.0f : 0.0f);
+        const Rect box = draw_dialog(list, glass, 540 - height * 0.5f, height, kAccent);
+        const float x = box.x + 48;
+        const float width = box.w - 96;
+        char title[64];
+        std::snprintf(title, sizeof(title), cart_.size() == 1 ? "Install 1 item?" : "Install all %zu items?", cart_.size());
+        float y = ui::paragraph(list, fonts.semibold, title, x, box.y + 76, 36, width, 46, kInk, 1);
+        ui::text(list, fonts.regular,
+                 store::format_size(cart_bytes(false)) + " in all, copied one after another in this order.",
+                 x, y + 30, 24, kMuted);
+        y += 54;
+        for (int i = 0; i < names; ++i)
+            if (const store::Game *g = find(cart_[static_cast<std::size_t>(i)]))
+            {
+                ui::text(list, fonts.regular, fonts.regular.font->fit(g->title, 24, width - 220), x + 20, y + 30, 24, kInk);
+                ui::text(list, fonts.regular,
+                         g->kind == "dlc" ? "DLC  ·  " + store::format_size(g->size_bytes) : store::format_size(g->size_bytes),
+                         x + width, y + 30, 24, kMuted, gfx::Align::right);
+                y += 38;
+            }
+        if (more)
+        {
+            char rest[48];
+            std::snprintf(rest, sizeof(rest), "and %zu more", cart_.size() - static_cast<std::size_t>(names));
+            ui::text(list, fonts.regular, rest, x + 20, y + 30, 24, kMuted);
+            y += 38;
+        }
+        y += 16;
+        if (no_drive)
+            ui::paragraph(list, fonts.regular,
+                          "No drive on this PS5 is set for installs. On the PC, open Consoles and choose one.",
+                          x, y + 30, 24, width, 34, kWarn, 2);
+        const std::uint64_t need = cart_bytes(true);
+        for (int i = 0; i < rows; ++i)
+        {
+            const store::Drive &d = drives_[static_cast<std::size_t>(i)];
+            const Rect row{x, y + 16 + 68.0f * static_cast<float>(i), width, 56};
+            const bool on = i == drive_;
+            list.rounded_rect(row, 14, kWhite.with_alpha(on ? 0.12f : 0.05f));
+            if (on)
+                list.bordered_rect(row, 14, kTransparent, 2, kAccent);
+            ui::text(list, fonts.semibold, d.label, row.x + 20, row.y + 37, 24, on ? kInk : kMuted);
+            const bool ok = fits_bytes(d, need);
+            const std::string space = d.total_bytes == 0 ? std::string("Free space unknown")
+                                      : ok               ? store::format_size(d.free_bytes) + " free"
+                                                         : "Not enough space for all of them";
+            ui::text(list, fonts.regular, space, row.x + row.w - 20, row.y + 37, 24, ok ? kMuted : kBad, gfx::Align::right);
+        }
+        end_dialog(list);
+        ui::Hint hints[3];
+        int count = 0;
+        hints[count++] = {ui::Button::cross, "Install all"};
+        if (rows > 1)
+            hints[count++] = {ui::Button::dpad, "Drive"};
+        hints[count++] = {ui::Button::circle, "Not yet"};
+        ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, count, 1824, true);
+    }
+
     void draw_stop(gfx::DrawList &list, std::uint32_t glass) const
     {
         const ui::Fonts &fonts = context_.fonts;
@@ -896,8 +1108,8 @@ class Storefront final : public app::Concept
         list.gradient_rect({r.x, r.y, r.w, r.h * 0.4f}, 14, kWhite.with_alpha(0.12f), kTransparent);
         list.bordered_rect(r, 14, kTransparent, 1.0f, kWhite.with_alpha(focused ? 0.3f : 0.1f));
 
-        const StateLook state = look(g);
-        if (g.state != "installable")
+        const StateLook state = in_cart(g.id) ? StateLook{"In cart", kAccent} : look(g);
+        if (g.state != "installable" || in_cart(g.id))
         {
             const Rect badge{r.x + 10, r.y + 10, fonts.semibold.measure(state.label, 17) + 40, 32};
             list.rounded_rect(badge, 16, kNight.with_alpha(0.82f));
@@ -963,7 +1175,7 @@ class Storefront final : public app::Concept
         ui::text(list, fonts.regular, store::format_size(g.size_bytes), x, y, 24, kMuted);
         y += 56;
 
-        const StateLook state = look(g);
+        const StateLook state = in_cart(g.id) ? StateLook{"In cart", kAccent} : look(g);
         const Rect pill{x, y - 32, fonts.semibold.measure(state.label, 24) + 52, 46};
         list.rounded_rect(pill, 23, state.color.with_alpha(0.16f));
         list.bordered_rect(pill, 23, kTransparent, 1.5f, state.color.with_alpha(0.45f));
@@ -977,17 +1189,41 @@ class Storefront final : public app::Concept
             char percent[16];
             std::snprintf(percent, sizeof(percent), "%d%%", static_cast<int>(g.progress * 100.0f + 0.5f));
             ui::text(list, fonts.mono, percent, x + width, y - 44, 22, kInk, gfx::Align::right);
+            // How far, how fast, how long: from the PC's job, about once a second.
+            if (g.bytes_total > 0)
+            {
+                y += 40;
+                ui::text(list, fonts.regular, store::format_size(g.bytes_done) + " of " + store::format_size(g.bytes_total),
+                         x, y, 22, kInk);
+                if (g.rate_bps > 0)
+                    ui::text(list, fonts.mono, store::format_size(g.rate_bps) + "/s", x + width, y, 22, kInk,
+                             gfx::Align::right);
+            }
+            if (g.state == "installing" && g.seconds_left >= 0 && g.rate_bps > 0)
+            {
+                y += 32;
+                ui::text(list, fonts.regular, store::format_duration(g.seconds_left), x, y, 22, kMuted);
+            }
+            if (g.bytes_total > 0)
+                y += 10;
         }
-        const char *detail = g.state == "installable"  ? g.kind == "dlc" ? "Press Cross to add it to its game on this console."
-                                                                         : "Press Cross to copy it from your PC to this console."
+        const char *detail = tab_ == kCartTab ? "Press Cross to install everything in the cart. Options takes this one out."
+                             : in_cart(g.id)  ? "It's in your cart. Install everything in it from the Cart tab."
+                             : g.state == "installable"
+                                 ? g.kind == "dlc" ? "Press Cross to add it to its game on this console, or Options to put it in the cart."
+                                                   : "Press Cross to copy it from your PC to this console, or Options to put it in the cart."
                              : g.state == "installed"  ? "It's on the home screen. Press Square to remove it."
                              : g.state == "update"     ? "Your PC has a newer version than the one installed."
                              : g.state == "queued"     ? "Your PC will start copying it soon. Press Square to cancel."
                              : g.state == "installing" ? "Press Square to stop."
                              : g.state == "removing"   ? "Your PC is deleting it from this console, then its tile."
                                                        : nullptr;
-        ui::paragraph(list, fonts.regular, detail != nullptr ? std::string(detail) : g.reason, x, y + 40,
-                      24, width, 34, kMuted, 4);
+        std::string text = detail != nullptr ? std::string(detail) : g.reason;
+        if (!g.step.empty() && g.state == "installing")
+            text = g.step + " " + text; // "Copying to USB. Press Square to stop."
+        else if (!g.step.empty() && g.state == "removing")
+            text = g.step;
+        ui::paragraph(list, fonts.regular, text, x, y + 40, 24, width, 34, kMuted, 4);
     }
 
     app::Context &context_;
@@ -999,6 +1235,8 @@ class Storefront final : public app::Concept
     std::string install_id_; // the game the install dialog is for; shown while set
     int drive_ = 0;          // the drive picked in it
     std::string stop_id_;    // the install the stop dialog is for; shown while set
+    std::vector<std::string> cart_; // game ids in the order they were added; installable ones only
+    bool checkout_ = false;         // the install-all dialog is open
     std::string error_;
     bool loaded_ = false;
     std::unordered_map<std::string, std::uint32_t> covers_;

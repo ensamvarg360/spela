@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, formatBytes, formatLabel, session, SOURCE_LABEL, STATUS_LABEL, type Console, type Drive, type Game, type Job } from "./api";
+import { cart, useCart } from "./Cart";
 import { Cover } from "./Library";
 import { when } from "./Installed";
 
@@ -10,6 +11,7 @@ function Install({ game }: { game: Game }) {
   const [drives, setDrives] = useState<Drive[]>([]);
   const [did, setDid] = useState("");
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const carted = useCart().includes(game.id);
 
   useEffect(() => {
     api<Console[]>("/consoles").then((cs) => {
@@ -54,6 +56,10 @@ function Install({ game }: { game: Game }) {
         </select>
       )}
       <button onClick={install}>{game.kind === "dlc" ? "Add to game" : "Install"}</button>
+      <button className="secondary" aria-pressed={carted} onClick={() => (carted ? cart.remove : cart.add)([game.id])}>
+        {carted ? "In cart ✓" : "Add to cart"}
+      </button>
+      {carted && <a href="#/cart">Open cart</a>}
       {msg && <span className={msg.error ? "error" : "muted"} role="status">{msg.text}{!msg.error && <> <a href="#/installed">Open</a></>}</span>}
     </div>
   );

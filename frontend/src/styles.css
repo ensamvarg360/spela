@@ -362,3 +362,7 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .history code { margin-left: 0.4rem; font-size: 0.8rem; overflow-wrap: anywhere; }
 
 .edit fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+
+.count-pill { margin-left: 0.4rem; font-size: 0.72rem; font-weight: 700; padding: 0.05rem 0.45rem; border-radius: 999px; background: var(--accent); color: #fff; }
+.cart tfoot th { text-align: left; padding: 0.45rem 0.6rem; }
+.cart .toolbar { margin: 1rem 0 0; }

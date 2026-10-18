@@ -28,6 +28,12 @@ struct Game
     bool has_cover = false;
     std::string kind = "game"; // game | dlc
     std::string format;        // folder_dump | image | ps5_pkg | ps4_pkg | archive | unlocker; empty from an older PC
+    // While installing or removing; 0, -1 or empty when the PC doesn't say (or is older).
+    std::uint64_t bytes_done = 0;
+    std::uint64_t bytes_total = 0;
+    std::uint64_t rate_bps = 0;
+    int seconds_left = -1;
+    std::string step; // "Copying to USB."
 };
 
 std::vector<Game> parse_library(std::string_view text);
@@ -83,5 +89,8 @@ bool parse_server(std::string_view text, Server *out);
 
 // "40.2 GB", decimal units like the PC app.
 std::string format_size(std::uint64_t bytes);
+
+// "About 12 min left".
+std::string format_duration(int seconds);
 
 } // namespace hui::store

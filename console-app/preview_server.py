@@ -4,12 +4,13 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 W, H = 256, 320
-GAMES = [  # id, title, title ID, version, size, state, progress, has cover, kind, format
+GAMES = [  # id, title, title ID, version, size, state, progress, has cover, kind, format[, done, total, rate, eta, step]
     ["g01", "Harbor Lights", "PPSA01001", "01.000.000", 41_200_000_000, "installable", "", "1", "game", "folder_dump"],
     ["g02", "Iron Orchard", "PPSA01002", "01.020.000", 88_900_000_000, "installed", "", "1", "game", "image"],
     ["g03", "Night Courier", "PPSA01003", "01.004.000", 23_400_000_000, "installable", "", "1", "game", "image"],
     ["g04", "Pale Summit", "PPSA01004", "02.000.000", 65_000_000_000, "update", "", "1", "game", "folder_dump"],
-    ["g05", "Small Hours", "PPSA01005", "01.000.000", 7_800_000_000, "installing", "0.420", "1", "game", "image"],
+    ["g05", "Small Hours", "PPSA01005", "01.000.000", 7_800_000_000, "installing", "0.420", "1", "game", "image",
+     3_276_000_000, 7_800_000_000, 84_600_000, 53, "Copying to USB Extended Storage."],
     ["g06", "The Long Signal: Director's Extended Edition", "PPSA01006", "01.100.000", 102_000_000_000, "installable", "", "1",
      "game", "folder_dump"],
     ["g07", "Tidewater", "CUSA01007", "01.05", 12_100_000_000,

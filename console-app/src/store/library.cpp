@@ -67,6 +67,14 @@ std::vector<Game> parse_library(std::string_view text)
             g.kind = f[8];
             g.format = f[9];
         }
+        if (f.size() >= 15)
+        {
+            g.bytes_done = std::strtoull(std::string(f[10]).c_str(), nullptr, 10);
+            g.bytes_total = std::strtoull(std::string(f[11]).c_str(), nullptr, 10);
+            g.rate_bps = std::strtoull(std::string(f[12]).c_str(), nullptr, 10);
+            g.seconds_left = f[13].empty() ? -1 : std::atoi(std::string(f[13]).c_str());
+            g.step = f[14];
+        }
         games.push_back(std::move(g));
     }
     return games;
@@ -148,6 +156,18 @@ std::string format_size(std::uint64_t bytes)
     }
     char text[32];
     std::snprintf(text, sizeof(text), unit ? "%.1f %s" : "%.0f %s", n, kUnits[unit]);
+    return text;
+}
+
+std::string format_duration(int seconds)
+{
+    char text[32];
+    if (seconds < 60)
+        return "Less than a minute left";
+    if (seconds < 3600)
+        std::snprintf(text, sizeof(text), "About %d min left", (seconds + 30) / 60);
+    else
+        std::snprintf(text, sizeof(text), "About %d h %d min left", seconds / 3600, seconds % 3600 / 60);
     return text;
 }
 

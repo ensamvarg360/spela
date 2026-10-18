@@ -53,10 +53,10 @@ def test_console_api(tmp_path):
         assert client.get("/api/v1/console-app/library", headers={"Authorization": f"Bearer {forged}"}).status_code == 401
 
         rows = {r.split("\t")[0]: r.split("\t") for r in client.get("/api/v1/console-app/library", headers=auth).text.splitlines()}
-        assert rows[ready.id] == [ready.id, "Racer Tabs", "PPSA04444", "01.000.000", "1", "installable", "", "1", "game", "image"]
+        assert rows[ready.id] == [ready.id, "Racer Tabs", "PPSA04444", "01.000.000", "1", "installable", "", "1", "game", "image", "", "", "", "", ""]
         assert rows[pkg.id][5].startswith("blocked:") and "packages need firmware" in rows[pkg.id][5]
         assert rows[have.id][5] == "installed"
-        assert rows[dlc.id][8:] == ["dlc", "unlocker"] and rows[dlc.id][5] != "installed"  # not its game's state
+        assert rows[dlc.id][8:10] == ["dlc", "unlocker"] and rows[dlc.id][5] != "installed"  # not its game's state
 
         assert client.get("/api/v1/console-app/drives", headers=auth).text == f"{usb}\tUSB\t40\t100\n"  # install targets only
         installed = {g["id"]: g["installed"] for g in client.get("/api/v1/games").json()}
@@ -72,8 +72,11 @@ def test_console_api(tmp_path):
         assert (r.status_code, r.text) == (200, "Queued.")
         with SessionLocal() as db:
             assert db.scalar(select(InstallJob.target_drive_id).where(InstallJob.game_id == ready.id)) == usb
-            db.add(InstallJob(console_id=a, game_id=have.id, status="transferring"))  # running: the worker leaves it alone
+            db.add(InstallJob(console_id=a, game_id=have.id, status="transferring", progress=0.25, bytes_transferred=25,
+                              total_bytes=100, transfer_rate_bps=5, eta_seconds=15, message="Copying to USB."))  # running: the worker leaves it alone
             db.commit()
+        row = next(x for x in client.get("/api/v1/console-app/library", headers=auth).text.splitlines() if x.startswith(have.id))
+        assert row.split("\t")[5:7] + row.split("\t")[10:] ==["installing", "0.250", "25", "100", "5", "15", "Copying to USB."]
         assert client.post(f"/api/v1/console-app/install/{have.id}/cancel", headers=auth).text == "Stopping."
         assert client.post(f"/api/v1/console-app/install/{have.id}/cancel", headers=auth).status_code == 200  # still running
         assert client.post(f"/api/v1/console-app/install/{pkg.id}/cancel", headers=auth).status_code == 409

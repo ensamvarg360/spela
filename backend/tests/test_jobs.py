@@ -597,3 +597,30 @@ def test_save_backup_job(ps5, monkeypatch, tmp_path):
         b = asyncio.run(backup("PPSA07777"))
         assert b["status"] == "failed" and "no save data" in b["message"]
         assert jobs.list_save_backups("PPSA07777") == []  # nothing half-made left behind
+
+
+def test_progress_reports_the_current_speed(monkeypatch):
+    """Ten seconds fast, then five slow: the rate follows the slowdown instead of averaging over the whole copy."""
+    Base.metadata.create_all(engine)
+    with SessionLocal() as db:
+        c = Console(name="Speed", ip_address="127.0.0.1", connection_type="mock", port=1)
+        g = Game(title="Speed", format="image", compatibility_status="ready", source_path="/speed", source_fingerprint="speed", size_bytes=2000)
+        db.add_all([c, g])
+        db.flush()
+        job = InstallJob(console_id=c.id, game_id=g.id)
+        db.add(job)
+        db.commit()
+        job_id, gid = job.id, g.id
+    done = [100 * i for i in range(1, 11)] + [1000 + 10 * i for i in range(1, 6)]  # 100 B/s, then 10 B/s
+    clock = iter(float(t) for t in range(1, len(done) + 1))
+    monkeypatch.setattr(jobs.time, "monotonic", lambda: next(clock))
+    report = jobs._progress(job_id, 0.0)
+    for d in done:
+        report(d, 2000)
+    with SessionLocal() as db:
+        j = db.get(InstallJob, job_id)
+        assert j.bytes_transferred == 1050 and 10 <= j.transfer_rate_bps < 30  # the whole-copy average is 70
+        assert j.eta_seconds == (2000 - 1050) // j.transfer_rate_bps
+        db.delete(j)
+        db.delete(db.get(Game, gid))
+        db.commit()

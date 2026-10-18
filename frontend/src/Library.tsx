@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { api, appVersion, coverUrl, formatLabel, session, STATUS_LABEL, type Console, type Game, type Job, type Kind, type ScanStatus, type StoreInfo } from "./api";
+import { api, appVersion, coverUrl, formatLabel, session, STATUS_LABEL, type Console, type Game, type Kind, type ScanStatus, type StoreInfo } from "./api";
+import { cart, confirmBatch, queueAll } from "./Cart";
 import { STATE_LABEL } from "./Installed";
 
 export type Sort = "title" | "recent" | "rating" | "released" | "size";
@@ -84,12 +85,12 @@ function Connection() {
   );
 }
 
-/** Queues every picked game on one console, one request each, and says which couldn't be queued and why. */
+/** Queues every picked game on one console, or puts them in the cart, and says which couldn't be queued and why. */
 function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Set<string>; shown: Game[]; setPicked: (p: Set<string> | null) => void }) {
   const [consoles, setConsoles] = useState<Console[]>([]);
   const [cid, setCid] = useState("");
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ queued: number; failed: [string, string][] } | null>(null);
+  const [result, setResult] = useState<{ queued: number; carted?: number; failed: [string, string][] } | null>(null);
   useEffect(() => {
     api<Console[]>("/consoles").then((cs) => {
       setConsoles(cs);
@@ -99,21 +100,18 @@ function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Se
 
   const games = shown.filter((g) => picked.has(g.id));
   async function install() {
-    if (games.some((g) => g.format === "archive") && !confirm("Archives are extracted to the private staging folder on this PC before they're installed, one at a time. Make sure the PC has room for the biggest unpacked game.")) return;
-    if (kind === "dlc" && !confirm("Each unlocker's files are copied into its installed game's folder and replace files there with the same names. Close the games on the PS5 first.")) return;
+    if (!confirmBatch(games)) return;
     setBusy(true);
-    const failed: [string, string][] = [];
-    for (const g of games) {
-      try {
-        await api<Job>(`/consoles/${cid}/install`, { json: { game_id: g.id, drive_id: null } });
-      } catch (e) {
-        failed.push([g.title, (e as Error).message]);
-      }
-    }
+    const failed = await queueAll(cid, games, null);
     setBusy(false);
-    setResult({ queued: games.length - failed.length, failed });
+    setResult({ queued: games.length - failed.length, failed: failed.map(([g, why]) => [g.title, why]) });
     if (!failed.length) setPicked(new Set());
   }
+  const addToCart = () => {
+    cart.add(games.map((g) => g.id));
+    setResult({ queued: 0, carted: games.length, failed: [] });
+    setPicked(new Set());
+  };
 
   return (
     <div className="pick-bar card" role="region" aria-label="Selection">
@@ -127,6 +125,7 @@ function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Se
             {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         )}
+        <button className="secondary" disabled={busy || !games.length} onClick={addToCart}>Add to cart</button>
         <button disabled={busy || !games.length} onClick={install}>
           {busy ? "Queuing…" : `${kind === "dlc" ? "Add" : "Install"} ${games.length || ""}`.trim()}
         </button>
@@ -134,6 +133,7 @@ function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Se
       <button className="secondary" onClick={() => setPicked(null)}>Done</button>
       {result && (
         <div className="pick-result" role="status">
+          {!!result.carted && <p className="muted">Added {result.carted} to the <a href="#/cart">cart</a>.</p>}
           {result.queued > 0 && <p className="muted">Queued {result.queued}. They install one at a time; follow them on the <a href="#/installed">Installed</a> page.</p>}
           {result.failed.length > 0 && <>
             <p className="error">Couldn't queue {result.failed.length}:</p>

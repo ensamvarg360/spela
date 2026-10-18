@@ -1,12 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, appVersion, session } from "./api";
 import Library, { NO_VIEW, type View } from "./Library";
+import Cart, { useCart } from "./Cart";
 import Dashboard from "./Dashboard";
 import GameDetail from "./GameDetail";
 import Installed from "./Installed";
 import Settings from "./Settings";
 
-// ponytail: hash routing, six routes. Swap in react-router when nested routes show up.
+// ponytail: hash routing, seven routes. Swap in react-router when nested routes show up.
 function useHash() {
   const [hash, setHash] = useState(location.hash);
   useEffect(() => {
@@ -21,6 +22,7 @@ export default function App() {
   const [user, setUser] = useState<string | null | undefined>(undefined);
   const [needsSetup, setNeedsSetup] = useState(false);
   const route = useHash();
+  const inCart = useCart();
   const [version, setVersion] = useState("");
   const [view, setView] = useState<View>(NO_VIEW); // here, so filters survive opening a game and coming back
   const [dlcView, setDlcView] = useState<View>(NO_VIEW);
@@ -59,6 +61,7 @@ export default function App() {
           <a href="#/" aria-current={route === "/" || !!gameId ? "page" : undefined}>Library</a>
           <a href="#/dlc" aria-current={dlc ? "page" : undefined}>DLC</a>
           <a href="#/installed" aria-current={route === "/installed" ? "page" : undefined}>Installed</a>
+          {!session.readOnly && <a href="#/cart" aria-current={route === "/cart" ? "page" : undefined}>Cart{inCart.length > 0 && <span className="count-pill">{inCart.length}</span>}</a>}
           {!session.readOnly && <a href="#/settings" aria-current={route === "/settings" ? "page" : undefined}>Settings</a>}
         </nav>
         {session.readOnly && <span className="badge installed" title="Logged in with the view-only password: you can look, not change anything.">View only</span>}
@@ -68,7 +71,7 @@ export default function App() {
       </header>
       <main>
         {gameId ? <GameDetail id={gameId} /> : route === "/dashboard" ? <Dashboard /> : route === "/settings" ? (session.readOnly
-          ? <p className="muted">Settings need the admin password. <button className="link" onClick={logout}>Log out</button> and log in with it.</p> : <Settings />) : route === "/installed" ? <Installed />
+          ? <p className="muted">Settings need the admin password. <button className="link" onClick={logout}>Log out</button> and log in with it.</p> : <Settings />) : route === "/installed" ? <Installed /> : route === "/cart" && !session.readOnly ? <Cart />
           : dlc ? <Library key="dlc" kind="dlc" view={dlcView} setView={setDlcView} /> : <Library key="game" kind="game" view={view} setView={setView} />}
       </main>
     </>

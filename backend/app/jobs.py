@@ -155,16 +155,19 @@ def _pick_drive(db: Session, console: Console, job: InstallJob, drives: list[Dri
 
 
 def _progress(job_id: str, started: float):
-    """Callback for the transfer thread: writes progress to the job row about once a second."""
-    last = 0.0
+    """Callback for the transfer thread: writes progress to the job row about once a second.
+    The rate is the current speed: each second's, smoothed so it doesn't jump with every chunk."""
+    last, last_done, rate = started, 0, 0.0
 
     def report(done: int, total: int):
-        nonlocal last
+        nonlocal last, last_done, rate
         t = time.monotonic()
         if t - last < 1 and done < total:
             return
-        last = t
-        rate = int(done / max(t - started, 0.001))
+        now_rate = (done - last_done) / max(t - last, 0.001)
+        rate = now_rate if not rate else 0.3 * now_rate + 0.7 * rate
+        last, last_done = t, done
+        rate = int(rate)
         with SessionLocal() as db:
             job = db.get(InstallJob, job_id)
             job.bytes_transferred, job.total_bytes = done, total

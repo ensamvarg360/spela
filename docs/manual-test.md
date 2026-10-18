@@ -193,9 +193,15 @@ Also check:
 - [ ] Open it on the PS5.
   **Expect:** your PC library with covers.
 - [ ] Press L1 and R1.
-  **Expect:** the tabs switch between **Games**, **Installed** and **DLC**. DLC shows only under **DLC**, never as *Installed*.
+  **Expect:** the tabs switch between **Games**, **Installed**, **DLC** and **Cart**. DLC shows only under **DLC**, never as *Installed*.
 - [ ] With two install drives set on the PC, press Cross on a game that isn't installed, pick the other drive with the D-pad, and press Cross.
   **Expect:** it queues, the PC's **Installed** page shows the job, and the game goes to the drive you picked. A drive without room says *Not enough space* and can't be picked.
+- [ ] Focus that game while it copies.
+  **Expect:** under the bar, *X GB of Y GB*, the speed, the time left and the step (*Copying to …*). Pull the PS5's network cable for a few seconds: the speed drops within a few seconds instead of staying at the average.
+- [ ] Press Options on two games that aren't installed, open **Cart**, press Cross, pick a drive and press Cross.
+  **Expect:** both show *In cart* first; then the app switches to **Installed** and both are waiting, in the order you added them, and install one after another to that drive. A drive without room for all of them says *Not enough space for all of them*.
+- [ ] On the PC, press **Select** in the Library, pick three games, click **Add to cart**, then on a fourth game's page click **Add to cart**. Open **Cart** in the header and click **Install all 4**.
+  **Expect:** the header shows the count, the cart lists all four with the total size and survives a page reload, and after **Install all** the four are queued on the **Installed** page and the cart is empty. One that can't be queued stays in the cart with the reason.
 - [ ] Press Square on that game while it's waiting or installing, then Square again.
   **Expect:** the install stops, the same as **Cancel** on the PC.
 - [ ] Press Square on an installed game and confirm.
@@ -221,6 +227,27 @@ Also check:
 
 - [ ] On a game's page, click **Back up saves** for a game with save data.
   **Expect:** a backup listed with one or more files, under `save-backups/<title ID>` in the data folder, mirroring `/user/home/<user>/savedata_prospero/<title ID>`. Note the folders it found here if they differ.
+
+---
+
+## 18. Where trophies live (look only, for the profile page)
+
+Nothing in the app does this yet. Use an FTP payload and only read: don't change, rename or delete anything here. Use a local user that has never signed in to PSN and has earned at least one trophy.
+
+- [ ] List `/user/home`, then that user's folder `/user/home/<user id>`.
+  **Expect:** a `trophy2` folder (or `trophy`) next to `savedata_prospero`. Note its full path and the folders inside it.
+- [ ] Find the `.db` files under it (probably `db/trophy_local.db`), plus any trophy folders outside the user folder (look under `/user/trophy2`, `/user/trophy` and `/system_data/priv`). Copy every `.db` you find to the PC.
+  **Expect:** `head -c 16 <file>` prints `SQLite format 3`. If it prints something else, the file is encrypted: note that and skip the next step for it.
+- [ ] Open each readable copy with `sqlite3 <file>` and run `.tables`, then `.schema` and `SELECT * FROM <table> LIMIT 5;` for each table that has *title* or *trophy* in its name.
+  **Expect:** one row per game with earned/total counts, and per-trophy unlock times. Note whether **trophy names, descriptions or icon paths** show up as plain text, or only IDs.
+- [ ] Earn one more trophy, copy the db again and compare.
+  **Expect:** the new unlock shows up right away, without signing in to PSN.
+- [ ] Find a game's per-trophy files (folders named `NPWR…_00`, holding `TROP*.ESFM` / `TROP*.SFM` and `ICON*.PNG`).
+  **Expect:** note the path, and whether the `.SFM`/`.ESFM` files start with `<?xml` (readable) or not (encrypted), and whether the `.PNG` icons open.
+- [ ] Find where the console keeps user names (sign-in names for each user ID).
+  **Expect:** note the file and whether it's readable. If it's not found, the profile page can show the user ID until the helper asks the system.
+
+Paste the paths, `.schema` output and answers under *Problems found*, even if everything worked: they decide what the profile page can show.
 
 ## Problems found
 
