@@ -51,11 +51,14 @@ class Client
     }
 
     // ---- frame loop side ----
-    // Copies the newest library into *games when it changed since the last
-    // call. *error is empty when the last request worked.
-    bool take_library(std::vector<Game> *games, std::string *error);
+    // Copies the newest library and install drives into *games and *drives when
+    // they changed since the last call. *error is empty when the last request worked.
+    bool take_library(std::vector<Game> *games, std::vector<Drive> *drives, std::string *error);
     void refresh();
-    void install(const std::string &game_id);
+    // An empty drive_id lets the PC pick the drive with the most free space.
+    void install(const std::string &game_id, const std::string &drive_id);
+    // Stops a queued or running install; answers via take_message.
+    void cancel(const std::string &game_id);
     // Asks the PC what removing a game would delete; the answer comes back
     // through take_removal. remove() then deletes it, answering via take_message.
     void preview_removal(const std::string &game_id);
@@ -75,11 +78,12 @@ class Client
         {
             cover,
             install,
+            cancel,
             preview,
             remove
         } kind;
         std::string game_id; // the removal id for remove
-        std::string title_id = {};
+        std::string arg = {}; // the title ID for remove, the drive id for install
     };
 
     static void *thread_main(void *self);
@@ -100,6 +104,7 @@ class Client
     pthread_mutex_t lock_ = PTHREAD_MUTEX_INITIALIZER;
     // everything below is guarded by lock_
     std::vector<Game> games_;
+    std::vector<Drive> drives_;
     std::string error_;
     bool library_new_ = false;
     bool busy_ = false; // something installing or being removed: poll faster

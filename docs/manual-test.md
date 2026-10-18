@@ -192,8 +192,12 @@ Also check:
   **Expect:** *PS5 Local Storefront* appears on the PS5 home screen.
 - [ ] Open it on the PS5.
   **Expect:** your PC library with covers.
-- [ ] Press Cross on a game that isn't installed.
-  **Expect:** it queues, and the PC's **Installed** page shows the job.
+- [ ] Press L1 and R1.
+  **Expect:** the tabs switch between **Games**, **Installed** and **DLC**. DLC shows only under **DLC**, never as *Installed*.
+- [ ] With two install drives set on the PC, press Cross on a game that isn't installed, pick the other drive with the D-pad, and press Cross.
+  **Expect:** it queues, the PC's **Installed** page shows the job, and the game goes to the drive you picked. A drive without room says *Not enough space* and can't be picked.
+- [ ] Press Square on that game while it's waiting or installing, then Square again.
+  **Expect:** the install stops, the same as **Cancel** on the PC.
 - [ ] Press Square on an installed game and confirm.
   **Expect:** it's removed, the same as from the PC.
 - [ ] Delete the console on the PC, then open the PS5 app.

@@ -4,20 +4,27 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 W, H = 256, 320
-GAMES = [  # id, title, title ID, version, size, state, progress, has cover
-    ["g01", "Harbor Lights", "PPSA01001", "01.000.000", 41_200_000_000, "installable", "", "1"],
-    ["g02", "Iron Orchard", "PPSA01002", "01.020.000", 88_900_000_000, "installed", "", "1"],
-    ["g03", "Night Courier", "PPSA01003", "01.004.000", 23_400_000_000, "installable", "", "1"],
-    ["g04", "Pale Summit", "PPSA01004", "02.000.000", 65_000_000_000, "update", "", "1"],
-    ["g05", "Small Hours", "PPSA01005", "01.000.000", 7_800_000_000, "installing", "0.420", "1"],
-    ["g06", "The Long Signal: Director's Extended Edition", "PPSA01006", "01.100.000", 102_000_000_000, "installable", "", "1"],
+GAMES = [  # id, title, title ID, version, size, state, progress, has cover, kind, format
+    ["g01", "Harbor Lights", "PPSA01001", "01.000.000", 41_200_000_000, "installable", "", "1", "game", "folder_dump"],
+    ["g02", "Iron Orchard", "PPSA01002", "01.020.000", 88_900_000_000, "installed", "", "1", "game", "image"],
+    ["g03", "Night Courier", "PPSA01003", "01.004.000", 23_400_000_000, "installable", "", "1", "game", "image"],
+    ["g04", "Pale Summit", "PPSA01004", "02.000.000", 65_000_000_000, "update", "", "1", "game", "folder_dump"],
+    ["g05", "Small Hours", "PPSA01005", "01.000.000", 7_800_000_000, "installing", "0.420", "1", "game", "image"],
+    ["g06", "The Long Signal: Director's Extended Edition", "PPSA01006", "01.100.000", 102_000_000_000, "installable", "", "1",
+     "game", "folder_dump"],
     ["g07", "Tidewater", "CUSA01007", "01.05", 12_100_000_000,
-     "blocked:This console has no package installer. Only folder dumps and disc images can be installed.", "", "0"],
-    ["g08", "Undertow", "PPSA01008", "01.000.000", 30_500_000_000, "queued", "", "1"],
-    ["g09", "Velvet Circuit", "PPSA01009", "01.002.000", 19_900_000_000, "installable", "", "0"],
-    ["g10", "Winter Ledger", "PPSA01010", "01.000.000", 54_300_000_000, "installable", "", "1"],
-    ["g11", "Yellow Line", "PPSA01011", "01.000.000", 8_200_000_000, "installable", "", "1"],
-    ["g12", "Zero Meridian", "PPSA01012", "01.010.000", 71_700_000_000, "installable", "", "1"],
+     "blocked:This console has no package installer. Only folder dumps and disc images can be installed.", "", "0", "game", "ps4_pkg"],
+    ["g08", "Undertow", "PPSA01008", "01.000.000", 30_500_000_000, "queued", "", "1", "game", "image"],
+    ["g09", "Velvet Circuit", "PPSA01009", "01.002.000", 19_900_000_000, "installable", "", "0", "game", "image"],
+    ["g10", "Winter Ledger", "PPSA01010", "01.000.000", 54_300_000_000, "installable", "", "1", "game", "image"],
+    ["g11", "Yellow Line", "PPSA01011", "01.000.000", 8_200_000_000, "installable", "", "1", "game", "image"],
+    ["g12", "Zero Meridian", "PPSA01012", "01.010.000", 71_700_000_000, "installable", "", "1", "game", "image"],
+    ["d01", "Iron Orchard: Season Pass", "PPSA01002", "", 2_100_000_000, "installable", "", "1", "dlc", "unlocker"],
+    ["d02", "Pale Summit: Ridge Pack", "PPSA01004", "01.000.000", 900_000_000, "installable", "", "0", "dlc", "ps5_pkg"],
+]
+DRIVES = [  # id, label, free, total
+    ["dr1", "Internal", 61_000_000_000, 825_000_000_000],
+    ["dr2", "USB Extended Storage", 1_420_000_000_000, 2_000_000_000_000],
 ]
 
 
@@ -55,6 +62,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/v1/console-app/library":
             text = "".join("\t".join(map(str, g)) + "\n" for g in GAMES)
             return self._send(200, text.encode())
+        if self.path == "/api/v1/console-app/drives":
+            return self._send(200, "".join("\t".join(map(str, d)) + "\n" for d in DRIVES).encode())
         if self.path.startswith("/api/v1/console-app/covers/"):
             gid = self.path.rsplit("/", 1)[1]
             idx = next((i for i, g in enumerate(GAMES) if g[0] == gid), None)
@@ -85,7 +94,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, line.encode())
             game[5], game[6] = "removing", "0.400"
             return self._send(200, b"Removing.")
-        gid = self.path.rsplit("/", 1)[1]
+        path = self.path.split("?")[0]  # install/<id>?drive=<id> or install/<id>/cancel
+        if path.endswith("/cancel"):
+            game = next((g for g in GAMES if g[0] == path.split("/")[-2]), None)
+            if not game or game[5] not in ("queued", "installing"):
+                return self._send(409, b"It isn't installing.")
+            game[5], game[6] = "installable", ""
+            return self._send(200, b"Stopping.")
+        gid = path.rsplit("/", 1)[1]
         game = next((g for g in GAMES if g[0] == gid), None)
         if not game or game[5] != "installable":
             return self._send(409, b"Already installed on this console.")

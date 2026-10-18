@@ -33,6 +33,10 @@ for f in src/main.cpp host/snapshot_main.cpp; do
     sed -i '0,/^#include "app\/shell.hpp"/s||#include "store/client.hpp"\n&|' "$f"
 done
 
+# L1/R1 switch the store's tabs. The kit's shell keeps them to flip between designs, and we have one.
+grep -q '^    action_bit(Action::page_prev) | action_bit(Action::page_next) | action_bit(Action::touch);' src/app/shell.cpp
+sed -i 's#^    action_bit(Action::page_prev) | action_bit(Action::page_next) | action_bit(Action::touch);#    action_bit(Action::touch);#' src/app/shell.cpp
+
 # Leave out what we don't use: music, the second sound set, the kit's home-screen art.
 rm -rf assets/audio/music assets/audio/sfx/paper
 rm -f sce_sys/pic0.dds sce_sys/pic1.dds sce_sys/snd0.at9 sce_sys/*-source.png

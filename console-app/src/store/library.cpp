@@ -62,9 +62,29 @@ std::vector<Game> parse_library(std::string_view text)
         }
         g.progress = f[6].empty() ? 0.0f : std::strtof(std::string(f[6]).c_str(), nullptr);
         g.has_cover = f[7] == "1";
+        if (f.size() >= 10)
+        {
+            g.kind = f[8];
+            g.format = f[9];
+        }
         games.push_back(std::move(g));
     }
     return games;
+}
+
+std::vector<Drive> parse_drives(std::string_view text)
+{
+    std::vector<Drive> drives;
+    for (std::string_view line : split(text, '\n'))
+    {
+        const std::vector<std::string_view> f = split(trim(line), '\t');
+        if (f.size() < 4 || f[0].empty())
+            continue;
+        drives.push_back({std::string(f[0]), std::string(f[1]),
+                          std::strtoull(std::string(f[2]).c_str(), nullptr, 10),
+                          std::strtoull(std::string(f[3]).c_str(), nullptr, 10)});
+    }
+    return drives;
 }
 
 bool parse_removal(std::string_view text, Removal *out)

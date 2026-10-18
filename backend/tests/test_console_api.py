@@ -13,7 +13,8 @@ from test_jobs import adapter, forget_consoles, ps5  # noqa: F401  (fixtures)
 from app import config, consoles, inventory, jobs, logos, main
 from app.database import SessionLocal
 from app.main import app, console_app_token
-from app.models import Console, Game, InstalledGame, InstallJob
+from app.models import Console, Drive, Game, InstalledGame, InstallJob
+from sqlalchemy import select
 
 
 def _console(client, name="PS5"):
@@ -36,9 +37,15 @@ def test_console_api(tmp_path):
                        source_fingerprint="x", size_bytes=1, compatibility_status="ready")
             have = Game(title="Have It", title_id="PPSA06666", format="image", source_path=str(tmp_path / "h.exfat"),
                         source_fingerprint="x", size_bytes=1, compatibility_status="ready")
-            db.add_all([ready, pkg, have, InstalledGame(console_id=a, title_id="PPSA06666", title="Have It",
-                                                        installed_path="/data/homebrew/h.exfat", status="installed")])
+            dlc = Game(title="Have It Unlocker", title_id="PPSA06666", kind="dlc", format="unlocker",  # its game's title ID
+                       source_path=str(tmp_path / "u"), source_fingerprint="x", size_bytes=1, compatibility_status="ready")
+            db.add_all([ready, pkg, have, dlc, InstalledGame(console_id=a, title_id="PPSA06666", title="Have It",
+                                                             installed_path="/data/homebrew/h.exfat", status="installed"),
+                        Drive(console_id=a, external_id="usb0", label="USB", path="/mnt/usb0", total_bytes=100, free_bytes=40,
+                              is_install_target=True),
+                        Drive(console_id=a, external_id="int", label="Internal", path="/data", is_install_target=False)])
             db.commit()
+            usb = db.scalar(select(Drive.id).where(Drive.label == "USB"))
 
         auth = {"Authorization": f"Bearer {console_app_token(a)}"}
         assert client.get("/api/v1/console-app/library").status_code == 401
@@ -46,9 +53,12 @@ def test_console_api(tmp_path):
         assert client.get("/api/v1/console-app/library", headers={"Authorization": f"Bearer {forged}"}).status_code == 401
 
         rows = {r.split("\t")[0]: r.split("\t") for r in client.get("/api/v1/console-app/library", headers=auth).text.splitlines()}
-        assert rows[ready.id] == [ready.id, "Racer Tabs", "PPSA04444", "01.000.000", "1", "installable", "", "1"]
+        assert rows[ready.id] == [ready.id, "Racer Tabs", "PPSA04444", "01.000.000", "1", "installable", "", "1", "game", "image"]
         assert rows[pkg.id][5].startswith("blocked:") and "packages need firmware" in rows[pkg.id][5]
         assert rows[have.id][5] == "installed"
+        assert rows[dlc.id][8:] == ["dlc", "unlocker"] and rows[dlc.id][5] != "installed"  # not its game's state
+
+        assert client.get("/api/v1/console-app/drives", headers=auth).text == f"{usb}\tUSB\t40\t100\n"  # install targets only
         installed = {g["id"]: g["installed"] for g in client.get("/api/v1/games").json()}
         assert installed[have.id] and not installed[ready.id]
 
@@ -57,12 +67,20 @@ def test_console_api(tmp_path):
         assert client.get(f"/api/v1/console-app/covers/{pkg.id}", headers=auth).status_code == 404
 
         assert client.post(f"/api/v1/console-app/install/{pkg.id}", headers=auth).status_code == 409
-        r = client.post(f"/api/v1/console-app/install/{ready.id}", headers=auth)
+        assert client.post(f"/api/v1/console-app/install/{ready.id}?drive=made-up", headers=auth).status_code == 409
+        r = client.post(f"/api/v1/console-app/install/{ready.id}?drive={usb}", headers=auth)
         assert (r.status_code, r.text) == (200, "Queued.")
+        with SessionLocal() as db:
+            assert db.scalar(select(InstallJob.target_drive_id).where(InstallJob.game_id == ready.id)) == usb
+            db.add(InstallJob(console_id=a, game_id=have.id, status="transferring"))  # running: the worker leaves it alone
+            db.commit()
+        assert client.post(f"/api/v1/console-app/install/{have.id}/cancel", headers=auth).text == "Stopping."
+        assert client.post(f"/api/v1/console-app/install/{have.id}/cancel", headers=auth).status_code == 200  # still running
+        assert client.post(f"/api/v1/console-app/install/{pkg.id}/cancel", headers=auth).status_code == 409
         state = next(x for x in client.get("/api/v1/console-app/library", headers=auth).text.splitlines() if x.startswith(ready.id))
         assert state.split("\t")[5] in ("queued", "installing", "installable")  # the worker may already have run it (mock is offline: it fails)
         jobs = client.get(f"/api/v1/consoles/{a}/jobs").json()
-        assert [j["console_id"] for j in jobs] == [a] and not client.get(f"/api/v1/consoles/{b}/jobs").json()
+        assert {j["console_id"] for j in jobs} == {a} and not client.get(f"/api/v1/consoles/{b}/jobs").json()
 
 
 def test_install_console_app_endpoint(tmp_path, monkeypatch):

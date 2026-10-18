@@ -1075,7 +1075,8 @@ def console_from_token(request: Request, db: Session = Depends(get_db)) -> Conso
     return c
 
 
-# The PS5 app's API. A token reaches only its own console: browse the library and queue installs to it, nothing else.
+# The PS5 app's API. A token reaches only its own console: browse the library and its drives, queue and cancel installs
+# to it, and remove games from it. Nothing else.
 # Plain text, one game per line, so the console app needs no JSON parser.
 console_api = APIRouter(prefix="/api/v1/console-app")
 COVER_SIZE = (256, 320)  # the console app expects exactly this many RGBA pixels
@@ -1087,8 +1088,9 @@ def _field(v) -> str:
 
 @console_api.get("/library", response_class=PlainTextResponse)
 def console_library(c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
-    """id, title, title ID, version, size, state, progress (0-1 while installing or removing), has cover (1/0).
-    state: installable | installed | update | queued | installing | removing | blocked:<reason>"""
+    """id, title, title ID, version, size, state, progress (0-1 while installing or removing), has cover (1/0), kind, format.
+    state: installable | installed | update | queued | installing | removing | blocked:<reason>
+    kind: game | dlc. DLC shares its game's title ID, so it never shows as installed or removable."""
     installed = {g.title_id: g for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
     active = {j.game_id: j for j in db.scalars(select(InstallJob).where(
         InstallJob.console_id == c.id, InstallJob.status.in_(jobs.ACTIVE)))}
@@ -1097,7 +1099,7 @@ def console_library(c: Console = Depends(console_from_token), db: Session = Depe
         j, progress = active.get(g.id), None
         if j:
             state, progress = "queued" if j.status == "queued" else "installing", j.progress
-        elif g.title_id in installed:
+        elif g.kind == "game" and g.title_id in installed:
             row = installed[g.title_id]
             r = jobs.active_removal(row.id)
             state = "removing" if r else "update" if row.status == "update_available" else "installed"
@@ -1107,8 +1109,15 @@ def console_library(c: Console = Depends(console_from_token), db: Session = Depe
             state = f"blocked:{reason}" if reason else "installable"
         lines.append("\t".join(map(_field, (g.id, g.title, g.title_id, g.version, g.size_bytes, state,
                                              f"{progress:.3f}" if progress is not None else "",
-                                             int(bool(g.cover_path))))))
+                                             int(bool(g.cover_path)), g.kind, g.format))))
     return "".join(f"{line}\n" for line in lines)
+
+
+@console_api.get("/drives", response_class=PlainTextResponse)
+def console_drives(c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
+    """The drives games can be installed to: id, label, free bytes, total bytes (0: unknown without the helper)."""
+    return "".join("\t".join(map(_field, (d.id, d.label, d.free_bytes, d.total_bytes))) + "\n"
+                   for d in list_drives(c.id, db) if d.is_install_target)
 
 
 @console_api.get("/covers/{game_id}")
@@ -1121,12 +1130,23 @@ def console_cover(game_id: str, c: Console = Depends(console_from_token), db: Se
 
 
 @console_api.post("/install/{game_id}", response_class=PlainTextResponse)
-def console_install(game_id: str, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
+def console_install(game_id: str, drive: str | None = None, c: Console = Depends(console_from_token),
+                    db: Session = Depends(get_db)):
+    """`drive`: a drive id from /drives; without it the PC picks the target drive with the most free space."""
     try:
-        jobs.queue(db, c, _game(db, game_id))
+        jobs.queue(db, c, _game(db, game_id), drive or None)
     except ValueError as e:
         return PlainTextResponse(str(e), 409)
     return "Queued."
+
+
+@console_api.post("/install/{game_id}/cancel", response_class=PlainTextResponse)
+def console_cancel(game_id: str, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
+    j = db.scalar(select(InstallJob).where(InstallJob.console_id == c.id, InstallJob.game_id == game_id,
+                                           InstallJob.status.in_(jobs.ACTIVE)))
+    if not j or not jobs.cancel(db, j):
+        return PlainTextResponse("It isn't installing.", 409)
+    return "Canceled." if j.status == "canceled" else "Stopping."
 
 
 @console_api.post("/uninstall/{game_id}/preview", response_class=PlainTextResponse)

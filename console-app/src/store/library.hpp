@@ -26,9 +26,22 @@ struct Game
     std::string reason; // why it's blocked
     float progress = 0.0f;
     bool has_cover = false;
+    std::string kind = "game"; // game | dlc
+    std::string format;        // folder_dump | image | ps5_pkg | ps4_pkg | archive | unlocker; empty from an older PC
 };
 
 std::vector<Game> parse_library(std::string_view text);
+
+// A drive games can be installed to (console_drives in backend/app/main.py).
+struct Drive
+{
+    std::string id;
+    std::string label;
+    std::uint64_t free_bytes = 0;
+    std::uint64_t total_bytes = 0; // 0: the PC can't see its size
+};
+
+std::vector<Drive> parse_drives(std::string_view text);
 
 // What removing a game would delete, as the PC previews it (console_uninstall_preview
 // in backend/app/main.py): one tab-separated line.

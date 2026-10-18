@@ -203,11 +203,12 @@ bool Client::step()
         pthread_mutex_unlock(&lock_);
         return true;
     }
-    if (have_job && (job.kind == Job::install || job.kind == Job::remove))
+    if (have_job && job.kind != Job::cover)
     {
-        const std::string path = job.kind == Job::install
-                                     ? "/api/v1/console-app/install/" + job.game_id
-                                     : "/api/v1/console-app/uninstall/" + job.game_id + "/confirm/" + job.title_id;
+        const std::string path =
+            job.kind == Job::install  ? "/api/v1/console-app/install/" + job.game_id + (job.arg.empty() ? "" : "?drive=" + job.arg)
+            : job.kind == Job::cancel ? "/api/v1/console-app/install/" + job.game_id + "/cancel"
+                                      : "/api/v1/console-app/uninstall/" + job.game_id + "/confirm/" + job.arg;
         const Response r = request(server_, "POST", path, 4096);
         const std::string text = r.status == 0     ? "Can't reach the PC."
                                  : r.status == 401 ? unpaired_message()
@@ -248,10 +249,13 @@ bool Client::step()
 void Client::fetch_library()
 {
     const Response r = request(server_, "GET", "/api/v1/console-app/library", 8u << 20);
+    // An older PC has no drive list (404): installs then go to its automatic pick.
+    const Response d = r.status == 200 ? request(server_, "GET", "/api/v1/console-app/drives", 65536) : Response{};
     pthread_mutex_lock(&lock_);
     if (r.status == 200)
     {
         games_ = parse_library(r.body);
+        drives_ = d.status == 200 ? parse_drives(d.body) : std::vector<Drive>{};
         error_.clear();
         busy_ = false;
         for (const Game &g : games_)
@@ -310,7 +314,7 @@ bool Client::take_removal_result(RemovalResult *result)
     return have;
 }
 
-bool Client::take_library(std::vector<Game> *games, std::string *error)
+bool Client::take_library(std::vector<Game> *games, std::vector<Drive> *drives, std::string *error)
 {
     drain();
     pthread_mutex_lock(&lock_);
@@ -318,7 +322,10 @@ bool Client::take_library(std::vector<Game> *games, std::string *error)
     if (fresh)
     {
         if (error_.empty())
+        {
             *games = games_; // on an error the last good list stays up
+            *drives = drives_;
+        }
         *error = error_;
         library_new_ = false;
     }
@@ -331,10 +338,17 @@ void Client::refresh()
     refresh_ = true;
 }
 
-void Client::install(const std::string &game_id)
+void Client::install(const std::string &game_id, const std::string &drive_id)
 {
     pthread_mutex_lock(&lock_);
-    jobs_.push_front({Job::install, game_id}); // ahead of any covers still loading
+    jobs_.push_front({Job::install, game_id, drive_id}); // ahead of any covers still loading
+    pthread_mutex_unlock(&lock_);
+}
+
+void Client::cancel(const std::string &game_id)
+{
+    pthread_mutex_lock(&lock_);
+    jobs_.push_front({Job::cancel, game_id});
     pthread_mutex_unlock(&lock_);
 }
 
