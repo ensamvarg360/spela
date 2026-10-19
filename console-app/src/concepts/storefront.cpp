@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <functional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -373,6 +374,18 @@ class Storefront final : public app::Concept
         store::Game *g = find(install_id_);
         const int rows = g != nullptr && g->kind == "game" ? drive_rows() : 0;
         drive_ = std::clamp(drive_, 0, std::max(0, rows - 1)); // the list can shrink while it's open
+        if (g != nullptr && (input.nav == Direction::left || input.nav == Direction::right))
+        {
+            const std::vector<std::string> ids = copies(*g);
+            if (ids.size() > 1) // another format of the same game
+            {
+                const auto at = std::find(ids.begin(), ids.end(), g->id) - ids.begin();
+                const auto n = static_cast<std::ptrdiff_t>(ids.size());
+                install_id_ = ids[static_cast<std::size_t>((at + (input.nav == Direction::right ? 1 : n - 1)) % n)];
+                feedback.play(audio::Cue::focus);
+                return;
+            }
+        }
         if (rows > 1 && (input.nav == Direction::up || input.nav == Direction::down))
         {
             const int next = std::clamp(drive_ + (input.nav == Direction::down ? 1 : -1), 0, rows - 1);
@@ -692,13 +705,43 @@ class Storefront final : public app::Concept
         return std::min(kMaxDrives, static_cast<int>(drives_.size()));
     }
 
+    // The same game in more than one format is several entries on the PC; the grid shows one card for them.
+    bool same_game(const store::Game &a, const store::Game &b) const
+    {
+        return a.kind == "game" && b.kind == "game" && !a.title_id.empty() && a.title_id == b.title_id;
+    }
+
+    // Which copy a title's card stands for: one in the cart, then one doing something (installed, installing...), then
+    // a real install over a backup archive, then the PC's order.
+    bool is_card(std::size_t i) const
+    {
+        const auto rank = [this](const store::Game &g) {
+            return std::make_tuple(!in_cart(g.id), g.state == "installable" || g.state == "blocked", g.format == "archive");
+        };
+        for (std::size_t j = 0; j < games_.size(); ++j)
+            if (j != i && same_game(games_[i], games_[j]) &&
+                (rank(games_[j]) < rank(games_[i]) || (rank(games_[j]) == rank(games_[i]) && j < i)))
+                return false;
+        return true;
+    }
+
+    // The ids of the formats that can be installed for this game, the game itself included.
+    std::vector<std::string> copies(const store::Game &g) const
+    {
+        std::vector<std::string> ids;
+        for (const store::Game &c : games_)
+            if (c.id == g.id || (same_game(g, c) && c.state == "installable"))
+                ids.push_back(c.id);
+        return ids;
+    }
+
     // Lists the open tab's games, keeping the focus on `keep` when it's still there.
     void show_tab(const std::string &keep)
     {
         shown_.clear();
         focus_ = 0;
         for (std::size_t i = 0; i < games_.size(); ++i)
-            if (tab_ == kCartTab ? in_cart(games_[i].id) : in_tab(games_[i], tab_))
+            if (tab_ == kCartTab ? in_cart(games_[i].id) : in_tab(games_[i], tab_) && is_card(i))
             {
                 if (games_[i].id == keep)
                     focus_ = static_cast<int>(shown_.size());
@@ -926,8 +969,10 @@ class Storefront final : public app::Concept
                                                     : "";
         const int rows = dlc ? 0 : drive_rows();
         const bool no_drive = !dlc && rows == 0;
+        const std::vector<std::string> versions = copies(*g);
+        const bool pick_version = versions.size() > 1;
         const float height = 250.0f + 68.0f * static_cast<float>(rows) + (no_drive ? 80.0f : 0.0f) +
-                             (*note != '\0' ? 150.0f : 0.0f);
+                             (*note != '\0' ? 150.0f : 0.0f) + (pick_version ? 44.0f : 0.0f);
         const Rect box = draw_dialog(list, glass, 540 - height * 0.5f, height, kAccent);
         const float x = box.x + 48;
         const float width = box.w - 96;
@@ -938,6 +983,17 @@ class Storefront final : public app::Concept
             meta += "  ·  v" + g->version;
         ui::text(list, fonts.regular, meta + "  ·  " + store::format_size(g->size_bytes), x, y + 30, 24, kMuted);
         y += 50;
+        if (pick_version)
+        {
+            const auto at = std::find(versions.begin(), versions.end(), g->id) - versions.begin();
+            const std::string what = g->format == "folder_dump" ? "Folder" : g->format == "ps5_pkg" || g->format == "ps4_pkg" ? "Package"
+                                     : g->format == "image"     ? "Disk image"
+                                     : g->format == "archive"   ? "Archive"
+                                                                : g->format;
+            ui::text(list, fonts.semibold, "<  " + what + "  >  " + std::to_string(at + 1) + " of " + std::to_string(versions.size()),
+                     x, y + 30, 24, kAccent);
+            y += 44;
+        }
         if (no_drive)
             y = ui::paragraph(list, fonts.regular,
                               "No drive on this PS5 is set for installs. On the PC, open Consoles and choose one.",
@@ -961,9 +1017,11 @@ class Storefront final : public app::Concept
         if (*note != '\0')
             ui::paragraph(list, fonts.regular, note, x, y + 40, 24, width, 34, kWarn, 4);
         end_dialog(list);
-        ui::Hint hints[3];
+        ui::Hint hints[4];
         int count = 0;
         hints[count++] = {ui::Button::cross, dlc ? "Add" : "Install"};
+        if (pick_version)
+            hints[count++] = {ui::Button::dpad, "Format"};
         if (rows > 1)
             hints[count++] = {ui::Button::dpad, "Drive"};
         hints[count++] = {ui::Button::circle, "Cancel"};

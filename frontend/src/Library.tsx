@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { api, appVersion, coverUrl, formatLabel, needsOnline, session, STATUS_LABEL, useConsoles, type Console, type Game, type Kind, type ScanStatus, type StoreInfo } from "./api";
+import { api, appVersion, coverUrl, formatLabel, groupCopies, needsOnline, session, STATUS_LABEL, useConsoles, type Console, type Game, type Kind, type ScanStatus, type StoreInfo } from "./api";
 import { cart, confirmBatch, queueAll } from "./Cart";
 import { STATE_LABEL } from "./Installed";
 
@@ -146,7 +146,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
   const [filtersOpen, setFiltersOpen] = useState(false); // phones only: the sidebar sits behind a button
   const [picked, setPicked] = useState<Set<string> | null>(null); // null = not selecting; tiles open their game
 
-  const load = () => api<Game[]>("/games").then((gs) => setGames(gs.filter((g) => g.kind === kind)), (e) => setError(e.message));
+  const load = () => api<Game[]>("/games").then((gs) => setGames(groupCopies(gs.filter((g) => g.kind === kind))), (e) => setError(e.message));
   useEffect(() => { load(); }, [kind]);
   const [scan] = useScan(load); // a scan started in Settings: show it, and its finds once it ends
   // a tile's store lookup, so the sidebar's genres, years and ratings fill in as tiles come into view
@@ -293,6 +293,7 @@ function Tile({ game, onChange, picked, onPick }: { game: Game; onChange: (id: s
         )}
         {genre && <span className="genre">{genre}</span>}
         {byline && <span className="byline">{byline}</span>}
+        {game.copies && <span className="byline">{game.copies.length} versions</span>}
         {game.installed
           ? <span className="badge installed">Installed</span>
           : <span className={`badge ${game.compatibility_status}`}>{STATUS_LABEL[game.compatibility_status]}</span>}

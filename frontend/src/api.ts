@@ -38,6 +38,22 @@ export interface Game {
   installed: boolean; // on any console, per its last storage scan
   store: StoreInfo | null; // only when already looked up; the tile asks for the rest
   new: boolean; // added in the last 30 days and not opened yet
+  copies?: Game[]; // client-side, on a library tile: every format of this title, the tile's own game first
+}
+
+/** One game per title ID, with the others as `copies` (a backup archive ranks last, so the tile shows the real thing). */
+export function groupCopies(gs: Game[]): Game[] {
+  const by = new Map<string, Game[]>();
+  const out: Game[] = [];
+  for (const g of gs) {
+    if (g.kind !== "game" || !g.title_id) out.push(g);
+    else by.set(g.title_id, [...(by.get(g.title_id) ?? []), g]);
+  }
+  for (const c of by.values()) {
+    c.sort((a, b) => +(a.format === "archive") - +(b.format === "archive"));
+    out.push(c.length > 1 ? { ...c[0], copies: c } : c[0]);
+  }
+  return out;
 }
 
 export interface StoreInfo {

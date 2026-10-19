@@ -5,7 +5,16 @@ import { Cover } from "./Library";
 import { when } from "./Installed";
 
 /** Queues an install on a console; the job shows up on the Installed page. DLC goes onto its game's drive. */
-function Install({ game }: { game: Game }) {
+function Install({ game: opened }: { game: Game }) {
+  const [copies, setCopies] = useState<Game[]>([]); // every format of this title, so the install can ask which
+  const [pick, setPick] = useState("");
+  const game = copies.find((c) => c.id === pick) ?? opened;
+  useEffect(() => {
+    setPick(opened.id);
+    setCopies([]);
+    if (opened.kind === "game" && opened.title_id)
+      api<Game[]>("/games").then((gs) => setCopies(gs.filter((g) => g.kind === "game" && g.title_id === opened.title_id)), () => {});
+  }, [opened.id]);
   const { consoles, cid, setCid, console: target } = useConsoles();
   const [drives, setDrives] = useState<Drive[]>([]);
   const [did, setDid] = useState("");
@@ -59,6 +68,11 @@ function Install({ game }: { game: Game }) {
       {consoles.length > 1 && (
         <select aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
           {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      )}
+      {copies.length > 1 && (
+        <select aria-label="Version" value={game.id} onChange={(e) => setPick(e.target.value)}>
+          {copies.map((c) => <option key={c.id} value={c.id}>{formatLabel(c)}{c.version ? ` · v${c.version}` : ""} · {formatBytes(c.size_bytes)}</option>)}
         </select>
       )}
       {game.kind === "game" && (
