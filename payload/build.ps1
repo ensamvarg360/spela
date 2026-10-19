@@ -1,4 +1,4 @@
-# Builds backend\app\payload\storefront-helper.elf in a Linux container. Needs Docker Desktop.
+# Builds backend\app\payload\spela.elf in a Linux container. Needs Docker Desktop.
 # Run it after changing main.c or the app version; the built .elf is committed, so ../build.ps1 doesn't need Docker.
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true

@@ -262,26 +262,29 @@ static long long content_length(const char *head) {
 }
 
 /* Writes the request body (`left` bytes) to `path`. `body`/`have`: the part of it that arrived with the headers.
- * NULL when it's all written, else what went wrong. */
+ * NULL when it's all written, else what went wrong. After a failure the rest of the body is still read and dropped:
+ * replying and closing with it unread makes the PC's connection reset (WinError 10053) instead of showing the reason. */
 static const char *receive(int c, const char *path, unsigned long long left, const char *body, size_t have) {
   int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-  if (fd < 0) return strerror(errno);
   char *chunk = malloc(BLOCK);
-  const char *err = chunk ? NULL : "out of memory";
+  const char *err = fd < 0 ? strerror(errno) : chunk ? NULL : "out of memory";
   if (have > left) have = left;
-  for (const char *p = body; !err && left;) {
+  for (const char *p = body; chunk && left;) {
     if (!have) {
       ssize_t r = recv(c, chunk, left < BLOCK ? left : BLOCK, 0);
-      if (r <= 0) err = "upload cut off";
+      if (r <= 0) {
+        if (!err) err = "upload cut off";
+        break;
+      }
       p = chunk;
-      have = r > 0 ? r : 0;
+      have = r;
     }
-    if (have && write(fd, p, have) != (ssize_t)have) err = strerror(errno);
+    if (!err && write(fd, p, have) != (ssize_t)have) err = strerror(errno);
     left -= have;
     have = 0;
   }
   free(chunk);
-  if (close(fd) && !err) err = strerror(errno);
+  if (fd >= 0 && close(fd) && !err) err = strerror(errno);
   return err;
 }
 
@@ -781,7 +784,7 @@ static void stop_old_copy(void) {
 
 int main(void) {
   /* the kernel keeps 19 characters; Payload Manager lists processes whose name ends in .elf */
-  syscall(SYS_thr_set_name, -1, "storefront.elf");
+  syscall(SYS_thr_set_name, -1, "spela.elf");
   signal(SIGPIPE, SIG_IGN);
   int srv = socket(AF_INET, SOCK_STREAM, 0), one = 1;
   setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);

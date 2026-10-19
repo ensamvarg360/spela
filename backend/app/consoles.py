@@ -316,7 +316,7 @@ FTP_DRIVES = [
     *((f"usb{i}", f"USB drive {i}", f"/mnt/usb{i}", "usb", f"/mnt/usb{i}/user", f"/mnt/usb{i}/homebrew") for i in range(8)),
 ]
 IMAGE_EXTS = (".exfat", ".ffpkg", ".ffpfs", ".ffpfsc")
-HELPER_ELF = Path(__file__).parent / "payload" / "storefront-helper.elf"  # built from payload/ by payload/build.ps1
+HELPER_ELF = Path(__file__).parent / "payload" / "spela.elf"  # built from payload/ by payload/build.ps1
 HELPER_KEY_SLOT = b"storefront-helper-key:" + b"?" * 64  # KEY_SLOT in payload/main.c
 HELPER_KEY_HEADER = "X-Storefront-Key"
 
@@ -716,7 +716,13 @@ class FTPConsoleAdapter:
                     except ftplib.error_perm:
                         pass  # already there
                     made.add(d)
-            ftp.storbinary(f"STOR {CONSOLE_APP_PATH}/{rel}", io.BytesIO(files[rel]), self.BLOCK)
+            dest = f"{CONSOLE_APP_PATH}/{rel}"
+            ftp.storbinary(f"STOR {dest}.partial", io.BytesIO(files[rel]), self.BLOCK)
+            try:
+                ftp.delete(dest)  # a running app's file can't be written to ("Text file busy"), but it can be replaced
+            except ftplib.error_perm:
+                pass  # a first install
+            ftp.rename(f"{dest}.partial", dest)
 
     async def install_console_app(self, files: dict[str, bytes]) -> None:
         """Writes the PS5 app into /data/homebrew/<its title ID>; ShadowMountPlus adds its tile.

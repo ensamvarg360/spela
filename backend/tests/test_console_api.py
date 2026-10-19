@@ -261,6 +261,7 @@ def test_ftp_console_app_upload(ps5):  # noqa: F811
     asyncio.run(a.install_console_app(files))
     asyncio.run(a.install_console_app(files))  # an update over an existing copy
     assert (root / "data/homebrew/PPSA99787/sce_sys/param.json").exists()
+    assert not list((root / "data/homebrew/PPSA99787").rglob("*.partial"))  # replaced in place, nothing left over
     status = asyncio.run(a.connect()).helper_status
     assert status["console_app"] == "9.9.9"
     assert consoles.CONSOLE_APP_TITLE_ID not in {g.title_id for g in asyncio.run(a.scan_installed_games())}

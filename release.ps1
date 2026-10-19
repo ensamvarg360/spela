@@ -18,7 +18,7 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 $root = $PSScriptRoot
 $init = "$root\backend\app\__init__.py"
-$helperSource = "$root\backend\app\payload\storefront-helper.elf"
+$helperSource = "$root\backend\app\payload\spela.elf"
 Set-Location $root
 
 function Get-Version { [regex]::Match((Get-Content $init -Raw), '__version__ = "([^"]+)"').Groups[1].Value }
@@ -26,7 +26,7 @@ function Get-Version { [regex]::Match((Get-Content $init -Raw), '__version__ = "
 if ($Publish) {
     gh auth status *> $null
     # a bump from an earlier ./release.ps1 -Bump run (the version and the rebuilt helper) is fine: it gets committed below
-    if (git status --porcelain -- . ":!backend/app/__init__.py" ":!backend/app/payload/storefront-helper.elf") {
+    if (git status --porcelain -- . ":!backend/app/__init__.py" ":!backend/app/payload/spela.elf") {
         throw "The working tree has uncommitted changes. Commit or stash them first."
     }
     git fetch --quiet origin

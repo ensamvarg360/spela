@@ -6,7 +6,7 @@ endif
 
 # The helper's version is the app's version, so the app can tell whether the running helper matches.
 VERSION := $(shell sed -n 's/^__version__ = "\([^"]*\)".*/\1/p' ../backend/app/__init__.py)
-ELF := ../backend/app/payload/storefront-helper.elf
+ELF := ../backend/app/payload/spela.elf
 
 CFLAGS := -Wall -Werror -O2 -DVERSION=\"$(VERSION)\"
 # SQLite's amalgamation (build.ps1 downloads it to SQLITE_DIR): set_logo() edits the home screen's database with it.
