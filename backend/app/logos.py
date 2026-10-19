@@ -165,6 +165,39 @@ def poster(title_id: str, content_id: str | None = None) -> Path | None:
     return path
 
 
+def store_images(title_id: str, content_id: str | None = None) -> list[dict]:
+    """Every image PlayStation Store lists for the game, per store: its concept's and each edition's (its own content
+    ID first). [{store, name, sources: [{label, images: [{type, url}]}]}]; a store that doesn't sell it has no sources.
+    Raises OSError when offline."""
+    def listed(media: dict | None) -> list[dict]:
+        return [{"type": i.get("type"), "url": i["url"]} for i in (media or {}).get("images") or []
+                if isinstance(i, dict) and isinstance(i.get("url"), str) and i["url"].startswith(IMAGES)]
+
+    out = []
+    for country, language in STORES:
+        entry = {"store": country, "name": None, "sources": []}
+        out.append(entry)
+        try:
+            found = json.loads(_get(TITLE.format(title_id, country, language)))
+        except urllib.error.HTTPError:
+            continue  # not sold in that store
+        if not (isinstance(found, list) and found and isinstance(found[0], dict)):
+            continue
+        c = found[0]
+        entry["name"] = c.get("name")
+        entry["sources"].append({"label": "Concept (shared by all editions)", "images": listed(c.get("media"))})
+        editions = [content_id, (c.get("defaultProduct") or {}).get("id")] + [
+            i for group in c.get("categorizedProducts") or [] for i in group.get("ids") or []]
+        for pid in dict.fromkeys(i for i in editions if i and CONTENT_ID.fullmatch(i)):
+            try:
+                product = json.loads(_get(PRODUCT.format(pid, country, language)))
+            except urllib.error.HTTPError:
+                continue
+            entry["sources"].append({"label": f"{product.get('name') or 'Edition'} ({pid})" + (" - this game" if pid == content_id else ""),
+                                     "images": listed(product.get("media"))})
+    return out
+
+
 def cached_concept(title_id: str) -> dict | None:
     """concept() as far as STORE_DIR already knows it, without asking the store."""
     path = STORE_DIR / f"{title_id}.json"

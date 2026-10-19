@@ -96,6 +96,57 @@ function HomeLogo({ game }: { game: Game }) {
   );
 }
 
+type StoreImages = { store: string; name: string | null; sources: { label: string; images: { type: string | null; url: string }[] }[] }[];
+
+/** Lists every image PlayStation Store has for the game, by store and edition, to see which ones exist. */
+function StoreImageBrowser({ game }: { game: Game }) {
+  const [stores, setStores] = useState<StoreImages | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  if (!game.title_id) return null;
+
+  async function load() {
+    setBusy(true);
+    setError("");
+    try {
+      setStores(await api<StoreImages>(`/games/${game.id}/store-images`));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="history">
+      <div className="toolbar">
+        <button className="secondary" onClick={load} disabled={busy}>{busy ? "Asking PlayStation Store…" : "Browse PlayStation Store images"}</button>
+        {error && <span className="error" role="alert">{error}</span>}
+      </div>
+      {stores?.map((s) => (
+        <div key={s.store}>
+          <h2>{s.store} store{s.name && ` · ${s.name}`}</h2>
+          {!s.sources.length && <p className="muted">Not sold in this store.</p>}
+          {s.sources.map((src) => (
+            <details key={src.label} open={src.label.startsWith("Concept")}>
+              <summary>{src.label} · {src.images.length} image(s)</summary>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                {src.images.map((i) => (
+                  <a key={i.url} href={i.url} target="_blank" rel="noreferrer" style={{ width: 160 }}>
+                    <img src={i.url} alt={i.type ?? "image"} loading="lazy" style={{ width: 160, background: "#444" }} />
+                    <div className="muted">{i.type ?? "unknown"}</div>
+                  </a>
+                ))}
+              </div>
+            </details>
+          ))}
+        </div>
+      ))}
+    </section>
+  );
+}
+
 type Conversion = { status: "converting" | "success" | "failed" | "canceled"; progress: number; message: string; image_path: string; image_game_id: string | null };
 
 /** Writes a folder dump into one .exfat disc image next to it; the image then shows up in the library as its own game. */
@@ -325,6 +376,7 @@ export default function GameDetail({ id }: { id: string }) {
         )}
 
         <InstallHistory game={game} />
+        <StoreImageBrowser game={game} />
         {!session.readOnly && <SaveBackups game={game} />}
 
         <dl className="facts">

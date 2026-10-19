@@ -388,6 +388,18 @@ def get_store_info(game_id: str, db: Session = Depends(get_db)):
     return g.title_id and logos.store_info(g.title_id) or None
 
 
+@api.get("/games/{game_id}/store-images")
+async def get_store_images(game_id: str, db: Session = Depends(get_db)):
+    """Every image PlayStation Store has for the game, per store and edition (logos.store_images)."""
+    g = _game(db, game_id)
+    if not g.title_id:
+        raise HTTPException(404, {"error": "not_found", "message": "This game has no title ID."})
+    try:
+        return await asyncio.to_thread(logos.store_images, g.title_id, g.content_id)
+    except (OSError, ValueError):
+        raise HTTPException(502, {"error": "store_unreachable", "message": "Couldn't reach PlayStation Store. Is this PC online?"})
+
+
 COVER_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
 
