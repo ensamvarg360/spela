@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 // ponytail: hand-written types mirroring backend/app/main.py; generate from /openapi.json once the API settles.
 export type Status = "ready" | "needs_attention" | "incompatible" | "unknown";
 export type CopyType = "disc" | "digital" | "other" | "unknown";
@@ -193,6 +195,25 @@ export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
     super(message);
   }
+}
+
+/** Button props for things that need the console: greyed out, with the reason, unless it's online. */
+export const needsOnline = (c?: Console) => (c?.state === "online" ? {} : { disabled: true, title: "The console must be online." });
+
+/** The consoles, re-read every 15 s (the backend checks them that often), and the picked one's id. */
+export function useConsoles() {
+  const [consoles, setConsoles] = useState<Console[]>([]);
+  const [cid, setCid] = useState("");
+  useEffect(() => {
+    const load = () => api<Console[]>("/consoles").then((cs) => {
+      setConsoles(cs);
+      setCid((cur) => cur || (cs.find((c) => c.enabled) ?? cs[0])?.id || "");
+    }, () => {});
+    load();
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
+  }, []);
+  return { consoles, cid, setCid, console: consoles.find((c) => c.id === cid) };
 }
 
 export async function api<T>(path: string, opts: { method?: string; json?: unknown; body?: BodyInit } = {}): Promise<T> {

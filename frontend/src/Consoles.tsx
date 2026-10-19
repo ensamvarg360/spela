@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, appVersion, type Console } from "./api";
+import { api, appVersion, needsOnline, type Console } from "./api";
 import { STATE_BADGE, STATE_LABEL, when } from "./Installed";
 
 function Facts({ c, version, busy, act }: { c: Console; version: string; busy: boolean; act: (path: string) => void }) {
@@ -161,7 +161,7 @@ export default function Consoles() {
               </span>
               <span className="inline">
                 <button className="link" disabled={busy} onClick={() => act(c, "test-connection")}>Check connection</button>
-                <button className="link" disabled={busy} onClick={() => act(c, "rescan")}>Refresh inventory</button>
+                <button className="link" {...needsOnline(c)} disabled={busy || c.state !== "online"} onClick={() => act(c, "rescan")}>Refresh inventory</button>
                 <button className="link" onClick={() => setEditing(c.id)}>Edit</button>
                 <button className="link" onClick={() => remove(c)}>Remove</button>
               </span>

@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { api, formatBytes, formatLabel, type Console, type Drive, type Game, type Job } from "./api";
+import { api, formatBytes, formatLabel, needsOnline, useConsoles, type Drive, type Game, type Job } from "./api";
 
 // The cart: game ids kept in this browser, so it survives reloads and moving between pages.
 // ponytail: per browser, not shared with the PS5 app's cart; move it to the PC's database if both should see one cart.
@@ -53,20 +53,13 @@ export async function queueAll(cid: string, games: Game[], driveId: string | nul
 export default function Cart() {
   const inCart = useCart();
   const [games, setGames] = useState<Game[] | null>(null);
-  const [consoles, setConsoles] = useState<Console[]>([]);
-  const [cid, setCid] = useState("");
+  const { consoles, cid, setCid, console: target } = useConsoles();
   const [drives, setDrives] = useState<Drive[]>([]);
   const [did, setDid] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ queued: number; failed: [Game, string][] } | null>(null);
 
-  useEffect(() => {
-    api<Game[]>("/games").then(setGames, () => setGames([]));
-    api<Console[]>("/consoles").then((cs) => {
-      setConsoles(cs);
-      setCid((cs.find((c) => c.enabled) ?? cs[0])?.id ?? "");
-    }, () => {});
-  }, []);
+  useEffect(() => { api<Game[]>("/games").then(setGames, () => setGames([])); }, []);
   useEffect(() => {
     setDid("");
     if (cid) api<Drive[]>(`/consoles/${cid}/drives`).then((ds) => setDrives(ds.filter((d) => d.is_install_target)), () => setDrives([]));
@@ -132,7 +125,7 @@ export default function Cart() {
                 {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
               </select>
             )}
-            <button disabled={busy} onClick={installAll}>{busy ? "Queuing…" : `Install all ${items.length}`}</button>
+            <button {...needsOnline(target)} disabled={busy || !!needsOnline(target).disabled} onClick={installAll}>{busy ? "Queuing…" : `Install all ${items.length}`}</button>
           </>}
           <button className="secondary" disabled={busy} onClick={() => cart.remove(items.map((g) => g.id))}>Empty cart</button>
         </div>

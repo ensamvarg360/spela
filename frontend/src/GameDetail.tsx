@@ -1,24 +1,17 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, formatBytes, formatLabel, session, SOURCE_LABEL, STATUS_LABEL, type Console, type Drive, type Game, type Job } from "./api";
+import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STATUS_LABEL, useConsoles, type Drive, type Game, type Job } from "./api";
 import { cart, useCart } from "./Cart";
 import { Cover } from "./Library";
 import { when } from "./Installed";
 
 /** Queues an install on a console; the job shows up on the Installed page. DLC goes onto its game's drive. */
 function Install({ game }: { game: Game }) {
-  const [consoles, setConsoles] = useState<Console[]>([]);
-  const [cid, setCid] = useState("");
+  const { consoles, cid, setCid, console: target } = useConsoles();
   const [drives, setDrives] = useState<Drive[]>([]);
   const [did, setDid] = useState("");
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const carted = useCart().includes(game.id);
 
-  useEffect(() => {
-    api<Console[]>("/consoles").then((cs) => {
-      setConsoles(cs);
-      setCid((cs.find((c) => c.enabled) ?? cs[0])?.id ?? "");
-    }, () => {});
-  }, []);
   useEffect(() => {
     setDid("");
     if (cid) api<Drive[]>(`/consoles/${cid}/drives`).then((ds) => setDrives(ds.filter((d) => d.is_install_target)), () => setDrives([]));
@@ -55,7 +48,7 @@ function Install({ game }: { game: Game }) {
           {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
         </select>
       )}
-      <button onClick={install}>{game.kind === "dlc" ? "Add to game" : "Install"}</button>
+      <button {...needsOnline(target)} onClick={install}>{game.kind === "dlc" ? "Add to game" : "Install"}</button>
       <button className="secondary" aria-pressed={carted} onClick={() => (carted ? cart.remove : cart.add)([game.id])}>
         {carted ? "In cart ✓" : "Add to cart"}
       </button>
@@ -69,6 +62,7 @@ function Install({ game }: { game: Game }) {
 function HomeLogo({ game }: { game: Game }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const { consoles } = useConsoles();
 
   if (!game.installed) return null;
 
@@ -90,7 +84,8 @@ function HomeLogo({ game }: { game: Game }) {
 
   return (
     <div className="toolbar">
-      <button className="secondary" onClick={apply} disabled={busy}>{busy ? "Setting logo…" : "Show logo on PS5 home screen"}</button>
+      {/* applies on every console the game is on; ponytail: any online console enables it, the result names the ones that failed */}
+      <button className="secondary" onClick={apply} {...needsOnline(consoles.find((c) => c.state === "online"))} disabled={busy || !consoles.some((c) => c.state === "online")}>{busy ? "Setting logo…" : "Show logo on PS5 home screen"}</button>
       {msg && <span className={msg.error ? "error" : "muted"} role="status">{msg.text}</span>}
     </div>
   );
@@ -236,8 +231,7 @@ type SavedBackup = { name: string; path: string; files: number; bytes: number };
 
 /** Copies the game's save data from a console to this PC. The console is only read; restoring is by hand. */
 function SaveBackups({ game }: { game: Game }) {
-  const [consoles, setConsoles] = useState<Console[]>([]);
-  const [cid, setCid] = useState("");
+  const { consoles, cid, setCid, console: target } = useConsoles();
   const [list, setList] = useState<SavedBackup[]>([]);
   const [b, setB] = useState<SaveBackup | null>(null);
   const [error, setError] = useState("");
@@ -245,10 +239,6 @@ function SaveBackups({ game }: { game: Game }) {
   const load = () => tid && api<SavedBackup[]>(`/save-backups?title_id=${tid}`).then(setList, () => {});
   useEffect(() => {
     load();
-    api<Console[]>("/consoles").then((cs) => {
-      setConsoles(cs);
-      setCid((cs.find((c) => c.enabled) ?? cs[0])?.id ?? "");
-    }, () => {});
   }, [tid]);
   useEffect(() => {
     if (b?.status !== "copying") return;
@@ -270,7 +260,7 @@ function SaveBackups({ game }: { game: Game }) {
             {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         )}
-        <button className="secondary" disabled={b?.status === "copying"} onClick={start}>{b?.status === "copying" ? "Backing up…" : "Back up saves"}</button>
+        <button className="secondary" {...needsOnline(target)} disabled={b?.status === "copying" || !!needsOnline(target).disabled} onClick={start}>{b?.status === "copying" ? "Backing up…" : "Back up saves"}</button>
         {b?.status === "copying" && <progress max={1} value={b.progress} aria-label="Backing up" />}
         {b && <span className={b.status === "failed" ? "error" : "muted"} role="status">{b.message}</span>}
         {error && <span className="error" role="alert">{error}</span>}

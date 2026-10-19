@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { api, appVersion, coverUrl, formatLabel, session, STATUS_LABEL, type Console, type Game, type Kind, type ScanStatus, type StoreInfo } from "./api";
+import { api, appVersion, coverUrl, formatLabel, needsOnline, session, STATUS_LABEL, useConsoles, type Console, type Game, type Kind, type ScanStatus, type StoreInfo } from "./api";
 import { cart, confirmBatch, queueAll } from "./Cart";
 import { STATE_LABEL } from "./Installed";
 
@@ -87,16 +87,9 @@ function Connection() {
 
 /** Queues every picked game on one console, or puts them in the cart, and says which couldn't be queued and why. */
 function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Set<string>; shown: Game[]; setPicked: (p: Set<string> | null) => void }) {
-  const [consoles, setConsoles] = useState<Console[]>([]);
-  const [cid, setCid] = useState("");
+  const { consoles, cid, setCid, console: target } = useConsoles();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ queued: number; carted?: number; failed: [string, string][] } | null>(null);
-  useEffect(() => {
-    api<Console[]>("/consoles").then((cs) => {
-      setConsoles(cs);
-      setCid((cs.find((c) => c.enabled) ?? cs[0])?.id ?? "");
-    }, () => {});
-  }, []);
 
   const games = shown.filter((g) => picked.has(g.id));
   async function install() {
@@ -126,7 +119,7 @@ function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Se
           </select>
         )}
         <button className="secondary" disabled={busy || !games.length} onClick={addToCart}>Add to cart</button>
-        <button disabled={busy || !games.length} onClick={install}>
+        <button {...needsOnline(target)} disabled={busy || !games.length || !!needsOnline(target).disabled} onClick={install}>
           {busy ? "Queuing…" : `${kind === "dlc" ? "Add" : "Install"} ${games.length || ""}`.trim()}
         </button>
       </>}

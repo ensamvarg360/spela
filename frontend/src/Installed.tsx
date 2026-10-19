@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import { api, appVersion, formatBytes, JOB_ACTIVE, session, wakeConsole, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal } from "./api";
+import { api, appVersion, formatBytes, JOB_ACTIVE, needsOnline, session, wakeConsole, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal } from "./api";
 
 const JOB_LABEL: Record<JobStatus, [string, string]> = {
   queued: ["Waiting", "unknown"], preflight: ["Checking", "unknown"], extracting: ["Extracting", "needs_attention"], transferring: ["Copying", "needs_attention"],
@@ -322,7 +322,7 @@ export default function Installed() {
             </div>
           </details>
         ))}
-        {!session.readOnly && <button disabled={busy} onClick={rescan}>{busy ? "Working…" : "Refresh inventory"}</button>}
+        {!session.readOnly && <button {...needsOnline(c)} disabled={busy || c.state !== "online"} onClick={rescan}>{busy ? "Working…" : "Refresh inventory"}</button>}
       </div>
       {error && <p className="error" role="alert">{error}</p>}
 
