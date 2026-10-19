@@ -14,19 +14,15 @@ function Facts({ c, version, busy, act }: { c: Console; version: string; busy: b
       <dd>
         {!helper || helper === "missing" ? "Not running" : `v${helper}`}
         {helper && helper !== "missing" && !helperOk && version && ` (this app needs v${version})`}
-        {!helperOk && (
-          <button className="small" disabled={busy || c.state === "standby"} title={c.state === "standby" ? "Wake the console first." : undefined}
-            onClick={() => act("helper")}>{!helper || helper === "missing" ? "Install helper" : "Update helper"}</button>
-        )}
+        <button className="small" disabled={busy || c.state === "standby"} title={c.state === "standby" ? "Wake the console first." : undefined}
+          onClick={() => act("helper")}>{!helper || helper === "missing" ? "Install helper" : helperOk ? "Reinstall helper" : "Update helper"}</button>
         {!helperOk && c.connection_type !== "mock" && <span className="muted"> Sent by itself once the console's ELF loader is running.</span>}
       </dd>
       <dt>PS5 app</dt>
       <dd>
         {!consoleApp || consoleApp === "missing" ? "Not installed" : `v${consoleApp}`}
-        {!consoleAppOk && (
-          <button className="small" disabled={busy || c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
-            onClick={() => act("console-app")}>{!consoleApp || consoleApp === "missing" ? "Install PS5 app" : "Update PS5 app"}</button>
-        )}
+        <button className="small" disabled={busy || c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
+          onClick={() => act("console-app")}>{!consoleApp || consoleApp === "missing" ? "Install PS5 app" : consoleAppOk ? "Reinstall PS5 app" : "Update PS5 app"}</button>
       </dd>
       <dt>Wake from rest mode</dt>
       <dd>
