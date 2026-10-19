@@ -9,6 +9,7 @@ Browse them on your PC, install them to your console over your home network, rem
 [![CI](https://github.com/ensamvarg360/spela/actions/workflows/ci.yml/badge.svg)](https://github.com/ensamvarg360/spela/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 ![Platform: Windows](https://img.shields.io/badge/runs%20on-Windows%2010%2F11-0078d4)
+[![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-d97757)](#credits)
 
 <img src="docs/screenshots/library.png" alt="The Spela library: a grid of game covers with filters" width="860">
 
@@ -137,6 +138,7 @@ The software is provided as is, without warranty, under the GPL. Running homebre
 
 ## Credits
 
+- **Spela is AI-assisted.** Most of its code, from the backend and frontend to the PS5 app and helper, was written by Claude (Anthropic's AI) through [Claude Code](https://claude.com/claude-code), with ensamvarg360 directing the work, deciding what it should do and testing it on real consoles. Commits Claude worked on carry a `Co-Authored-By: Claude` line.
 - The PS5 app is built on [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) (GPL-3.0-or-later) and the [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) (GPL-3.0); the fonts it bundles keep their own licenses, next to them in [backend/app/console_app/PPSA99787/assets/fonts](backend/app/console_app/PPSA99787/assets/fonts).
 - [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) does the actual mounting on the console. [Chiaki-ng](https://github.com/chiaki-ng/chiaki-ng) is how you get the Remote Play key for the Wake button.
 - The helper links the public-domain [SQLite](https://www.sqlite.org/) to set home-screen logos.
