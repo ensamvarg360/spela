@@ -102,7 +102,7 @@ Found a security problem? Please read [SECURITY.md](SECURITY.md) first.
 
 ## What it doesn't do
 
-- It can't install **`.pkg`** files: the console has no package installer, and fake packages don't launch on newer firmware yet.
+- **`.pkg`** installs are untested and limited to firmware 11.60 and lower: the helper starts the console's own package installer, and fake packages don't launch on newer firmware yet.
 - It doesn't build FPKGs, and only converts folder dumps to `.exfat`.
 - It doesn't restore save data (backing up only), because restoring would mean letting the helper write outside `homebrew`.
 - It's built for **one user at home**, not for hosting a library for other people.

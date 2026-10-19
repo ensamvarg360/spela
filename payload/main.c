@@ -9,6 +9,7 @@
  *   POST /logo?id=<title ID>   PNG body: the title logo on the game's home-screen page (set_logo())
  *   POST /copy?p=<from>&to=<to>  starts copying a file or folder on the console, e.g. to another drive (copy_start())
  *   GET  /copy                 {"running", "done", "total", "error", "to"} of that copy;  POST /copy/cancel stops it
+ *   POST /install?p=<.pkg in a homebrew folder>&cid=<content ID>  starts the console's package installer (install_pkg(), untested)
  * Paths are percent-encoded. Every request needs this console's key in X-Storefront-Key (authorized()); even so,
  * writes are refused outside the homebrew folders (writable()), and /logo changes only the one file and database column it names. One thread per connection: /info still answers during a long upload.
  * Build with ./build.ps1; VERSION comes from backend/app/__init__.py. */
@@ -335,27 +336,66 @@ static int smp_uninstall(const char *id, char *out, size_t n) {
   return status;
 }
 
-/* Without ShadowMountPlus's API: the console's own uninstall, the call ShadowMountPlus makes itself. The library is
- * opened on first use, so a console without it still runs every other endpoint. */
-static int appinstutil_uninstall(const char *id) {
+/* The console's own installer library (the one ShadowMountPlus uses): opens it, takes ShellCore's authority and
+ * initialises it on first use, so a console without it still runs every other endpoint. Returns `name`, or NULL. */
+static void *appinst_sym(const char *name) {
   static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-  static int (*uninstall)(const char *) = NULL;
+  static void *lib = NULL;
   static int tried = 0;
   pthread_mutex_lock(&lock);
   if (!tried) {
     tried = 1;
-    void *lib = dlopen("/system/common/lib/libSceAppInstUtil.sprx", RTLD_LAZY);
+    lib = dlopen("/system/common/lib/libSceAppInstUtil.sprx", RTLD_LAZY);
     int (*init)(void) = lib ? (int (*)(void))dlsym(lib, "sceAppInstUtilInitialize") : NULL;
-    uninstall = lib ? (int (*)(const char *))dlsym(lib, "sceAppInstUtilAppUnInstall") : NULL;
-    if (init && uninstall) {
+    if (init) {
       kernel_set_ucred_authid(-1, AUTHID_SHELLCORE);
       init();
     } else {
-      uninstall = NULL;
+      lib = NULL;
     }
   }
   pthread_mutex_unlock(&lock);
+  return lib ? dlsym(lib, name) : NULL;
+}
+
+/* Without ShadowMountPlus's API: the console's own uninstall, the call ShadowMountPlus makes itself. */
+static int appinstutil_uninstall(const char *id) {
+  int (*uninstall)(const char *) = (int (*)(const char *))appinst_sym("sceAppInstUtilAppUnInstall");
   return uninstall ? uninstall(id) : -1;
+}
+
+/* Installs the package at `path` (already on the console, inside a homebrew folder) through the console's installer.
+ * UNTESTED on a console: the struct layouts follow what other installers pass to sceAppInstUtilInstallByPackage
+ * (six string pointers, then a zeroed play-go block), and it needs a package the console will run (fake packages
+ * work up to firmware 11.60). The call only starts the install; the PC app watches /user/app/<title ID> for it. */
+static void install_pkg(int c, const char *path, const char *query) {
+  char cid[64];
+  struct stat st;
+  if (!param(query, "cid", cid, sizeof cid) || strlen(cid) != 36 || strspn(cid, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != 36) {
+    fail(c, "400 Bad Request", "cid must be a content ID");
+    return;
+  }
+  if (stat(path, &st) || !S_ISREG(st.st_mode)) {
+    fail(c, "404 Not Found", "not a file");
+    return;
+  }
+  int (*install)(void *, void *) = (int (*)(void *, void *))appinst_sym("sceAppInstUtilInstallByPackage");
+  if (!install) {
+    fail(c, "501 Not Implemented", "this firmware has no package installer");
+    return;
+  }
+  struct {
+    const char *uri, *ex_uri, *playgo_scenario_id, *content_id, *content_name, *icon_url;
+  } meta = {path, "", "", cid, cid, ""};
+  static char playgo[4096];  /* zeroed, and larger than any layout of it */
+  int r = install(&meta, playgo);
+  if (r) {
+    char msg[64];
+    snprintf(msg, sizeof msg, "the console refused (0x%08X)", (unsigned)r);
+    fail(c, "500 Internal Server Error", msg);
+  } else {
+    ok(c);
+  }
 }
 
 /* Removes the home-screen tile of a ShadowMountPlus game whose files were deleted. Only such tiles: the title must
@@ -688,6 +728,8 @@ static void handle(int c) {
     fail(c, "403 Forbidden", "only the homebrew folders can be changed");
   } else if (post && !strcmp(target, "/copy")) {
     copy_start(c, path, query);
+  } else if (post && !strcmp(target, "/install")) {
+    install_pkg(c, path, query);
   } else if (!strcmp(method, "PUT") && !strcmp(target, "/file")) {
     upload(c, path, head, end + 4, got - (end + 4 - head));
   } else if (post && !strcmp(target, "/mkdir")) {

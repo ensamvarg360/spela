@@ -24,7 +24,7 @@ from typing import Callable, Literal, Protocol
 
 from . import __version__, config
 from .models import Console
-from .pkg import PkgMetadata, _read_param_json, _read_param_sfo
+from .pkg import PkgMetadata, _read_param_json, _read_param_sfo, parse_pkg
 
 ProgressCallback = Callable[[int, int], None]  # (bytes_done, bytes_total)
 
@@ -109,7 +109,9 @@ class ConsoleAdapter(Protocol):
     async def scan_installed_games(self) -> list[InstalledGameInfo]: ...
     async def get_icons(self, games: list[InstalledGameInfo]) -> dict[str, bytes]: ...  # title ID -> icon0.png
     async def check_space(self, drive_id: str, bytes_needed: int) -> SpaceCheckResult: ...
-    async def install_package(self, package_path: str, progress_callback: ProgressCallback) -> InstallResult: ...
+    # `drive` is where the package is staged (the console installs it to its own default drive).
+    async def install_package(self, package_path: str, progress_callback: ProgressCallback, drive: DriveInfo | None = None,
+                              cancel: threading.Event | None = None) -> InstallResult: ...
     # `cancel` set = stop between chunks and raise AdapterError("canceled"); the partial upload is removed.
     async def stage_shadowmount_content(self, source_path: str, target_drive: DriveInfo, progress_callback: ProgressCallback,
                                         cancel: threading.Event | None = None) -> InstallResult: ...
@@ -209,7 +211,8 @@ class MockConsoleAdapter:
         free = self._drive(drive_id).free_bytes
         return SpaceCheckResult(free >= bytes_needed, free, bytes_needed)
 
-    async def install_package(self, package_path: str, progress_callback: ProgressCallback) -> InstallResult:
+    async def install_package(self, package_path: str, progress_callback: ProgressCallback, drive: DriveInfo | None = None,
+                              cancel: threading.Event | None = None) -> InstallResult:
         self._check()
         return self._install(package_path, "package_installer", self._drive("internal"),
                              "/user/app/{title_id}", None, progress_callback)
@@ -982,8 +985,50 @@ class FTPConsoleAdapter:
         """Has the helper put `png` on the game's home-screen page as its title logo (payload/main.c, set_logo)."""
         await asyncio.to_thread(self._set_logo, title_id, png)
 
-    async def install_package(self, *args, **kwargs):
-        raise AdapterError("not_implemented", "This console has no package installer. Install folder dumps or disc images instead.")
+    INSTALL_POLL_SECONDS = 5  # ponytail: a full inventory scan per poll; fine at this rate, a helper status call if it hurts
+    INSTALL_STALL_SECONDS = 180  # no sign of the game, or its size not settling, for this long = give up waiting
+
+    def _install_pkg(self, path: str, drive_id: str, progress: ProgressCallback, cancel: threading.Event) -> InstallResult:
+        """UNTESTED on a console. Stages the package in the drive's homebrew folder, has the helper start the console's
+        installer (payload/main.c, install_pkg), waits until the game's app.pkg has appeared and stopped growing, then
+        deletes the staged copy. A package that never shows up leaves the staged copy in place: the installer may still
+        be reading it."""
+        meta = parse_pkg(path)
+        if meta.dlc:
+            raise AdapterError("dlc_unsupported", "DLC packages can't be installed yet.")
+        if not (meta.title_id and meta.content_id):
+            raise AdapterError("pkg_unreadable", "Can't read the title ID and content ID from this package.")
+        staged = self._stage_or_clean(path, drive_id, progress, cancel)
+        dest = staged.installed.installed_path
+        try:
+            self._ask_helper("POST", "/install", p=dest, cid=meta.content_id)
+        except AdapterError:
+            self._call(lambda ftp: ftp.delete(dest))
+            raise
+        last, since = None, time.monotonic()
+        while True:
+            if cancel.wait(self.INSTALL_POLL_SECONDS):
+                raise AdapterError("canceled", f"Canceled. The console may still finish installing it; {dest} is left on it.")
+            game = next((g for g in self._call(self._games)
+                         if g.title_id == meta.title_id and g.install_route == "package_installer"), None)
+            size = game.size_bytes if game else 0
+            if game and size == last:
+                break
+            if size != last:
+                last, since = size, time.monotonic()
+            elif time.monotonic() - since > self.INSTALL_STALL_SECONDS:
+                raise AdapterError("install_stalled", f"The console hasn't finished installing {meta.title_id}. Check the PS5 for "
+                                                      f"a message; the copy at {dest} was left in place.")
+        self._call(lambda ftp: ftp.delete(dest))
+        progress(staged.installed.size_bytes, staged.installed.size_bytes)
+        return InstallResult(True, "Installed.", game, 1)
+
+    async def install_package(self, package_path: str, progress_callback: ProgressCallback, drive: DriveInfo | None = None,
+                              cancel: threading.Event | None = None) -> InstallResult:
+        if not drive:
+            raise AdapterError("drive_not_found", "Pick a drive to stage the package on.")
+        return await asyncio.to_thread(self._install_pkg, package_path, drive.external_id, progress_callback,
+                                       cancel or threading.Event())
 
     async def uninstall_package(self, title_id: str) -> RemovalResult:
         raise AdapterError("not_implemented", "Not available yet. Delete it on the PS5 instead.")

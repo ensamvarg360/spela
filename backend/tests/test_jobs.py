@@ -204,6 +204,53 @@ def test_helper_adapter_stages_scans_and_removes(ps5, monkeypatch):
         server.shutdown()
 
 
+class InstallingHelper(FileHelper):
+    """FileHelper plus POST /install (payload/main.c, install_pkg): the 'console' unpacks the package into /user/app."""
+    asked, installs = [], True
+
+    def do_POST(self):
+        op, _, q = self._target()
+        if op != "/install":
+            return super().do_POST()
+        self.asked.append((q["p"][0], q["cid"][0]))
+        if self.installs:
+            write(self.root / "user/app/PPSA02222/app.pkg", b"p" * 300)
+        self._send({"ok": True})
+
+
+def test_package_install_stages_asks_the_helper_and_cleans_up(ps5, monkeypatch):
+    from conftest import PARAM_JSON, cnt, ps5_pkg
+    root, _, lib = ps5
+    cid = "EP0001-PPSA02222_00-EXAMPLEGAME00000"
+    write(lib / "x.pkg", ps5_pkg(cnt(cid, {0x2000: PARAM_JSON})))
+    InstallingHelper.root, InstallingHelper.asked, InstallingHelper.installs = root, [], True
+    server = ThreadingHTTPServer(("127.0.0.1", 0), InstallingHelper)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(FTPConsoleAdapter, "HELPER_PORT", server.server_address[1])
+    monkeypatch.setattr(FTPConsoleAdapter, "INSTALL_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(FTPConsoleAdapter, "INSTALL_STALL_SECONDS", 0.5)
+    a = HelperConsoleAdapter(Console(ip_address="127.0.0.1"))
+    try:
+        r = asyncio.run(a.install_package(str(lib / "x.pkg"), lambda d, t: None, INTERNAL))
+        assert (r.ok, r.installed.title_id, r.installed.install_route) == (True, "PPSA02222", "package_installer")
+        assert InstallingHelper.asked == [("/data/homebrew/x.pkg", cid)]
+        assert list((root / "data/homebrew").iterdir()) == []  # the staged copy is gone
+
+        InstallingHelper.installs = False  # the console accepts it but never installs it
+        (root / "user/app/PPSA02222/app.pkg").unlink()
+        with pytest.raises(AdapterError) as e:
+            asyncio.run(a.install_package(str(lib / "x.pkg"), lambda d, t: None, INTERNAL))
+        assert e.value.code == "install_stalled"
+        assert (root / "data/homebrew/x.pkg").exists()  # the installer may still be reading it
+
+        write(lib / "junk.pkg", b"junk" * 50)
+        with pytest.raises(AdapterError) as e:
+            asyncio.run(a.install_package(str(lib / "junk.pkg"), lambda d, t: None, INTERNAL))
+        assert e.value.code == "pkg_unreadable"
+    finally:
+        server.shutdown()
+
+
 def _setup(db, port, lib, *formats):
     c = Console(name="PS5", ip_address="127.0.0.1", connection_type="ftp", port=port, username="ps5")
     db.add(c)
@@ -225,7 +272,7 @@ def test_job_runs_to_success_then_blocks_reinstall(ps5, monkeypatch):
         c, (dump, pkg) = _setup(db, port, lib, (lib / "Dump PPSA03333", "folder_dump"), (lib / "x.pkg", "ps5_pkg"))
         dump.title_id = "PPSA03333"
         db.commit()
-        assert "package installer" in jobs.blocker(db, c, pkg)
+        assert jobs.blocker(db, c, pkg) is None  # a package passes the same checks once the firmware is in range
 
         job = jobs.queue(db, c, dump)
         asyncio.run(jobs.run(job.id))
@@ -271,8 +318,9 @@ def test_pkg_firmware_gate():
     assert "don't run on firmware 13.60" in jobs.pkg_blocker(Console(firmware="13.60"), ps5)
     assert "PS4 packages don't run on firmware 12.00" in jobs.pkg_blocker(Console(firmware="12.00"), ps4)
     assert "Can't read" in jobs.pkg_blocker(Console(firmware="beta"), ps5)
-    for fw in ("4.03", "11.60"):  # in range: only the missing installer blocks it
-        assert "no package installer" in jobs.pkg_blocker(Console(firmware=fw), ps5)
+    for fw in ("4.03", "11.60"):  # in range: nothing blocks it
+        assert jobs.pkg_blocker(Console(firmware=fw), ps5) == ""
+    assert "DLC packages" in jobs.blocker(None, Console(firmware="4.03"), Game(format="ps5_pkg", kind="dlc"))
 
 
 def test_job_failures(ps5, monkeypatch):

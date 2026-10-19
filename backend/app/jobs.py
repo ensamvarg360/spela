@@ -1,5 +1,6 @@
 """Install jobs (project.md §10): a queue in the install_jobs table and one worker that runs them.
-Only the ShadowMountPlus route exists: folder dumps and disc images are copied into a drive's homebrew folder.
+Folder dumps and disc images are copied into a drive's homebrew folder (ShadowMountPlus). Packages are copied there too,
+then the helper starts the console's installer on them (consoles.py _install_pkg; untested on a console).
 Archives are extracted on this PC first (archives.py) and the dump or image inside is copied the same way.
 Removals (project.md §13) delete that copy again, after a preview and the title ID typed back.
 DLC unlockers (a folder with dlc_emu.ini) are copied over the installed game's folder, as their release notes say.
@@ -40,6 +41,7 @@ def _notify(title: str, message: str):
 # Highest firmware where fake packages launch (Kstuff Lite 1.11 + ArkSama's 11.60 fix, Oct 2026).
 # Raise a row when a payload release confirms more; 12.x-13.60 install but PS5 packages don't launch yet.
 PKG_MAX_FIRMWARE = {"ps4_pkg": "11.60", "ps5_pkg": "11.60"}
+PKG_FORMATS = tuple(PKG_MAX_FIRMWARE)
 
 
 def _fw(v: str) -> tuple[int, ...]:
@@ -47,7 +49,7 @@ def _fw(v: str) -> tuple[int, ...]:
 
 
 def pkg_blocker(console: Console, game: Game) -> str:
-    """Why a package can't be installed. Firmware first, so a 13.xx console hears the real reason."""
+    """Why a package can't be installed, or "". Firmware first, so a 13.xx console hears the real reason."""
     kind, top = ("PS4" if game.format == "ps4_pkg" else "PS5"), PKG_MAX_FIRMWARE[game.format]
     if not console.firmware:
         return f"{kind} packages need firmware {top} or lower, and this console's firmware is unknown. Install the helper."
@@ -57,7 +59,7 @@ def pkg_blocker(console: Console, game: Game) -> str:
         return f"Can't read this console's firmware ({console.firmware})."
     if too_new:
         return f"{kind} packages don't run on firmware {console.firmware} yet (works up to {top}). Use a folder dump or disc image."
-    return "This console has no package installer. Only folder dumps and disc images can be installed."
+    return ""
 
 
 def unlocker_target(db: Session, console: Console, title_id: str | None) -> tuple[InstalledGame | None, str]:
@@ -77,11 +79,11 @@ def unlocker_target(db: Session, console: Console, title_id: str | None) -> tupl
 
 def blocker(db: Session, console: Console, game: Game) -> str | None:
     """Why this game can't be queued for this console, or None. Console-side checks (online, space) run at preflight."""
-    if game.format in ("ps4_pkg", "ps5_pkg"):
-        return pkg_blocker(console, game)
+    if game.format in PKG_FORMATS and (reason := "DLC packages can't be installed yet." if game.kind == "dlc" else pkg_blocker(console, game)):
+        return reason
     if game.format == "archive" and (reason := archives.blocker(game.source_path)):
         return reason
-    if game.format not in ("folder_dump", "image", "archive", "unlocker"):
+    if game.format not in ("folder_dump", "image", "archive", "unlocker", *PKG_FORMATS):
         return "Format not recognized."
     if game.compatibility_status == "incompatible":
         return game.compatibility_reason
@@ -194,6 +196,9 @@ async def run(job_id: str):
                 raise AdapterError("console_offline", "The console isn't online.")
             adapter = inventory.adapter_for(db, console)
             source, needed = game.source_path, game.size_bytes
+            pkg = game.format in PKG_FORMATS
+            if pkg:
+                needed *= 2  # the staged package and the installed game; ponytail: the console installs to its own drive
             if game.format == "archive":
                 job.status, job.message = "extracting", "Reading the archive."
                 db.commit()
@@ -217,10 +222,13 @@ async def run(job_id: str):
             if dlc:
                 await _add_unlocker(db, adapter, console, job, game, source)
                 return
-            job.status, job.message = "transferring", f"Copying to {drive.label}."
+            job.status, job.message = "transferring", (f"Copying to {drive.label}, then installing it." if pkg
+                                                        else f"Copying to {drive.label}.")
             db.commit()
 
-            staged = await adapter.stage_shadowmount_content(source, drive, _progress(job.id, time.monotonic()), stop)
+            progress = _progress(job.id, time.monotonic())
+            staged = await (adapter.install_package(source, progress, drive, stop) if pkg
+                            else adapter.stage_shadowmount_content(source, drive, progress, stop))
 
             db.refresh(job)
             job.status, job.message = "registering", "Reading the console's games."

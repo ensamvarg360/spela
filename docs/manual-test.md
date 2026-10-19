@@ -70,7 +70,7 @@ Also have ready:
 | Disc image | Ready, or Needs attention if its title ID comes only from the file name |
 | Archive | Listed as an archive |
 | Split archive | One entry for the whole set, not one per part |
-| `.pkg` | Listed, but Install is refused: "no package installer" |
+| `.pkg` | Listed. On firmware above 11.60 Install is refused ("packages don't run on firmware …"); otherwise see *Package install* below |
 | `fake.exfat` | Unknown, with header bytes under *Detection evidence* |
 | Dump with `.partial` | Flagged as incomplete |
 
@@ -248,6 +248,17 @@ Nothing in the app does this yet. Use an FTP payload and only read: don't change
   **Expect:** note the file and whether it's readable. If it's not found, the profile page can show the user ID until the helper asks the system.
 
 Paste the paths, `.schema` output and answers under *Problems found*, even if everything worked: they decide what the profile page can show.
+
+## Package install (needs a console on firmware 11.60 or lower; untested)
+
+- [ ] Update the helper on the Installed page, then queue a game `.pkg` whose title isn't installed.
+  **Expect:** the job copies it to the drive's `homebrew` folder, then the game appears under `/user/app/<title ID>` and the job ends "Installed". The staged `.pkg` in `homebrew` is deleted.
+- [ ] Queue a package the console rejects (wrong firmware, damaged file).
+  **Expect:** the job fails with the console's message, or "hasn't finished installing" after 3 minutes, and the staged `.pkg` is left in `homebrew`. Note what the PS5 showed.
+- [ ] Cancel a package install while it is copying.
+  **Expect:** the job is canceled and the staged copy is removed.
+
+Paste anything unexpected under *Problems found*. If the call fails everywhere, `install_pkg()` in [payload/main.c](../payload/main.c) is the first suspect: its struct layout is unverified.
 
 ## Problems found
 
