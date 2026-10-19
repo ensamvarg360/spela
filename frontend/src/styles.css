@@ -357,9 +357,18 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .problems { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
 .console-card > .card { margin-top: 1rem; border-color: var(--border); background: var(--surface-2); }
 
-/* game page: where it's installed and what happened to it */
-.history ul { list-style: none; margin: 0 0 1rem; padding: 0; display: grid; gap: 0.5rem; }
-.history code { margin-left: 0.4rem; font-size: 0.8rem; overflow-wrap: anywhere; }
+/* game page: one card per section; collapsible ones are <details> */
+.section { margin: 0 0 1rem; display: flow-root; }
+.section > h2, .section > summary { margin: 0 0 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text); }
+.section > summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; }
+.section > summary::-webkit-details-marker { display: none; }
+.section > summary::after { content: ""; width: 0.45rem; height: 0.45rem; border: solid var(--muted); border-width: 0 2px 2px 0; transform: rotate(-135deg); transition: transform 0.2s; }
+.section:not([open]) > summary { margin-bottom: 0; }
+.section:not([open]) > summary::after { transform: rotate(45deg); }
+.section > :last-child, .section .toolbar:last-child, .section .facts { margin-bottom: 0; }
+.section ul { list-style: none; margin: 0 0 1rem; padding: 0; display: grid; gap: 0.5rem; }
+.section code { margin-left: 0.4rem; font-size: 0.8rem; overflow-wrap: anywhere; }
+.edit .section { margin-bottom: 0; }
 
 .edit fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 

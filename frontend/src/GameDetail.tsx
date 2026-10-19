@@ -4,6 +4,17 @@ import { cart, useCart } from "./Cart";
 import { Cover } from "./Library";
 import { when } from "./Installed";
 
+/** A titled card on the detail page; collapsible unless `open` is omitted-and-fixed via `fixed`. */
+function Section({ title, open = true, fixed, children }: { title?: string; open?: boolean; fixed?: boolean; children: React.ReactNode }) {
+  if (fixed) return <div className="card section">{title && <h2>{title}</h2>}{children}</div>;
+  return (
+    <details className="card section" open={open}>
+      <summary>{title}</summary>
+      {children}
+    </details>
+  );
+}
+
 /** Queues an install on a console; the job shows up on the Installed page. DLC goes onto its game's drive. */
 function Install({ game: opened }: { game: Game }) {
   const [copies, setCopies] = useState<Game[]>([]); // every format of this title, so the install can ask which
@@ -154,7 +165,7 @@ function StoreImageBrowser({ game }: { game: Game }) {
   }
 
   return (
-    <section className="history">
+    <Section title="PlayStation Store images" open={false}>
       <div className="toolbar">
         <button className="secondary" onClick={load} disabled={busy}>{busy ? "Asking PlayStation Store…" : "Browse PlayStation Store images"}</button>
         {error && <span className="error" role="alert">{error}</span>}
@@ -178,7 +189,7 @@ function StoreImageBrowser({ game }: { game: Game }) {
           ))}
         </div>
       ))}
-    </section>
+    </Section>
   );
 }
 
@@ -245,24 +256,26 @@ function InstallHistory({ game }: { game: Game }) {
   useEffect(() => { api<History>(`/games/${game.id}/history`).then(setH, () => {}); }, [game.id]);
   if (!h || (!h.installed.length && !h.events.length)) return null;
   return (
-    <section className="history">
-      {h.installed.length > 0 && <>
-        <h2>On your consoles</h2>
-        <ul>{h.installed.map((i) => (
-          <li key={i.console + i.path}><strong>{i.console}</strong> · {i.drive || "Unknown drive"}{i.version && ` · v${i.version}`} <code>{i.path}</code></li>
-        ))}</ul>
-      </>}
-      {h.events.length > 0 && <>
-        <h2>History</h2>
-        <ul>{h.events.map((e, n) => (
-          <li key={n}>
-            <span className={`badge ${RESULT_BADGE[e.result] ?? "needs_attention"}`}>{e.result}</span> {WHAT[e.what] ?? e.what}
-            {e.console && ` · ${e.console}`}{e.drive && ` · ${e.drive}`} · <span className="muted">{when(e.at)}</span>
-            {e.message && <div className="muted">{e.message}</div>}
-          </li>
-        ))}</ul>
-      </>}
-    </section>
+    <>
+      {h.installed.length > 0 && (
+        <Section title="On your consoles">
+          <ul>{h.installed.map((i) => (
+            <li key={i.console + i.path}><strong>{i.console}</strong> · {i.drive || "Unknown drive"}{i.version && ` · v${i.version}`} <code>{i.path}</code></li>
+          ))}</ul>
+        </Section>
+      )}
+      {h.events.length > 0 && (
+        <Section title={`History (${h.events.length})`} open={false}>
+          <ul>{h.events.map((e, n) => (
+            <li key={n}>
+              <span className={`badge ${RESULT_BADGE[e.result] ?? "needs_attention"}`}>{e.result}</span> {WHAT[e.what] ?? e.what}
+              {e.console && ` · ${e.console}`}{e.drive && ` · ${e.drive}`} · <span className="muted">{when(e.at)}</span>
+              {e.message && <div className="muted">{e.message}</div>}
+            </li>
+          ))}</ul>
+        </Section>
+      )}
+    </>
   );
 }
 
@@ -290,8 +303,7 @@ function SaveBackups({ game }: { game: Game }) {
   const start = () => (setError(""), api<SaveBackup>(`/consoles/${cid}/save-backups`, { json: { title_id: tid } }).then(setB, (e) => setError(e.message)));
 
   return (
-    <section className="history">
-      <h2>Save data</h2>
+    <Section title="Save data" open={false}>
       <p className="muted">Copies this game's saves from the console to this PC, for every user. They stay encrypted and only work on the
         same console and account; to restore, copy the folder back with an FTP payload.</p>
       <div className="toolbar">
@@ -308,7 +320,7 @@ function SaveBackups({ game }: { game: Game }) {
       {list.length > 0 && <ul>{list.map((s) => (
         <li key={s.name}><strong>{s.name}</strong> · {s.files} file(s), {formatBytes(s.bytes)} <code>{s.path}</code></li>
       ))}</ul>}
-    </section>
+    </Section>
   );
 }
 
@@ -383,11 +395,13 @@ export default function GameDetail({ id }: { id: string }) {
           <strong>{STATUS_LABEL[game.compatibility_status]}</strong>
           {game.compatibility_reason && <span> — {game.compatibility_reason}</span>}
         </div>
-        {!session.readOnly && <>
-          <Install game={game} />
-          <HomeLogo game={game} />
-          <Convert game={game} />
-        </>}
+        {!session.readOnly && (
+          <Section fixed>
+            <Install game={game} />
+            <HomeLogo game={game} />
+            <Convert game={game} />
+          </Section>
+        )}
 
         {(game.metadata_confidence === "low" || game.metadata_confidence === "unknown") && (
           <div className="panel needs_attention" role="alert">
@@ -409,6 +423,7 @@ export default function GameDetail({ id }: { id: string }) {
         <StoreImageBrowser game={game} />
         {!session.readOnly && <SaveBackups game={game} />}
 
+        <Section title="File details">
         <dl className="facts">
           <dt>Metadata source</dt>
           <dd>
@@ -420,10 +435,11 @@ export default function GameDetail({ id }: { id: string }) {
           <dt>Size</dt><dd>{formatBytes(game.size_bytes)}</dd>
           <dt>Source</dt><dd><code>{game.source_path}</code>{game.missing && " (missing)"}</dd>
         </dl>
+        </Section>
 
         <form className="edit" onSubmit={save}>
           <fieldset disabled={session.readOnly}>
-          <h2>Metadata</h2>
+          <Section title="Metadata">
           <div className="fields">
             {TEXT_FIELDS.map(([k, label]) => (
               <label key={k}>
@@ -440,8 +456,9 @@ export default function GameDetail({ id }: { id: string }) {
             Description
             <textarea rows={3} value={val("description") ?? ""} onChange={(e) => set("description", e.target.value)} />
           </label>
+          </Section>
 
-          <h2>Provenance</h2>
+          <Section title="Provenance" open={false}>
           <div className="fields">
             <label>
               Owned copy
@@ -458,6 +475,7 @@ export default function GameDetail({ id }: { id: string }) {
             Notes
             <textarea rows={3} value={val("provenance_notes") ?? ""} onChange={(e) => set("provenance_notes", e.target.value)} />
           </label>
+          </Section>
 
           </fieldset>
           {!session.readOnly && <div className="actions">
@@ -467,16 +485,14 @@ export default function GameDetail({ id }: { id: string }) {
         </form>
 
         {game.parser_warnings.length > 0 && (
-          <details open>
-            <summary>Parser warnings ({game.parser_warnings.length})</summary>
+          <Section title={`Parser warnings (${game.parser_warnings.length})`}>
             <ul>{game.parser_warnings.map((w) => <li key={w}>{w}</li>)}</ul>
-          </details>
+          </Section>
         )}
 
-        <details>
-          <summary>Detection evidence</summary>
+        <Section title="Detection evidence" open={false}>
           <pre>{JSON.stringify(game.detection_evidence, null, 2)}</pre>
-        </details>
+        </Section>
 
         {!session.readOnly && <button className="danger" onClick={remove}>Remove from catalog</button>}
       </section>
