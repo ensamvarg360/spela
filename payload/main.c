@@ -10,6 +10,7 @@
  *   POST /copy?p=<from>&to=<to>  starts copying a file or folder on the console, e.g. to another drive (copy_start())
  *   GET  /copy                 {"running", "done", "total", "error", "to"} of that copy;  POST /copy/cancel stops it
  *   POST /install?p=<.pkg in a homebrew folder>&cid=<content ID>  starts the console's package installer (install_pkg(), untested)
+ *   GET  /klog?s=<seconds>     the kernel log as it's written, for up to 120 seconds: the loader's reason when an app won't start
  * Paths are percent-encoded. Every request needs this console's key in X-Storefront-Key (authorized()); even so,
  * writes are refused outside the homebrew folders (writable()), and /logo changes only the one file and database column it names. One thread per connection: /info still answers during a long upload.
  * Build with ./build.ps1; VERSION comes from backend/app/__init__.py. */
@@ -143,6 +144,25 @@ static void ok(int c) {
   free(b.s);
 }
 
+/* Streams /dev/klog for `seconds`. Read-only; it only sees lines written while it runs. */
+static void klog(int c, int seconds) {
+  int fd = open("/dev/klog", O_RDONLY | O_NONBLOCK);
+  if (fd < 0) {
+    fail(c, "500 Internal Server Error", strerror(errno));
+    return;
+  }
+  const char *head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n";
+  char chunk[4096];
+  time_t end = time(NULL) + seconds;
+  if (send_all(c, head, strlen(head))) end = 0;
+  while (time(NULL) < end) {
+    ssize_t r = read(fd, chunk, sizeof chunk);
+    if (r > 0 ? send_all(c, chunk, r) : 0) break;  /* the PC hung up */
+    if (r <= 0) usleep(100000);
+  }
+  close(fd);
+}
+
 static void info(buf_t *b) {
   sce_version_t v;
   char model[1000] = "";
@@ -265,7 +285,9 @@ static long long content_length(const char *head) {
  * NULL when it's all written, else what went wrong. After a failure the rest of the body is still read and dropped:
  * replying and closing with it unread makes the PC's connection reset (WinError 10053) instead of showing the reason. */
 static const char *receive(int c, const char *path, unsigned long long left, const char *body, size_t have) {
-  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+  /* 0777: the PS5 won't start an eboot.bin or load a .prx without the execute bit (the spawn fails with EACCES,
+   * shown as CE-107750-0). Overwriting keeps a file's mode; a new file would otherwise get none. */
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
   char *chunk = malloc(BLOCK);
   const char *err = fd < 0 ? strerror(errno) : chunk ? NULL : "out of memory";
   if (have > left) have = left;
@@ -499,7 +521,7 @@ static const char *copy_tree(const char *src, const char *dst, char *chunk) {
     return err;
   }
   if (!S_ISREG(st.st_mode)) return "not a file or folder";
-  int in = open(src, O_RDONLY), out = in < 0 ? -1 : open(dst, O_WRONLY | O_CREAT | O_EXCL, 0666);
+  int in = open(src, O_RDONLY), out = in < 0 ? -1 : open(dst, O_WRONLY | O_CREAT | O_EXCL, st.st_mode & 0777);  /* keeps the execute bit (receive()) */
   const char *err = in < 0 || out < 0 ? strerror(errno) : NULL;
   ssize_t r;
   while (!err && (r = read(in, chunk, BLOCK)) != 0) {
@@ -716,6 +738,11 @@ static void handle(int c) {
     uninstall_tile(c, query);
   } else if (post && !strcmp(target, "/logo")) {
     set_logo(c, query, head, end + 4, got - (end + 4 - head));
+  } else if (get && !strcmp(target, "/klog")) {
+    char s[8] = "30";
+    if (query) param(query, "s", s, sizeof s);
+    int n = atoi(s);
+    klog(c, n < 1 ? 1 : n > 120 ? 120 : n);
   } else if (get && !strcmp(target, "/copy")) {
     copy_status(c);
   } else if (post && !strcmp(target, "/copy/cancel")) {

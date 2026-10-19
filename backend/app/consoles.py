@@ -398,6 +398,13 @@ class _FTP(ftplib.FTP):
         """Streams a file to `write` in chunks, for files too big to hold in memory."""
         self.retrbinary(f"RETR {path}", write)
 
+    def make_executable(self, path: str):
+        """A file STOR creates has no execute bit, and the PS5 won't start an eboot.bin without it (CE-107750-0)."""
+        try:
+            self.sendcmd(f"SITE CHMOD 777 {path}")
+        except ftplib.error_perm:
+            pass  # a server without SITE CHMOD
+
 
 class FTPConsoleAdapter:
     """Talks to an FTP payload on the PS5 (stdlib ftplib, one login per call). Installs and removals go through
@@ -723,6 +730,21 @@ class FTPConsoleAdapter:
             except ftplib.error_perm:
                 pass  # a first install
             ftp.rename(f"{dest}.partial", dest)
+            ftp.make_executable(dest)
+
+    def _verify_files(self, ftp: ftplib.FTP, files: dict[str, bytes]):
+        """Reads the app folder back: every file must be there at its full size, or the PS5 can't start it."""
+        listings: dict[str, dict] = {}
+        bad = []
+        for rel, data in sorted(files.items()):
+            folder, _, name = rel.rpartition("/")
+            if folder not in listings:
+                listings[folder] = ftp.ls(f"{CONSOLE_APP_PATH}/{folder}".rstrip("/"))
+            if listings[folder].get(name, (False, -1))[1] != len(data):
+                bad.append(rel)
+        if bad:
+            raise AdapterError("app_incomplete", f"The PS5 app didn't copy completely ({len(bad)} of {len(files)} files "
+                               f"missing or the wrong size, for example {bad[0]}). Try Reinstall PS5 app again.")
 
     async def install_console_app(self, files: dict[str, bytes]) -> None:
         """Writes the PS5 app into /data/homebrew/<its title ID>; ShadowMountPlus adds its tile.
@@ -733,6 +755,7 @@ class FTPConsoleAdapter:
             except ftplib.error_perm:
                 pass  # an update
             self._put_files(ftp, files)
+            self._verify_files(ftp, files)
         await self._run(put)
 
     def _game_entry(self, ftp: ftplib.FTP, game: InstalledGameInfo, verb: str) -> tuple[str, str]:
@@ -1108,6 +1131,9 @@ class HelperFS:
 
     def rename(self, src: str, dest: str):
         self._req("POST", "rename", src, to=dest)
+
+    def make_executable(self, path: str):
+        pass  # the helper creates files executable (receive() in payload/main.c)
 
     def delete(self, path: str):
         self._req("POST", "rm", path)

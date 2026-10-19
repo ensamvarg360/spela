@@ -56,7 +56,7 @@ constexpr float kCardH = kCardW * 320.0f / 256.0f; // the PC's cover shape
 constexpr float kGap = 32.0f;
 constexpr float kPitch = kCardH + 84.0f;
 constexpr float kGridTop = 210.0f;
-constexpr float kGridBottom = 950.0f;
+constexpr float kGridBottom = 890.0f; // the hint bar below needs room
 constexpr float kPanelX = 1368.0f;
 constexpr float kPanelW = 1920.0f - kMargin - kPanelX;
 constexpr float kMessageSeconds = 5.0f;
@@ -1117,7 +1117,7 @@ class Storefront final : public app::Concept
 
     void draw_grid(gfx::DrawList &list) const
     {
-        list.push_clip({0, kGridTop - 40, kPanelX - 8, kGridBottom - kGridTop + 80});
+        list.push_clip({0, kGridTop - 40, kPanelX - 8, kGridBottom - kGridTop + 60});
         list.push_transform(1.0f, 0.0f, 0.0f, 0.0f, -scroll_.offset());
         const int count = static_cast<int>(shown_.size());
         for (int i = 0; i < count; ++i)
@@ -1214,7 +1214,9 @@ class Storefront final : public app::Concept
         }
         else
         {
-            list.gradient_rect(art, 24, colours.top, colours.top.with_alpha(0.0f));
+            list.gradient_rect(art, 24, colours.top, colours.bottom.with_alpha(0.0f));
+            ui::text(list, fonts.display, g.title.substr(0, 1), art.cx(), art.cy() + 50, 150, kWhite.with_alpha(0.35f),
+                     gfx::Align::center);
         }
         list.gradient_rect({panel.x, panel.y, panel.w, kArtH + 40}, 24, kTransparent, kPanel.with_alpha(0.6f));
         list.bordered_rect(panel, 24, kTransparent, 1.5f, kWhite.with_alpha(0.12f));

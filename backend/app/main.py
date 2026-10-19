@@ -1136,7 +1136,7 @@ def console_library(c: Console = Depends(console_from_token), db: Session = Depe
             state = f"blocked:{reason}" if reason else "installable"
         lines.append("\t".join(map(_field, (g.id, g.title, g.title_id, g.version, g.size_bytes, state,
                                              f"{progress:.3f}" if progress is not None else "",
-                                             int(bool(g.cover_path)), g.kind, g.format, *detail))))
+                                             int(bool(g.cover_path or g.title_id)), g.kind, g.format, *detail))))
     return "".join(f"{line}\n" for line in lines)
 
 
@@ -1149,9 +1149,17 @@ def console_drives(c: Console = Depends(console_from_token), db: Session = Depen
 
 @console_api.get("/covers/{game_id}")
 def console_cover(game_id: str, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
-    """The cover as raw RGBA pixels, COVER_SIZE, cropped to fill. The console has no image decoder."""
+    """The cover as raw RGBA pixels, COVER_SIZE, cropped to fill. The console has no image decoder. Without a cover
+    of its own the game gets its PlayStation Store poster, like the PC app's tiles."""
     # ponytail: resized on every request; cache the bytes in COVERS_DIR if the grid ever loads slowly.
-    with Image.open(_cover_file(_game(db, game_id))) as im:
+    g = _game(db, game_id)
+    try:
+        path = _cover_file(g)
+    except HTTPException:
+        if not (g.title_id and (poster := logos.poster(g.title_id, g.content_id))):
+            raise
+        path = poster
+    with Image.open(path) as im:
         data = ImageOps.fit(im.convert("RGBA"), COVER_SIZE).tobytes()
     return Response(data, media_type="application/octet-stream")
 

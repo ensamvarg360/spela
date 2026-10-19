@@ -7,7 +7,7 @@
 # its build, renderer and widgets; our screen (src/concepts) and network client (src/store).
 set -euo pipefail
 mode=${1:-app}
-KIT=https://github.com/blackbearreloaded/ps5-homebrew-ui
+KIT=https://github.com/ensamvarg360/ps5-homebrew-ui
 COMMIT=bbe19054ee2e7ec069254775273aeb8846c4bd3e
 TITLE_ID=PPSA99787 # also CONSOLE_APP_TITLE_ID in backend/app/consoles.py
 
@@ -42,6 +42,10 @@ rm -rf assets/audio/music assets/audio/sfx/paper
 rm -f sce_sys/pic0.dds sce_sys/pic1.dds sce_sys/snd0.at9 sce_sys/*-source.png
 cp /repo/console-app/sce_sys/icon0.png sce_sys/icon0.png
 TITLE_ID=$TITLE_ID APP_NAME="Spela" make init >/dev/null
+# make init derives the content ID from the name. Consoles that have the app registered keep the ID it had then
+# (PS5LOCALSTOREFRO), and a changed one can leave it unable to start (CE-107750-0), so keep it.
+sed -i 's|"contentId": *"[^"]*"|"contentId": "UP9000-PPSA99787_00-PS5LOCALSTOREFRO"|' sce_sys/param.json
+grep -q PS5LOCALSTOREFRO sce_sys/param.json
 
 if [[ $mode == preview ]]; then
     printf 'url=http://127.0.0.1:8799\ntoken=preview\n' >/tmp/server.txt

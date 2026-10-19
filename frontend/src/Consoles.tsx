@@ -116,6 +116,7 @@ export default function Consoles() {
   const [editing, setEditing] = useState<string | null>(null); // console id, "new", or null
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
   const [version, setVersion] = useState("");
   useEffect(() => { appVersion.then(setVersion); }, []);
 
@@ -129,8 +130,13 @@ export default function Consoles() {
   async function act(c: Console, path: string) {
     setBusy(true);
     setError("");
+    setNotice("");
     try {
-      await api<Console>(`/consoles/${c.id}/${path}`, { method: "POST" });
+      const after = await api<Console>(`/consoles/${c.id}/${path}`, { method: "POST" });
+      if (path === "helper") setNotice(`Helper v${after.helper_status.helper} is running on ${c.name}.`);
+      if (path === "console-app")
+        setNotice(`PS5 app v${after.helper_status.console_app} copied to ${c.name} and checked file by file. If it was open on the PS5, close and reopen it. ` +
+          "If the PS5 says it can't start it, remove it in ShadowMount+, restart ShadowMount+ (or the PS5), then install again.");
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -166,6 +172,7 @@ export default function Consoles() {
           ))}
       </ul>
       {editing === "new" ? <ConsoleForm onDone={done} /> : <button onClick={() => setEditing("new")}>Add console</button>}
+      {notice && <p role="status">{notice}</p>}
       {error && <p className="error" role="alert">{error}</p>}
     </section>
   );
