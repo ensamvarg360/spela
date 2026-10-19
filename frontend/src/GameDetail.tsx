@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STATUS_LABEL, useConsoles, type Drive, type Game, type Job } from "./api";
+import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STATUS_LABEL, useConsoles, type Drive, type Game, type InstalledGame, type Job } from "./api";
 import { cart, useCart } from "./Cart";
 import { Cover } from "./Library";
 import { when } from "./Installed";
@@ -10,12 +10,21 @@ function Install({ game }: { game: Game }) {
   const [drives, setDrives] = useState<Drive[]>([]);
   const [did, setDid] = useState("");
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [installed, setInstalled] = useState<InstalledGame | null>(null);
   const carted = useCart().includes(game.id);
 
   useEffect(() => {
     setDid("");
+    setMsg(null);
     if (cid) api<Drive[]>(`/consoles/${cid}/drives`).then((ds) => setDrives(ds.filter((d) => d.is_install_target)), () => setDrives([]));
   }, [cid]);
+  useEffect(() => { // already on this console? Then the button moves it to the chosen drive instead
+    setInstalled(null);
+    if (cid && game.kind === "game" && game.title_id)
+      api<InstalledGame[]>(`/consoles/${cid}/installed`).then(
+        (rows) => setInstalled(rows.find((r) => r.title_id === game.title_id && r.install_route === "shadowmountplus" && r.status !== "orphaned_icon") ?? null),
+        () => {});
+  }, [cid, game.id]);
 
   if (!consoles.length) return null;
 
@@ -35,6 +44,16 @@ function Install({ game }: { game: Game }) {
     }
   }
 
+  async function move() {
+    if (!installed || !confirm(`Move ${game.title} to the chosen drive? The console copies it, checks the copy, then deletes the original. Close the game on the PS5 first.`)) return;
+    try {
+      await api(`/consoles/${cid}/move`, { json: { installed_game_id: installed.id, drive_id: did } });
+      setMsg({ text: "Moving. Follow it on the Installed page." });
+    } catch (e) {
+      setMsg({ text: (e as Error).message, error: true });
+    }
+  }
+
   return (
     <div className="toolbar">
       {consoles.length > 1 && (
@@ -48,7 +67,14 @@ function Install({ game }: { game: Game }) {
           {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
         </select>
       )}
-      <button {...needsOnline(target)} onClick={install}>{game.kind === "dlc" ? "Add to game" : "Install"}</button>
+      {installed ? (
+        <>
+          <span className="muted">Already installed. Pick a drive to move it there.</span>
+          <button {...needsOnline(target)} disabled={!did || did === installed.drive_id || target?.state !== "online"} onClick={move}>Move</button>
+        </>
+      ) : (
+        <button {...needsOnline(target)} onClick={install}>{game.kind === "dlc" ? "Add to game" : "Install"}</button>
+      )}
       <button className="secondary" aria-pressed={carted} onClick={() => (carted ? cart.remove : cart.add)([game.id])}>
         {carted ? "In cart ✓" : "Add to cart"}
       </button>
