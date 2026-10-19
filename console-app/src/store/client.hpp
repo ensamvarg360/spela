@@ -1,4 +1,4 @@
-// PS5 Local Storefront - Talks to the PC app on a background thread.
+// Spela - Talks to the PC app on a background thread.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The screen never waits on the network: it asks for things here and picks

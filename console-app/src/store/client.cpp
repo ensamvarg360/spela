@@ -1,4 +1,4 @@
-// PS5 Local Storefront - Talks to the PC app on a background thread.
+// Spela - Talks to the PC app on a background thread.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "store/client.hpp"
@@ -268,7 +268,7 @@ void Client::fetch_library()
     }
     else if (r.status == 0)
     {
-        error_ = "Can't reach the PC at " + server_.url + ". Is PS5 Local Storefront running there, "
+        error_ = "Can't reach the PC at " + server_.url + ". Is Spela running there, "
                  "with \"Allow other devices on my network\" ticked?";
     }
     else

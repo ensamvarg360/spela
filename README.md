@@ -1,17 +1,17 @@
-# PS5 Local Storefront
+# Spela
 
 Self-hosted, single-user catalog for your own PS5 game backups. LAN-only; never expose it to the internet.
 Full spec: [project.md](project.md). **Status:** Phases 1–5 done, Phase 6 (hardening) in progress. The app copies folder dumps, disc images and archives holding them to a PS5 through ShadowMountPlus, and removes them again (from the Installed page or the PS5 app). It can't install `.pkg` files yet.
 
 ## Run (Windows)
 
-Double-click **PS5 Local Storefront.exe**. It opens in its own window (Windows' built-in WebView2, not your browser) and runs in the background with an icon in the system tray. Closing the window keeps it running in the tray.
+Double-click **Spela.exe**. It opens in its own window (Windows' built-in WebView2, not your browser) and runs in the background with an icon in the system tray. Closing the window keeps it running in the tray.
 Right-click the tray icon to **Open** it, **Open data folder**, **Restart** or **Quit**. Starting the .exe again while it's running brings its window back. The address http://127.0.0.1:8787 still works in a browser too.
 The first time, choose an admin password. Then go to **Settings**, click **Browse…**, pick a folder or a whole drive (for example `G:\`), and click **Scan now**.
 A folder is scanned with all its subfolders. System folders such as `$RECYCLE.BIN` and `System Volume Information` are skipped.
 Each game in the library shows its poster, publisher, release year, genre and star rating from PlayStation Store, looked up by the game's title ID (no account needed) the first time its tile comes into view and kept in the `store` folder of the data folder. The poster is the game's portrait art, looked for in the US, then UK, then Japanese store, and in its other editions (a Deluxe Edition's art says so); only when none has any does the app make one from the game's landscape art and logo. A cover you upload yourself replaces the store's art. Games the store doesn't know show their own cover and are asked about again after a week.
 
-Data (database, covers, password, `app.log`) lives in `%LOCALAPPDATA%\PS5 Local Storefront`. To back it up or move to another PC, see [Backup and restore](#backup-and-restore).
+Data (database, covers, password, `app.log`) lives in `%LOCALAPPDATA%\Spela`. To back it up or move to another PC, see [Backup and restore](#backup-and-restore).
 Forgot the password? Delete `admin_password` in that folder and restart; you'll be asked to choose a new one. That also logs out every device that was logged in.
 For a phone in the living room or a guest, set a **view-only password** under **Settings → View-only access**. Logging in with it shows the library, dashboard, DLC and installed games, but nothing can be installed, removed or changed, and Settings, the activity log and the PC's folders stay hidden; the app shows *View only* at the top. Changing or turning off that password logs out every device that used it. (It's kept in `viewer_password` in the data folder.)
 Console passwords (added under **Settings → Consoles**) are encrypted in the database with a key derived from `secret_key` in that folder, or from the `CREDENTIALS_ENCRYPTION_KEY` environment variable if you set it. If you lose or change that key, re-enter the console passwords. The key sits next to the database, so encryption protects a copied database file, not a copied data folder.
@@ -81,7 +81,7 @@ Before each change, the app saves a copy of that database as `console-backups/<c
 
 ## PS5 app
 
-**Install PS5 app** on the **Installed** page puts *PS5 Local Storefront* on the console's home screen (in `/data/homebrew/PPSA99787`, where ShadowMountPlus finds it). It shows the games on your PC, with L1 and R1 switching between **Games**, **Installed** and **DLC**. Cross opens the install dialog: pick the drive (the one with the most free space is chosen for you) and press Cross again to queue it, the same as clicking Install on the PC. Square stops an install that's waiting or running, and removes an installed game.
+**Install PS5 app** on the **Installed** page puts *Spela* on the console's home screen (in `/data/homebrew/PPSA99787`, where ShadowMountPlus finds it). It shows the games on your PC, with L1 and R1 switching between **Games**, **Installed** and **DLC**. Cross opens the install dialog: pick the drive (the one with the most free space is chosen for you) and press Cross again to queue it, the same as clicking Install on the PC. Square stops an install that's waiting or running, and removes an installed game.
 The PS5 must be able to reach this PC, so tick **Allow other devices on my network** in the tray menu first. The app is paired with this PC: the PC writes its address and a key into the app's `assets/server.txt`. The key only lets that console see the library and its own drives, queue and cancel installs to itself, and remove games from itself. If the PC's address changes, click **Update PS5 app** again. Deleting the console on the PC revokes the key.
 The app is built from [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) (GPL-3.0-or-later) with our screen in [console-app/](console-app/). Run `./console-app/build.ps1` (needs Docker Desktop) after changing it: it rebuilds `backend/app/console_app/PPSA99787`, which is committed. `./console-app/build.ps1 -Preview` renders the screen on the PC into `console-app/preview/`, against a fake PC app.
 
@@ -92,7 +92,7 @@ To release a new version: bump it, run `./payload/build.ps1` (needs Docker Deskt
 
 ## Backup and restore
 
-Everything the app knows is in the data folder (`%LOCALAPPDATA%\PS5 Local Storefront`, or `DATA_DIR`). Your game files are never in it.
+Everything the app knows is in the data folder (`%LOCALAPPDATA%\Spela`, or `DATA_DIR`). Your game files are never in it.
 
 1. **Quit** from the tray menu, so the database isn't being written.
 2. Copy the whole folder. `staging` (temporary archive extractions), `store` (PlayStation Store art and facts, fetched again when needed), `webview` (the window's browser profile) and `app.log` can be left out.
@@ -121,7 +121,7 @@ Keep `secret_key` together with `app.db`. Without it, saved console passwords ca
 
 ## Build the .exe
 
-Needs Python 3.12+ and Node 22. Run `./build.ps1`; the result is `dist\PS5 Local Storefront.exe`.
+Needs Python 3.12+ and Node 22. Run `./build.ps1`; the result is `dist\Spela.exe`.
 
 ## Develop
 

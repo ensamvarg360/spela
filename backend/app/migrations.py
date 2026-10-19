@@ -42,7 +42,7 @@ def upgrade(engine: Engine):
         version = 0 if not fresh else len(STEPS)  # a new database already has every column
         version = max(version, c.exec_driver_sql("PRAGMA user_version").scalar())
         if version > len(STEPS):
-            raise RuntimeError("This data folder was used by a newer version of PS5 Local Storefront. Install that "
+            raise RuntimeError("This data folder was used by a newer version of Spela. Install that "
                                "version again; an older one could damage the library database.")
         for step in STEPS[version:]:
             step(c)

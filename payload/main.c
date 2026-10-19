@@ -1,4 +1,4 @@
-/* PS5 Local Storefront helper: a small HTTP server the PC app loads through the console's ELF loader.
+/* Spela helper: a small HTTP server the PC app loads through the console's ELF loader.
  *   GET  /info                 {"version", "firmware", "model", "mounts": [{"mount", "total", "free"}]}
  *   GET  /ls?p=<dir>           [{"name", "dir", "size"}]; 404 when the folder is missing
  *   GET  /file?p=<file>        the file's bytes
@@ -752,13 +752,13 @@ int main(void) {
   for (int tries = 0; bind(srv, (struct sockaddr *)&addr, sizeof addr); tries++) {
     if (tries == 0) stop_old_copy();
     if (tries == 20) {  /* something that isn't our helper holds the port */
-      notify("PS5 Local Storefront helper couldn't start: port 7735 is in use.");
+      notify("Spela helper couldn't start: port 7735 is in use.");
       return 1;
     }
     sleep(1);
   }
   listen(srv, 16);
-  notify("PS5 Local Storefront helper " VERSION " is running.");
+  notify("Spela helper " VERSION " is running.");
 
   struct timeval timeout = {30, 0};  /* a client that stops sending gives up its thread */
   for (;;) {

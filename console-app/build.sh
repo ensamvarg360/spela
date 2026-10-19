@@ -41,7 +41,7 @@ sed -i 's#^    action_bit(Action::page_prev) | action_bit(Action::page_next) | a
 rm -rf assets/audio/music assets/audio/sfx/paper
 rm -f sce_sys/pic0.dds sce_sys/pic1.dds sce_sys/snd0.at9 sce_sys/*-source.png
 cp /repo/console-app/sce_sys/icon0.png sce_sys/icon0.png
-TITLE_ID=$TITLE_ID APP_NAME="PS5 Local Storefront" make init >/dev/null
+TITLE_ID=$TITLE_ID APP_NAME="Spela" make init >/dev/null
 
 if [[ $mode == preview ]]; then
     printf 'url=http://127.0.0.1:8799\ntoken=preview\n' >/tmp/server.txt

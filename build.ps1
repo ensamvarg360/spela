@@ -1,4 +1,4 @@
-# Builds "dist\PS5 Local Storefront.exe": one file, no Python or Node needed to run it.
+# Builds "dist\Spela.exe": one file, no Python or Node needed to run it.
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true  # stop when npm/pip/pyinstaller fail too
 Push-Location "$PSScriptRoot\frontend"
@@ -11,7 +11,7 @@ Remove-Item -Recurse -Force "$PSScriptRoot\backend\build" -ErrorAction SilentlyC
 & "$venv\Scripts\python" -m pip install --quiet "$PSScriptRoot\backend" pyinstaller
 Push-Location "$PSScriptRoot\backend"
 # --splash shows while the one-file .exe unpacks, before any Python runs; launcher.py closes it
-& "$venv\Scripts\python" -m PyInstaller --noconfirm --onefile --windowed --name "PS5 Local Storefront" `
+& "$venv\Scripts\python" -m PyInstaller --noconfirm --onefile --windowed --name "Spela" `
     --splash "$PSScriptRoot\backend\splash.png" `
     --distpath "$PSScriptRoot\dist" --workpath "$PSScriptRoot\build" --specpath "$PSScriptRoot\build" `
     --add-data "$PSScriptRoot\frontend\dist;app/static" --add-data "$PSScriptRoot\backend\app\payload;app/payload" `

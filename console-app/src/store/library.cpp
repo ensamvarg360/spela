@@ -1,4 +1,4 @@
-// PS5 Local Storefront - Parsing the PC's library and server files.
+// Spela - Parsing the PC's library and server files.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "store/library.hpp"

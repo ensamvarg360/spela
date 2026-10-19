@@ -49,7 +49,7 @@ async def _scheduled_scans():
 
 
 APP_ID = "ps5-local-storefront"
-app = FastAPI(title="PS5 Local Storefront", lifespan=lifespan)
+app = FastAPI(title="Spela", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=config.SECRET_KEY, same_site="strict",
                    session_cookie="ps5sf_session", max_age=7 * 24 * 3600)
 

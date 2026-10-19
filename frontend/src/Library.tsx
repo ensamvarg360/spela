@@ -239,6 +239,8 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
             {(chips.length > 0 || q) && <li><button className="link" onClick={clear}>Clear all</button></li>}
           </ul>
           <span className="muted">{shown.length === games.length ? `${games.length} ${noun}` : `${shown.length} of ${games.length} ${noun}`}</span>
+          <input className="search" type="search" placeholder={`Search your ${kind === "dlc" ? "DLC" : "library"}`} aria-label="Search title or title ID"
+            value={view.q} onChange={(e) => setView({ ...view, q: e.target.value })} />
           {!picked && !session.readOnly && <button className="secondary small" onClick={() => setPicked(new Set())}>Select</button>}
           <label className="sort">
             Sort by

@@ -1,8 +1,8 @@
-# PS5 Local Storefront — Project Specification
+# Spela — Project Specification
 
 ## 1. Project summary
 
-Build a self-hosted, Docker-deployable web application called **PS5 Local Storefront**.
+Build a self-hosted, Docker-deployable web application called **Spela**.
 
 The application runs on the user’s home network and provides a private storefront-style interface for a personally maintained library of legally created PlayStation 5 game backups. It scans user-selected directories, catalogs compatible game formats, displays installed games from a connected PS5, queues remote installations over LAN, and removes installed game files safely and explicitly.
 

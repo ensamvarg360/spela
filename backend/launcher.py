@@ -26,7 +26,7 @@ except ImportError:
     pyi_splash = None
 
 URL = f"http://127.0.0.1:{config.PORT}"
-APP_NAME = "PS5 Local Storefront"
+APP_NAME = "Spela"
 logging.basicConfig(filename=config.DATA_DIR / "app.log", level=logging.WARNING,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -101,7 +101,7 @@ def main():
     if owner == "other":
         ctypes.windll.user32.MessageBoxW(None, f"Port {config.PORT} is already in use by another program, so PS5 Local "
                                          "Storefront can't start.\n\nClose that program and try again.",
-                                         "PS5 Local Storefront", 0x10)  # MB_ICONERROR
+                                         "Spela", 0x10)  # MB_ICONERROR
         return
     # log_config=None: a windowed .exe has no console, so uvicorn must log through the file handler above.
     server = uvicorn.Server(uvicorn.Config(app, host=config.HOST, port=config.PORT, log_config=None))
@@ -112,7 +112,7 @@ def main():
         except SystemExit:  # uvicorn exits this way when it can't bind the port
             pass
         if not server.should_exit:  # stopped on its own, e.g. the port is taken by another program
-            icon.notify(f"Couldn't start. Details are in {config.DATA_DIR / 'app.log'}", "PS5 Local Storefront")
+            icon.notify(f"Couldn't start. Details are in {config.DATA_DIR / 'app.log'}", "Spela")
 
     thread = threading.Thread(target=serve)
     window = webview.create_window(APP_NAME, html="<body style='background:#0d1017;color:#8a93a6;font:14px Segoe UI;"

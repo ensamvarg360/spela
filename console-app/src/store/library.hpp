@@ -1,4 +1,4 @@
-// PS5 Local Storefront - The PC app's library as the console app sees it.
+// Spela - The PC app's library as the console app sees it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The PC sends plain text (backend/app/main.py, console_library): one game per

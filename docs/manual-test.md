@@ -34,7 +34,7 @@ Also have ready:
 
 ## 1. Start the app
 
-- [x] Double-click **PS5 Local Storefront.exe**.
+- [x] Double-click **Spela.exe**.
   **Expect:** its window opens and a tray icon appears.
 - [x] Close the window, then start the `.exe` again.
   **Expect:** the same window comes back. No second copy starts and no "port in use" error appears.
@@ -189,7 +189,7 @@ Also check:
 ## 16. PS5 app
 
 - [ ] Click **Install PS5 app** on the **Installed** page.
-  **Expect:** *PS5 Local Storefront* appears on the PS5 home screen.
+  **Expect:** *Spela* appears on the PS5 home screen.
 - [ ] Open it on the PS5.
   **Expect:** your PC library with covers.
 - [ ] Press L1 and R1.

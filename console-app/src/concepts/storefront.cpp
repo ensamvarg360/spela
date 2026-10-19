@@ -1,4 +1,4 @@
-// PS5 Local Storefront - The games on your PC: browse them, install and remove them.
+// Spela - The games on your PC: browse them, install and remove them.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // A grid of covers on the left and the focused game on the right; L1 and R1
@@ -208,7 +208,7 @@ class Storefront final : public app::Concept
     {
         static const app::ConceptInfo kInfo{
             "storefront",
-            "PS5 Local Storefront",
+            "Spela",
             "The games on your PC, ready to install",
             "console-app/src/concepts/storefront.cpp",
             audio::SoundSet::glass,
@@ -770,7 +770,7 @@ class Storefront final : public app::Concept
     void draw_screen(gfx::DrawList &list) const
     {
         const ui::Fonts &fonts = context_.fonts;
-        ui::text(list, fonts.semibold, "PS5 LOCAL STOREFRONT", kMargin + 2, 84, 18, kInk.with_alpha(0.55f),
+        ui::text(list, fonts.semibold, "SPELA", kMargin + 2, 84, 18, kInk.with_alpha(0.55f),
                  gfx::Align::left, 4.0f);
         if (client_.paired() && loaded_ && !games_.empty())
             draw_tabs(list);

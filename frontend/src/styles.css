@@ -65,12 +65,21 @@ label.check { flex-direction: row; align-items: center; gap: 0.4rem; color: var(
 .topbar nav a { text-decoration: none; color: var(--muted); padding: 0.35rem 0.8rem; border-radius: 999px; font-size: 0.92rem; transition: color 0.2s, background 0.2s; }
 .topbar nav a:hover { color: var(--text); }
 .topbar nav a[aria-current="page"] { color: var(--text); background: var(--surface-2); }
-.topbar .search {
-  flex: 1 1 260px; max-width: 540px; margin-left: auto; padding: 0.55rem 1rem 0.55rem 2.4rem; border-radius: 999px;
-  background: var(--surface) no-repeat 0.95rem center / 1rem
+.topbar-end { display: flex; align-items: center; gap: 0.35rem; margin-left: auto; }
+.icon-btn {
+  position: relative; display: grid; place-items: center; width: 2.2rem; height: 2.2rem; padding: 0; border-radius: 999px;
+  background: none; border: none; color: var(--muted); transition: color 0.2s, background 0.2s;
+}
+.icon-btn:hover, .icon-btn[aria-current="page"] { color: var(--text); background: var(--surface-2); }
+.icon-btn svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.icon-btn circle { fill: currentColor; stroke: none; }
+.icon-btn .count-pill { position: absolute; top: -0.1rem; right: -0.2rem; margin: 0; font-size: 0.65rem; padding: 0 0.35rem; }
+.results-bar .search {
+  flex: 0 1 220px; padding: 0.15rem 0.8rem 0.15rem 2rem; font-size: 0.85rem; border-radius: 6px;
+  background: var(--surface-2) no-repeat 0.65rem center / 0.9rem
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238d97a8' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
-.topbar .search:focus { border-color: var(--accent); background-color: var(--surface-2); }
+.results-bar .search:focus { border-color: var(--accent); }
 
 /* Library: filter sidebar beside the grid */
 .browse { display: grid; grid-template-columns: 220px 1fr; gap: 2rem; align-items: start; }
@@ -118,8 +127,7 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
   .topbar { position: static; gap: 0.75rem 1rem; }
   .topbar nav { order: 2; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
   .topbar nav a { flex-shrink: 0; padding: 0.35rem 0.6rem; }
-  .topbar .link { margin-left: auto; }
-  .topbar .search { order: 3; flex-basis: 100%; max-width: none; margin-left: 0; }
+  .results-bar .search { flex-basis: 100%; order: -1; }
   main { padding-top: 1rem; }
   /* iOS zooms into any field whose text is under 16px, and stays zoomed */
   input, select, textarea, label.sort select { font-size: 16px; }

@@ -1,4 +1,4 @@
-// PS5 Local Storefront - The app has one screen.
+// Spela - The app has one screen.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "concepts/concepts.hpp"

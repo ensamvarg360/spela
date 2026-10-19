@@ -343,7 +343,10 @@ const TEXT_FIELDS = [
   ["genre", "Genre"],
 ] as const;
 
-export default function GameDetail({ id }: { id: string }) {
+const BACK: Record<string, string> = { "/": "Library", "/dlc": "DLC", "/installed": "Installed", "/dashboard": "Dashboard", "/cart": "Cart" };
+
+/** `from`: the page the user came from, so ← goes back there; null (opened by link) falls back to the game's list. */
+export default function GameDetail({ id, from }: { id: string; from: string | null }) {
   const [game, setGame] = useState<Game | null>(null);
   const [draft, setDraft] = useState<Partial<Game>>({});
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
@@ -378,10 +381,12 @@ export default function GameDetail({ id }: { id: string }) {
     run(api<Game>(`/games/${id}/cover`, { body }), "Cover updated.");
   };
 
+  const back = from && BACK[from] ? from : game.kind === "dlc" ? "/dlc" : "/";
+
   async function remove() {
     if (!confirm(`Remove "${game!.title}" from the catalog? Files on disk are not touched; a rescan will add it back.`)) return;
     await api(`/games/${id}`, { method: "DELETE" });
-    location.hash = game!.kind === "dlc" ? "#/dlc" : "#/";
+    location.hash = `#${back}`;
   }
 
   return (
@@ -400,7 +405,7 @@ export default function GameDetail({ id }: { id: string }) {
       </aside>
 
       <section>
-        {game.kind === "dlc" ? <a href="#/dlc" className="muted">← DLC</a> : <a href="#/" className="muted">← Library</a>}
+        <a href={`#${back}`} className="muted">← {BACK[back]}</a>
         <h1>{game.title}</h1>
         <div className={`panel ${game.compatibility_status}`}>
           <strong>{STATUS_LABEL[game.compatibility_status]}</strong>

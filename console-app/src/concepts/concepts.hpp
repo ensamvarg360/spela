@@ -1,4 +1,4 @@
-// PS5 Local Storefront - Factories of the app's screens.
+// Spela - Factories of the app's screens.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
