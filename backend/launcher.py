@@ -1,5 +1,6 @@
 """Entry point for the Windows .exe: serve the app in the background and show it in its own window
 (WebView2, built into Windows), with a tray icon. Closing the window hides it; Quit is in the tray menu."""
+import base64
 import ctypes
 import json
 import logging
@@ -11,11 +12,12 @@ import threading
 import time
 import urllib.request
 import webbrowser
+from pathlib import Path
 
 import pystray
 import uvicorn
 import webview
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from app import config, jobs
 from app.main import APP_ID, app
@@ -32,11 +34,17 @@ logging.basicConfig(filename=config.DATA_DIR / "app.log", level=logging.WARNING,
 
 
 def _icon_image() -> Image.Image:
-    img = Image.new("RGBA", (64, 64))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((2, 2, 62, 62), radius=14, fill="#0070d1")
-    d.polygon([(24, 16), (24, 48), (50, 32)], fill="white")
-    return img
+    return Image.open(Path(config.__file__).parent / "assets" / "tray.png")
+
+
+def _loading_page() -> str:
+    """Shown in the window until the server is up; the bar sweeps for as long as that takes."""
+    logo = base64.b64encode((Path(config.__file__).parent / "assets" / "wordmark.png").read_bytes()).decode()
+    return f"""<body style="margin:0;height:100vh;display:grid;place-content:center;justify-items:center;gap:22px;
+background:linear-gradient(135deg,#181c34,#261e48)"><img src="data:image/png;base64,{logo}" width="220">
+<div style="width:140px;height:3px;border-radius:2px;background:#ffffff16;overflow:hidden">
+<div style="width:40%;height:100%;border-radius:2px;background:#6e6eff;animation:s 1.2s ease-in-out infinite"></div></div>
+<style>@keyframes s{{from{{transform:translateX(-100%)}}to{{transform:translateX(250%)}}}}</style></body>"""
 
 
 def _port_owner() -> str:
@@ -115,9 +123,7 @@ def main():
             icon.notify(f"Couldn't start. Details are in {config.DATA_DIR / 'app.log'}", "Spela")
 
     thread = threading.Thread(target=serve)
-    window = webview.create_window(APP_NAME, html="<body style='background:#0d1017;color:#8a93a6;font:14px Segoe UI;"
-                                   "display:grid;place-items:center;height:100vh;margin:0'>Starting…</body>",
-                                   width=1280, height=860, min_size=(720, 480))
+    window = webview.create_window(APP_NAME, html=_loading_page(), width=1280, height=860, min_size=(720, 480))
     quitting = False
 
     def on_closing():

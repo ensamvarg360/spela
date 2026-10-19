@@ -34,7 +34,7 @@ Also have ready:
 
 ## 1. Start the app
 
-- [x] Double-click **Spela.exe**.
+- [x] Double-click **Spela-<version>.exe**.
   **Expect:** its window opens and a tray icon appears.
 - [x] Close the window, then start the `.exe` again.
   **Expect:** the same window comes back. No second copy starts and no "port in use" error appears.

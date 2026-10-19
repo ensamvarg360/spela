@@ -56,10 +56,8 @@ label.check { flex-direction: row; align-items: center; gap: 0.4rem; color: var(
   border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
 }
 .brand { display: flex; align-items: center; gap: 0.6rem; font-weight: 700; letter-spacing: 0.02em; text-decoration: none; white-space: nowrap; }
-.brand .mark {
-  display: grid; place-items: center; width: 1.9rem; height: 1.9rem; border-radius: 8px; font-size: 0.7rem; padding-left: 2px;
-  background: linear-gradient(135deg, #60a5fa, var(--accent) 55%, #7c3aed); box-shadow: 0 4px 14px -4px var(--accent);
-}
+.brand .wordmark { height: 1.9rem; }
+.login .wordmark { height: 3rem; }
 .brand small { margin-left: 0.45rem; font-weight: 400; font-size: 0.72rem; color: var(--muted); }
 .topbar nav { display: flex; gap: 0.25rem; align-items: center; }
 .topbar nav a { text-decoration: none; color: var(--muted); padding: 0.35rem 0.8rem; border-radius: 999px; font-size: 0.92rem; transition: color 0.2s, background 0.2s; }

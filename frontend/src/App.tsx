@@ -6,6 +6,7 @@ import Dashboard from "./Dashboard";
 import GameDetail from "./GameDetail";
 import Installed from "./Installed";
 import Settings from "./Settings";
+import wordmark from "./wordmark.png";
 
 // ponytail: hash routing, seven routes. Swap in react-router when nested routes show up.
 function useHash() {
@@ -50,8 +51,8 @@ export default function App() {
     <>
       <header className="topbar">
         <a href="#/" className="brand">
-          <span className="mark" aria-hidden>▶</span>
-          <span>Spela{version && <small>v{version}</small>}</span>
+          <img className="wordmark" src={wordmark} alt="Spela" />
+          {version && <small>v{version}</small>}
         </a>
         <nav>
           <a href="#/dashboard" aria-current={route === "/dashboard" ? "page" : undefined}>Dashboard</a>
@@ -103,7 +104,7 @@ function Login({ setup, onLogin }: { setup: boolean; onLogin: (u: string) => voi
 
   return (
     <form className="login card" onSubmit={submit}>
-      <h1>Spela</h1>
+      <h1><img className="wordmark" src={wordmark} alt="Spela" /></h1>
       {setup && <p className="muted">Welcome! Choose an admin password. You'll use it to log in, including from other devices.</p>}
       <label>
         {setup ? "New admin password" : "Admin password"}

@@ -3,7 +3,10 @@ import secrets
 from pathlib import Path
 
 _appdata = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share")
-DATA_DIR = Path(os.environ.get("DATA_DIR") or _appdata / "PS5 Local Storefront")
+DATA_DIR = Path(os.environ.get("DATA_DIR") or _appdata / "Spela")
+_old_dir = _appdata / "PS5 Local Storefront"  # the app's former name; move existing data over once
+if not os.environ.get("DATA_DIR") and _old_dir.exists() and not DATA_DIR.exists():
+    _old_dir.rename(DATA_DIR)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DATA_DIR / 'app.db'}")
 COVERS_DIR = DATA_DIR / "covers"

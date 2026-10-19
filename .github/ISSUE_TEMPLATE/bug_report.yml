@@ -1,0 +1,38 @@
+name: Bug report
+description: Something doesn't work as the README or user guide says it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't attach game files, keys or anything that isn't yours to share. Check the
+        [troubleshooting table](https://github.com/ensamvarg360/spela/blob/master/docs/user-guide.md#troubleshooting) first.
+  - type: input
+    id: version
+    attributes:
+      label: Spela version
+      description: Shown at the top of the app, next to the logo.
+    validations:
+      required: true
+  - type: input
+    id: console
+    attributes:
+      label: PS5 firmware, ShadowMountPlus version and jailbreak
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: log
+    attributes:
+      label: Last lines of app.log
+      description: From `%LOCALAPPDATA%\Spela\app.log`. Remove IP addresses or paths you'd rather not share.
+      render: text

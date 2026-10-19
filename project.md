@@ -8,7 +8,7 @@ The application runs on the user’s home network and provides a private storefr
 
 This is a **single-user, local-first application**. It must not be exposed directly to the public internet. It is not a piracy tool, download manager, or repository of copyrighted content. It manages files the user already possesses and identifies as legally backed up.
 
-The first deployment target is Docker Compose on the user’s ZimaOS server, but the application must remain portable to any standard Docker host.
+The application must stay portable to any standard host.
 
 ## 2. Primary goals
 
@@ -197,7 +197,7 @@ volumes:
 
 Important implementation detail: the library mount should be read-only inside the application. The staging directory is the only directory where the application should create temporary transfer payloads.
 
-The user’s existing PS5 network share may be mounted at a host path such as `/media/192.168.0.40/PS5` and mapped into containers as `/library` or `/ps5`. Do not hard-code the user’s current ZimaOS path into application logic; make it configuration-driven.
+A network share holding the library may be mounted at any host path. Don't hard-code library paths into application logic; make them configuration-driven.
 
 ## 6. Data model
 
