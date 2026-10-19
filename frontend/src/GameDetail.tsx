@@ -46,7 +46,15 @@ function Install({ game: opened }: { game: Game }) {
         () => {});
   }, [cid, game.id]);
 
+  const [blocked, setBlocked] = useState<Record<string, string>>({}); // game id -> why this console can't take it
+  const ids = (copies.length ? copies : [opened]).map((c) => c.id).join(",");
+  useEffect(() => {
+    setBlocked({});
+    if (cid) api<Record<string, string>>(`/consoles/${cid}/blockers?game_ids=${ids}`).then(setBlocked, () => {});
+  }, [cid, ids, target?.firmware]);
+
   if (!consoles.length) return null;
+  const why = blocked[game.id];
 
   async function install() {
     if (game.format === "archive" && !confirm("This archive will be extracted to the private staging folder on this PC before it's installed. Make sure the PC has room for the unpacked game.")) return;
@@ -83,7 +91,7 @@ function Install({ game: opened }: { game: Game }) {
       )}
       {copies.length > 1 && (
         <select aria-label="Version" value={game.id} onChange={(e) => setPick(e.target.value)}>
-          {copies.map((c) => <option key={c.id} value={c.id}>{formatLabel(c)}{c.version ? ` · v${c.version}` : ""} · {formatBytes(c.size_bytes)}</option>)}
+          {copies.map((c) => <option key={c.id} value={c.id}>{formatLabel(c)}{c.version ? ` · v${c.version}` : ""} · {formatBytes(c.size_bytes)}{blocked[c.id] && !installed ? " · not for this console" : ""}</option>)}
         </select>
       )}
       {game.kind === "game" && (
@@ -98,7 +106,10 @@ function Install({ game: opened }: { game: Game }) {
           <button {...needsOnline(target)} disabled={!did || did === installed.drive_id || target?.state !== "online"} onClick={move}>Move</button>
         </>
       ) : (
-        <button {...needsOnline(target)} onClick={install}>{game.kind === "dlc" ? "Add to game" : "Install"}</button>
+        <>
+          <button {...needsOnline(target)} {...(why ? { disabled: true, title: why } : {})} onClick={install}>{game.kind === "dlc" ? "Add to game" : "Install"}</button>
+          {why && <span className="error" role="status">{why}</span>}
+        </>
       )}
       <button className="secondary" aria-pressed={carted} onClick={() => (carted ? cart.remove : cart.add)([game.id])}>
         {carted ? "In cart ✓" : "Add to cart"}

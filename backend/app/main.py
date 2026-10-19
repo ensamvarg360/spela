@@ -1025,6 +1025,17 @@ def install(console_id: str, body: InstallIn, db: Session = Depends(get_db)):
     return _job_out(db, queue_install(db, c, body.game_id, body.drive_id))
 
 
+@api.get("/consoles/{console_id}/blockers")
+def install_blockers(console_id: str, game_ids: str, db: Session = Depends(get_db)):
+    """Why each game (comma-separated IDs) can't be installed on this console; installable ones are left out."""
+    c = db.get(Console, console_id) or _not_found()
+    out = {}
+    for gid in filter(None, game_ids.split(",")):
+        if (g := db.get(Game, gid)) and (reason := jobs.blocker(db, c, g)):
+            out[gid] = reason
+    return out
+
+
 @api.get("/consoles/{console_id}/jobs", response_model=list[JobOut])
 def list_jobs(console_id: str, db: Session = Depends(get_db)):
     # ponytail: the latest 50 only; add paging if anyone needs older history (the audit log has it).

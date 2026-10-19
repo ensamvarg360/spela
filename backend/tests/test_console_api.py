@@ -58,6 +58,9 @@ def test_console_api(tmp_path):
         assert rows[have.id][5] == "installed"
         assert rows[dlc.id][8:10] == ["dlc", "unlocker"] and rows[dlc.id][5] != "installed"  # not its game's state
 
+        blockers = client.get(f"/api/v1/consoles/{a}/blockers", params={"game_ids": f"{ready.id},{pkg.id}"}).json()
+        assert list(blockers) == [pkg.id] and "packages need firmware" in blockers[pkg.id]  # installable games are left out
+
         assert client.get("/api/v1/console-app/drives", headers=auth).text == f"{usb}\tUSB\t40\t100\n"  # install targets only
         installed = {g["id"]: g["installed"] for g in client.get("/api/v1/games").json()}
         assert installed[have.id] and not installed[ready.id]
