@@ -327,15 +327,21 @@ function sampleColors(img: HTMLImageElement): CSSProperties | undefined {
   return { "--edge": `rgb(${edge.map(Math.round).join(" ")})`, "--vivid": `rgb(${vivid.join(" ")})` } as CSSProperties;
 }
 
-/** The store's portrait key art, else the game's own (square) cover on a blurred copy of itself. */
+/** The store's portrait key art, else the game's own cover: filling the tile when it's a portrait too (an uploaded
+ *  poster), else (a square icon) whole, on a blurred copy of itself. */
 export function Cover({ game, onLoad }: { game: Game; onLoad?: (img: HTMLImageElement) => void }) {
   const cover = coverUrl(game);
   const [src, setSrc] = useState(game.title_id ? `/api/v1/games/${game.id}/poster?v=${encodeURIComponent(game.updated_at)}` : cover);
+  const [portrait, setPortrait] = useState(false);
   if (!src) return <div className="art placeholder" aria-hidden>{game.title.slice(0, 1)}</div>;
-  const square = src === cover;
+  const square = src === cover && !portrait;
+  const loaded = (img: HTMLImageElement) => {
+    setPortrait(img.naturalHeight >= img.naturalWidth * 1.2);
+    onLoad?.(img);
+  };
   return (
     <div className={square ? "art square" : "art"} style={square ? ({ "--art": `url("${src}")` } as CSSProperties) : undefined}>
-      <img src={src} alt="" loading="lazy" onLoad={(e) => onLoad?.(e.currentTarget)} onError={() => setSrc(square ? null : cover)} />
+      <img src={src} alt="" loading="lazy" onLoad={(e) => loaded(e.currentTarget)} onError={() => setSrc(src === cover ? null : cover)} />
     </div>
   );
 }
