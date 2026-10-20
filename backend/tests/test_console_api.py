@@ -60,6 +60,14 @@ def test_console_api(tmp_path):
 
         blockers = client.get(f"/api/v1/consoles/{a}/blockers", params={"game_ids": f"{ready.id},{pkg.id}"}).json()
         assert list(blockers) == [pkg.id] and "packages need firmware" in blockers[pkg.id]  # installable games are left out
+        assert client.get(f"/api/v1/consoles/{a}/firmware-blocked").json() == []  # firmware unknown: nothing flagged
+        with SessionLocal() as db:
+            db.get(Console, a).firmware = "13.60"
+            db.commit()
+        assert client.get(f"/api/v1/consoles/{a}/firmware-blocked").json() == [pkg.id]
+        with SessionLocal() as db:
+            db.get(Console, a).firmware = None
+            db.commit()
 
         assert client.get("/api/v1/console-app/drives", headers=auth).text == f"{usb}\tUSB\t40\t100\n"  # install targets only
         installed = {g["id"]: g["installed"] for g in client.get("/api/v1/games").json()}

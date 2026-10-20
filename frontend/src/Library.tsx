@@ -150,6 +150,11 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
   const [picked, setPicked] = useState<Set<string> | null>(null); // null = not selecting; tiles open their game
   const [tile, setTile] = useState(() => { try { return Number(localStorage.getItem("tileSize")) || TILE_MAX; } catch { return TILE_MAX; } });
   const resize = (px: number) => { setTile(px); try { localStorage.setItem("tileSize", String(px)); } catch { /* not remembered */ } };
+  const { cid, console: target } = useConsoles();
+  const [tooNew, setTooNew] = useState<Set<string>>(new Set()); // packages the console's firmware can't run
+  useEffect(() => {
+    if (cid) api<string[]>(`/consoles/${cid}/firmware-blocked`).then((ids) => setTooNew(new Set(ids)), () => {});
+  }, [cid, target?.firmware, games?.length]);
 
   const load = () => api<Game[]>("/games").then((gs) => setGames(groupCopies(gs.filter((g) => g.kind === kind))), (e) => setError(e.message));
   useEffect(() => { load(); }, [kind]);
@@ -268,7 +273,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
         {picked && <InstallBar kind={kind} picked={picked} shown={shown} setPicked={setPicked} />}
         {shown.length
           ? <ul className={tile < TILE_TEXT ? "games posters" : "games"} style={{ "--tile": `${tile}px` } as CSSProperties}>{shown.map((g) => <li key={g.id}>
-            <Tile game={g} onChange={changed} picked={picked && picked.has(g.id)} onPick={() => {
+            <Tile game={g} tooNew={tooNew.has(g.id)} onChange={changed} picked={picked && picked.has(g.id)} onPick={() => {
               const next = new Set(picked);
               if (!next.delete(g.id)) next.add(g.id);
               setPicked(next);
@@ -281,7 +286,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
 }
 
 /** `picked`: null when not selecting; otherwise a click ticks the tile instead of opening the game. */
-function Tile({ game, onChange, picked, onPick }: { game: Game; onChange: (id: string, changes: Partial<Game>) => void; picked: boolean | null; onPick: () => void }) {
+function Tile({ game, tooNew, onChange, picked, onPick }: { game: Game; tooNew: boolean; onChange: (id: string, changes: Partial<Game>) => void; picked: boolean | null; onPick: () => void }) {
   const [colors, setColors] = useState<CSSProperties>();
   const info = game.store;
   const loaded = (img: HTMLImageElement) => {
@@ -300,6 +305,15 @@ function Tile({ game, onChange, picked, onPick }: { game: Game; onChange: (id: s
       aria-pressed={picked ?? undefined} role={picked !== null ? "button" : undefined}>
       {picked !== null ? <span className="pick" aria-hidden>{picked ? "✓" : ""}</span> : game.new && <span className="ribbon">New</span>}
       <Cover game={game} onLoad={loaded} />
+      {/* poster-only cards: the name box (and its badge) is hidden, so these stand in for it */}
+      {(game.installed || tooNew) && <span className="flags" aria-hidden>
+        {game.installed && <i className="flag on-console" title="Installed on a console">
+          <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+        </i>}
+        {tooNew && <i className="flag too-new" title="Doesn't run on this console's firmware">
+          <svg viewBox="0 0 24 24"><path d="M12 2.5 2.5 18.5h19zM12 8.5v4.5M12 16v.01" /></svg>
+        </i>}
+      </span>}
       <div className="name">
         <strong>{game.title}</strong>
         {info?.rating != null && (

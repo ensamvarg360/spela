@@ -1153,6 +1153,15 @@ def install_blockers(console_id: str, game_ids: str, db: Session = Depends(get_d
     return out
 
 
+@api.get("/consoles/{console_id}/firmware-blocked")
+def firmware_blocked(console_id: str, db: Session = Depends(get_db)) -> list[str]:
+    """IDs of the packages this console's firmware is too new for. Empty while the firmware is unknown."""
+    c = db.get(Console, console_id) or _not_found()
+    if not c.firmware:
+        return []
+    return [g.id for g in db.scalars(select(Game).where(Game.format.in_(jobs.PKG_FORMATS))) if jobs.pkg_blocker(c, g)]
+
+
 @api.get("/consoles/{console_id}/jobs", response_model=list[JobOut])
 def list_jobs(console_id: str, db: Session = Depends(get_db)):
     # ponytail: the latest 50 only; add paging if anyone needs older history (the audit log has it).

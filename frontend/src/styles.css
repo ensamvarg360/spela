@@ -161,7 +161,14 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
   .games.posters .fav { width: 1.6rem; height: 1.6rem; top: 0.3rem; right: 0.3rem; }
   .games.posters .fav svg { width: 0.9rem; height: 0.9rem; }
   .games.posters .pick, .games.posters .ribbon { top: 0.3rem; left: 0.3rem; }
+  .games.posters .flags { display: flex; }
 }
+.flags { display: none; position: absolute; bottom: 0.3rem; right: 0.3rem; z-index: 3; gap: 0.25rem; }
+/* whole pixels: rem sizes land the icon on half pixels and it sits off center */
+.flag { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; color: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 0.6); }
+.flag svg { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.flag.on-console { background: var(--accent); }
+.flag.too-new { background: var(--bad); }
 /* the li lifts, not the link, so the favorite button (its sibling) moves with the card */
 .games > li { position: relative; transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
 .games > li:hover, .games > li:focus-within { transform: translateY(-6px) scale(1.02); }
