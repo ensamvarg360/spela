@@ -138,6 +138,9 @@ function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Se
   );
 }
 
+// card width in px from the size slider; below TILE_TEXT the text is too small to read, so only posters show
+const TILE_MIN = 80, TILE_MAX = 190, TILE_TEXT = 140;
+
 /** The grid of games, or of DLC: DLC shares its game's title ID, so its tiles show the game's art. */
 export default function Library({ kind, view, setView }: { kind: Kind; view: View; setView: (v: View) => void }) {
   const [games, setGames] = useState<Game[] | null>(null);
@@ -145,6 +148,8 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
   const [expanded, setExpanded] = useState<Record<string, boolean>>({}); // filters showing all their values
   const [filtersOpen, setFiltersOpen] = useState(false); // phones only: the sidebar sits behind a button
   const [picked, setPicked] = useState<Set<string> | null>(null); // null = not selecting; tiles open their game
+  const [tile, setTile] = useState(() => { try { return Number(localStorage.getItem("tileSize")) || TILE_MAX; } catch { return TILE_MAX; } });
+  const resize = (px: number) => { setTile(px); try { localStorage.setItem("tileSize", String(px)); } catch { /* not remembered */ } };
 
   const load = () => api<Game[]>("/games").then((gs) => setGames(groupCopies(gs.filter((g) => g.kind === kind))), (e) => setError(e.message));
   useEffect(() => { load(); }, [kind]);
@@ -253,10 +258,16 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
               <option value="size">Size</option>
             </select>
           </label>
+          <span className="tile-size">
+            <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h4v4H1zM6 1h4v4H6zM11 1h4v4h-4zM1 6h4v4H1zM6 6h4v4H6zM11 6h4v4h-4zM1 11h4v4H1zM6 11h4v4H6zM11 11h4v4h-4z" /></svg>
+            <input type="range" min={TILE_MIN} max={TILE_MAX} value={tile} aria-label="Card size"
+              onChange={(e) => resize(Number(e.target.value))} />
+            <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h6v6H1zM9 1h6v6H9zM1 9h6v6H1zM9 9h6v6H9z" /></svg>
+          </span>
         </div>
         {picked && <InstallBar kind={kind} picked={picked} shown={shown} setPicked={setPicked} />}
         {shown.length
-          ? <ul className="games">{shown.map((g) => <li key={g.id}>
+          ? <ul className={tile < TILE_TEXT ? "games posters" : "games"} style={{ "--tile": `${tile}px` } as CSSProperties}>{shown.map((g) => <li key={g.id}>
             <Tile game={g} onChange={changed} picked={picked && picked.has(g.id)} onPick={() => {
               const next = new Set(picked);
               if (!next.delete(g.id)) next.add(g.id);

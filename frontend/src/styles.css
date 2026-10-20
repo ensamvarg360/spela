@@ -114,6 +114,14 @@ label.check { flex-direction: row; align-items: center; gap: 0.4rem; color: var(
 .chips .link { font-size: 0.8rem; margin-left: 0.25rem; }
 label.sort { flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
 label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
+.tile-size { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); }
+.tile-size svg { width: 0.85rem; height: 0.85rem; fill: currentColor; flex: none; }
+.tile-size input { -webkit-appearance: none; appearance: none; width: 100px; height: 1rem; margin: 0; padding: 0; border: none; background: none; cursor: pointer; }
+.tile-size input::-webkit-slider-runnable-track { height: 3px; border-radius: 3px; background: var(--border); }
+.tile-size input::-moz-range-track { height: 3px; border-radius: 3px; background: var(--border); }
+.tile-size input::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4.5px; border: none; border-radius: 50%; background: var(--accent); }
+.tile-size input::-moz-range-thumb { width: 12px; height: 12px; border: none; border-radius: 50%; background: var(--accent); }
+.tile-size input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
 .nothing { padding: 3rem 0; text-align: center; }
 
 .browse > * { min-width: 0; } /* a wide child must not stretch its column past the screen */
@@ -129,6 +137,7 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
   .topbar nav { order: 2; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
   .topbar nav a { flex-shrink: 0; padding: 0.35rem 0.6rem; }
   .results-bar .search { flex-basis: 100%; order: -1; }
+  .tile-size { display: none; } /* phones keep two cards per row */
   main { padding-top: 1rem; }
   /* iOS zooms into any field whose text is under 16px, and stays zoomed */
   input, select, textarea, label.sort select { font-size: 16px; }
@@ -142,7 +151,17 @@ label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
 
 
 /* Library tiles: portrait art, then a name box tinted with colors sampled from it (Library.tsx sampleColors). */
-.games { list-style: none; padding: 0; margin: 0; display: grid; gap: 1.5rem 1.25rem; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.games { list-style: none; padding: 0; margin: 0; display: grid; gap: 1.5rem 1.25rem; grid-template-columns: repeat(auto-fill, minmax(var(--tile, 190px), 1fr)); }
+/* the size slider at its small end: posters only, the text kept for screen readers */
+@media (min-width: 801px) {
+  .games.posters { gap: 0.75rem; }
+  .games.posters .name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; padding: 0; }
+  .games.posters .art::after { display: none; }
+  .games.posters .game { border-radius: 8px; }
+  .games.posters .fav { width: 1.6rem; height: 1.6rem; top: 0.3rem; right: 0.3rem; }
+  .games.posters .fav svg { width: 0.9rem; height: 0.9rem; }
+  .games.posters .pick, .games.posters .ribbon { top: 0.3rem; left: 0.3rem; }
+}
 /* the li lifts, not the link, so the favorite button (its sibling) moves with the card */
 .games > li { position: relative; transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
 .games > li:hover, .games > li:focus-within { transform: translateY(-6px) scale(1.02); }
