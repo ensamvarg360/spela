@@ -17,6 +17,7 @@ export const ACTION_LABEL: Record<string, string> = {
   helper_install: "Helper installed",
   helper_remove: "Helper removed",
   console_app_install: "PS5 app installed",
+  console_app_remove: "PS5 app removed",
   viewer_password: "View-only password changed",
   wake: "Woken from rest mode",
   save_backup: "Saves backed up",
