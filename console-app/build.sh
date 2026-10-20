@@ -54,6 +54,12 @@ if [[ $mode == preview ]]; then
     rm -rf /repo/console-app/preview
     HUI_SERVER_FILE=/tmp/server.txt HOST_CXX=clang++-18 HOST_CC=clang-18 \
         tools/host-snapshots.sh /repo/console-app/preview storefront
+    # and the screen for a PC that doesn't answer (nothing listens on port 9)
+    printf 'url=http://127.0.0.1:9\ntoken=preview\n' >/tmp/unreachable.txt
+    HUI_SERVER_FILE=/tmp/unreachable.txt HOST_CXX=clang++-18 HOST_CC=clang-18 \
+        tools/host-snapshots.sh /repo/console-app/preview/unreachable storefront
+    # without a PC every step of the tour looks the same: keep one
+    find /repo/console-app/preview/unreachable -name '*.png' ! -name '01-storefront-focus.png' -delete
     exit
 fi
 

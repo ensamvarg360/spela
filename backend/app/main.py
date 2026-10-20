@@ -85,8 +85,11 @@ async def revalidate_html(request: Request, call_next):
 @app.exception_handler(StarletteHTTPException)
 async def error_body(request: Request, exc: StarletteHTTPException):
     """Errors are {"error": code, "message": text} (project.md §17), not FastAPI's {"detail": ...}, plus "fix" (what
-    to do about it) when there's something the user can do."""
+    to do about it) when there's something the user can do. The PS5 app has no JSON parser and shows one line, so it
+    gets just the message, as plain text."""
     body = exc.detail if isinstance(exc.detail, dict) else {"error": "http_error", "message": str(exc.detail)}
+    if request.url.path.startswith(console_api.prefix + "/"):
+        return PlainTextResponse(body["message"], status_code=exc.status_code)
     return JSONResponse(body, status_code=exc.status_code)
 
 

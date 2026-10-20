@@ -70,6 +70,8 @@ def test_console_api(tmp_path):
         assert client.get(f"/api/v1/console-app/covers/{pkg.id}", headers=auth).status_code == 404
 
         assert client.post(f"/api/v1/console-app/install/{pkg.id}", headers=auth).status_code == 409
+        gone = client.post("/api/v1/console-app/install/no-such-game", headers=auth)  # the PS5 app shows errors as plain text
+        assert gone.status_code == 404 and gone.text == "Game not found."
         assert client.post(f"/api/v1/console-app/install/{ready.id}?drive=made-up", headers=auth).status_code == 409
         r = client.post(f"/api/v1/console-app/install/{ready.id}?drive={usb}", headers=auth)
         assert (r.status_code, r.text) == (200, "Queued.")

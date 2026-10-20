@@ -118,9 +118,11 @@ Response request(const Server &server, const char *method, const std::string &pa
 
 std::string unpaired_message()
 {
-    return "This app isn't paired with your PC any more. On the PC, open Installed and "
-           "click Update PS5 app.";
+    return "This app isn't paired with your PC any more. On the PC, open Settings, find this console under "
+           "Consoles, and click Update PS5 app.";
 }
+
+const char *const kCantReach = "Can't reach your PC. Check that Spela is running there.";
 
 } // namespace
 
@@ -194,9 +196,10 @@ bool Client::step()
         Removal removal;
         removal.game_id = job.game_id;
         if (r.status != 200 || !parse_removal(r.body, &removal))
-            removal.error = r.status == 0     ? "Can't reach the PC."
+            removal.error = r.status == 0     ? kCantReach
                             : r.status == 401 ? unpaired_message()
-                            : r.status == 200 ? "The PC's answer didn't make sense. Update the PS5 app."
+                            : r.status == 200 ? "Your PC's answer didn't make sense: this app and Spela on the PC may be "
+                                                "different versions. On the PC, click Update PS5 app in Settings."
                                               : r.body;
         pthread_mutex_lock(&lock_);
         removals_.push_back(std::move(removal));
@@ -210,7 +213,7 @@ bool Client::step()
             : job.kind == Job::cancel ? "/api/v1/console-app/install/" + job.game_id + "/cancel"
                                       : "/api/v1/console-app/uninstall/" + job.game_id + "/confirm/" + job.arg;
         const Response r = request(server_, "POST", path, 4096);
-        const std::string text = r.status == 0     ? "Can't reach the PC."
+        const std::string text = r.status == 0     ? kCantReach
                                  : r.status == 401 ? unpaired_message()
                                                    : r.body;
         pthread_mutex_lock(&lock_);
@@ -268,12 +271,15 @@ void Client::fetch_library()
     }
     else if (r.status == 0)
     {
-        error_ = "Can't reach the PC at " + server_.url + ". Is Spela running there, "
-                 "with \"Allow other devices on my network\" ticked?";
+        // First sentence first: once the list is up, a failed poll shows this cut to one line.
+        error_ = "Can't reach your PC at " + server_.url + ". Check that Spela is running there, and that "
+                 "\"Allow other devices on my network\" is ticked in its tray menu. If Windows calls the network "
+                 "Public, switch it to Private. If the PC's address changed, click Update PS5 app in Spela's Settings.";
     }
     else
     {
-        error_ = "The PC answered with an error (" + std::to_string(r.status) + ").";
+        error_ = "Spela on your PC ran into a problem (error " + std::to_string(r.status) + "). Restart it from its tray "
+                 "icon. If it keeps happening, the details are in app.log in Spela's data folder.";
     }
     library_new_ = true;
     pthread_mutex_unlock(&lock_);

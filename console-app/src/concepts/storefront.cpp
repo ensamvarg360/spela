@@ -779,14 +779,14 @@ class Storefront final : public app::Concept
 
         if (!client_.paired())
             return draw_notice(list, "Not paired with a PC",
-                               "Install this app from the PC app: open Installed and click Install PS5 app.");
+                               "Install it again from Spela on your PC: open Settings, find this console under Consoles, and click Install PS5 app.");
         if (!loaded_)
             return error_.empty()
                        ? draw_notice(list, "Connecting to your PC...", client_.server().url)
                        : draw_notice(list, "Can't reach your PC", error_);
         if (games_.empty())
             return draw_notice(list, "No games on your PC yet",
-                               "On the PC, add a folder under Settings and scan it.");
+                               "On the PC, follow the setup guide on Spela's Dashboard, or add your games folder in Settings and scan it.");
 
         char count[64];
         std::snprintf(count, sizeof(count), "%zu %s", shown_.size(), kTabCounts[tab_]);
@@ -800,7 +800,7 @@ class Storefront final : public app::Concept
 
         if (shown_.empty())
         {
-            const char *empty = tab_ == 0   ? "No games on your PC yet, only DLC. On the PC, add a folder under Settings and scan it."
+            const char *empty = tab_ == 0   ? "No games on your PC yet, only DLC. On the PC, add your games folder in Settings and scan it."
                                 : tab_ == 1 ? "Nothing from your PC is on this PS5 yet. Install a game from Games."
                                 : tab_ == 2 ? "No DLC on your PC. On the PC, add a DLC folder under Settings and scan it."
                                             : "Your cart is empty. In Games or DLC, press Options on the ones you want, "
@@ -880,7 +880,7 @@ class Storefront final : public app::Concept
         list.circle(960, 400, 40, kWhite.with_alpha(0.06f));
         list.ring(960, 400, 40, 3, kAccent.with_alpha(0.8f));
         ui::text(list, fonts.semibold, title, 960, 500, 44, kInk, gfx::Align::center);
-        ui::paragraph(list, fonts.regular, detail, 960 - 600, 560, 28, 1200, 40, kMuted, 4,
+        ui::paragraph(list, fonts.regular, detail, 960, 560, 28, 1200, 40, kMuted, 6, // centred: x is each line's middle
                       gfx::Align::center);
         const ui::Hint hints[] = {{ui::Button::triangle, "Try again"}};
         ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 1, 1824, true);
@@ -996,7 +996,7 @@ class Storefront final : public app::Concept
         }
         if (no_drive)
             y = ui::paragraph(list, fonts.regular,
-                              "No drive on this PS5 is set for installs. On the PC, open Consoles and choose one.",
+                              "No drive on this PS5 is set for installs. On the PC, open Installed, click a drive and tick Allow installs here.",
                               x, y + 30, 24, width, 34, kWarn, 2);
         for (int i = 0; i < rows; ++i)
         {
@@ -1067,7 +1067,7 @@ class Storefront final : public app::Concept
         y += 16;
         if (no_drive)
             ui::paragraph(list, fonts.regular,
-                          "No drive on this PS5 is set for installs. On the PC, open Consoles and choose one.",
+                          "No drive on this PS5 is set for installs. On the PC, open Installed, click a drive and tick Allow installs here.",
                           x, y + 30, 24, width, 34, kWarn, 2);
         const std::uint64_t need = cart_bytes(true);
         for (int i = 0; i < rows; ++i)
