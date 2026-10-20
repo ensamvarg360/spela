@@ -21,7 +21,7 @@ from app import __version__, archives, config, credentials, inventory, jobs
 from app.consoles import AdapterError, DriveInfo, FTPConsoleAdapter, HelperConsoleAdapter, InstalledGameInfo, RemovalResult
 from app.database import Base, SessionLocal, engine
 from app.main import app, console_app_token
-from app.models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob
+from app.models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot
 
 
 @pytest.fixture(autouse=True)
@@ -627,6 +627,56 @@ def test_move_game_to_another_drive(ps5, monkeypatch):
             assert db.scalar(select(AuditLog).where(AuditLog.action == "move")).result == "success"
     finally:
         helper.shutdown()
+
+
+def test_move_game_to_pc(ps5, tmp_path):
+    """A console-only game is copied into a library folder, added to the library, then deleted from the console."""
+    root, port, lib = ps5
+    write(root / "data/homebrew/Dump PPSA08642/sce_sys/param.json", PARAM_JSON.replace(b"PPSA02222", b"PPSA08642"))
+    write(root / "data/homebrew/Dump PPSA08642/eboot.bin", b"e" * 100)
+    pc = tmp_path / "pc"
+    pc.mkdir()
+    with SessionLocal() as db:
+        c, _ = _setup(db, port, lib)
+        r = LibraryRoot(path=str(pc))
+        db.add(r)
+        db.commit()
+        try:
+            row = db.scalar(select(InstalledGame).where(InstalledGame.console_id == c.id, InstalledGame.title_id == "PPSA08642"))
+            assert row.game_id is None
+
+            async def move():
+                m = jobs.start_move_to_pc(db, c, row.id, r.id)
+                while m["status"] == "moving":
+                    await asyncio.sleep(0.01)
+                return m
+            m = asyncio.run(move())
+            assert m["status"] == "success", m["message"]
+            assert (pc / "Dump PPSA08642/eboot.bin").read_bytes() == b"e" * 100
+            assert [p.name for p in pc.iterdir()] == ["Dump PPSA08642"]  # no .partial left
+            assert not (root / "data/homebrew/Dump PPSA08642").exists()
+            db.expire_all()
+            assert db.scalar(select(Game.title_id).where(Game.source_path == str(pc / "Dump PPSA08642"))) == "PPSA08642"
+            assert not db.scalar(select(InstalledGame).where(InstalledGame.console_id == c.id, InstalledGame.title_id == "PPSA08642"))
+        finally:
+            db.execute(delete(Game).where(Game.source_path.startswith(str(pc))))
+            db.delete(r)
+            db.commit()
+
+
+def test_copy_to_pc_cancel_leaves_nothing(ps5, tmp_path):
+    root, port, lib = ps5
+    write(root / "data/homebrew/Big PPSA03333.exfat", b"x" * 200)
+    pc = tmp_path / "pc"
+    pc.mkdir()
+    stop = threading.Event()
+
+    def progress(done, total):
+        if done > 50:
+            stop.set()
+    with pytest.raises(AdapterError) as e:
+        asyncio.run(adapter(port).copy_to_pc("/data/homebrew/Big PPSA03333.exfat", pc / "Big PPSA03333.exfat", progress, stop))
+    assert e.value.code == "canceled" and list(pc.iterdir()) == []
 
 
 def test_save_backup_job(ps5, monkeypatch, tmp_path):

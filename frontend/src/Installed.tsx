@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { StatusNote } from "./Problem";
-import { api, appVersion, formatBytes, JOB_ACTIVE, needsOnline, session, wakeConsole, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal } from "./api";
+import { api, appVersion, formatBytes, JOB_ACTIVE, needsOnline, session, wakeConsole, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal, type Root } from "./api";
 
 const JOB_LABEL: Record<JobStatus, [string, string]> = {
   queued: ["Waiting", "unknown"], preflight: ["Checking", "unknown"], extracting: ["Extracting", "needs_attention"], transferring: ["Copying", "needs_attention"],
@@ -60,7 +60,7 @@ export function Jobs({ consoleId, onDone }: { consoleId: string; onDone: () => v
 }
 
 /** Preview, typed title ID, then follows the removal until it ends. Closing early doesn't stop it. */
-function RemoveDialog({ consoleId, game, onClose }: { consoleId: string; game: InstalledGame; onClose: () => void }) {
+export function RemoveDialog({ consoleId, game, onClose }: { consoleId: string; game: InstalledGame; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [p, setP] = useState<Removal | null>(null);
   const [typed, setTyped] = useState("");
@@ -121,14 +121,24 @@ function RemoveDialog({ consoleId, game, onClose }: { consoleId: string; game: I
   );
 }
 
-/** Picks another drive, then follows the move. Closing early doesn't stop it; Cancel does. */
-function MoveDialog({ consoleId, game, drives, onClose }: { consoleId: string; game: InstalledGame; drives: Drive[]; onClose: () => void }) {
+/** Picks another drive, or a library folder on this PC for a game that isn't in the library, then follows the move.
+ * Closing early doesn't stop it; Cancel does. */
+export function MoveDialog({ consoleId, game, drives, onClose }: { consoleId: string; game: InstalledGame; drives: Drive[]; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const others = drives.filter((d) => d.id !== game.drive_id);
+  const [roots, setRoots] = useState<Root[]>([]);
   const [did, setDid] = useState(others[0]?.id ?? "");
   const [m, setM] = useState<Move | null>(null);
   const [error, setError] = useState("");
-  useEffect(() => { ref.current?.showModal(); }, []);
+  const root = roots.find((r) => `root:${r.id}` === did);
+  useEffect(() => {
+    ref.current?.showModal();
+    if (!game.game_id) api<Root[]>("/library/roots").then((rs) => {
+      const ok = rs.filter((r) => r.kind === "game" && r.enabled && r.reachable);
+      setRoots(ok);
+      setDid((cur) => cur || (ok[0] ? `root:${ok[0].id}` : ""));
+    }, () => {});
+  }, []);
   useEffect(() => {
     if (m?.status !== "moving") return;
     const t = setInterval(() => api<Move>(`/moves/${m.id}`).then(setM, () => {}), 1000);
@@ -138,23 +148,28 @@ function MoveDialog({ consoleId, game, drives, onClose }: { consoleId: string; g
   function start(e: FormEvent) {
     e.preventDefault();
     setError("");
-    api<Move>(`/consoles/${consoleId}/move`, { json: { installed_game_id: game.id, drive_id: did } }).then(setM, (e) => setError(e.message));
+    const to = root ? { root_id: root.id } : { drive_id: did };
+    api<Move>(`/consoles/${consoleId}/move`, { json: { installed_game_id: game.id, ...to } }).then(setM, (e) => setError(e.message));
   }
   const ended = m && m.status !== "moving";
 
   return (
     <dialog ref={ref} className="card remove" onClose={onClose} aria-labelledby="move-title">
       <h2 id="move-title">Move {game.title}</h2>
-      {!m ? (others.length ? (
+      {!m ? (others.length || roots.length ? (
         <form onSubmit={start}>
-          <p>The console copies <code>{game.source_path}</code> to the other drive itself, checks the copy, then deletes the original.
-            {game.size_bytes > 0 && ` It needs about ${formatBytes(game.size_bytes)} free there.`}</p>
+          {root ? <p>Spela copies <code>{game.source_path}</code> into <code>{root.path}</code> on this PC, checks the copy and adds it to
+            your library. Then it deletes the game from the console.</p>
+            : <p>The console copies <code>{game.source_path}</code> to the other drive itself, checks the copy, then deletes the original.
+              {game.size_bytes > 0 && ` It needs about ${formatBytes(game.size_bytes)} free there.`}</p>}
           <label>Move to
             <select value={did} onChange={(e) => setDid(e.target.value)}>
               {others.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
+              {roots.map((r) => <option key={r.id} value={`root:${r.id}`}>This PC: {r.path}</option>)}
             </select>
           </label>
-          <p className="muted">Close the game on the PS5 first. Its home-screen tile is replaced by a new one from the new drive; save data is kept.</p>
+          <p className="muted">{root ? "Close the game on the PS5 first. Its home-screen tile is removed; save data stays on the console."
+            : "Close the game on the PS5 first. Its home-screen tile is replaced by a new one from the new drive; save data is kept."}</p>
           <button disabled={!did}>Move</button>
         </form>
       ) : <p>This console has no other drive to move it to.</p>) : (
@@ -174,9 +189,9 @@ function MoveDialog({ consoleId, game, drives, onClose }: { consoleId: string; g
   );
 }
 
-/** The library's portrait poster when the game is in the library, else the console's square icon. */
-function Art({ g }: { g: InstalledGame }) {
-  const [src, setSrc] = useState(g.game_id ? `/api/v1/games/${g.game_id}/poster` : g.cover_url);
+/** The portrait poster from PlayStation Store, else the console's square icon. */
+export function Art({ g }: { g: InstalledGame }) {
+  const [src, setSrc] = useState<string | null>(g.game_id ? `/api/v1/games/${g.game_id}/poster` : `/api/v1/titles/${g.title_id}/poster`);
   if (!src) return <div className="art placeholder" aria-hidden>{g.title.slice(0, 1)}</div>;
   const square = src === g.cover_url;
   return (
@@ -377,8 +392,8 @@ export default function Installed() {
               </>;
               return (
                 <li key={g.id}>
-                  {g.game_id ? <a className="game" href={`#/game/${g.game_id}`} title={tip}>{body}</a> : <div className="game" title={tip}>{body}</div>}
-                  {g.install_route === "shadowmountplus" && !g.removing && !g.moving && g.status !== "orphaned_icon" && drives.length > 1 && !session.readOnly && (
+                  <a className="game" href={g.game_id ? `#/game/${g.game_id}` : `#/installed/${c.id}/${g.id}`} title={tip}>{body}</a>
+                  {g.install_route === "shadowmountplus" && !g.removing && !g.moving && g.status !== "orphaned_icon" && (drives.length > 1 || !g.game_id) && !session.readOnly && (
                     <button className="fav move" disabled={c.state !== "online"} title={c.state !== "online" ? "The console must be online." : "Move to another drive"}
                       aria-label={`Move ${g.title} to another drive`} onClick={() => setMoving(g)}>
                       <svg viewBox="0 0 24 24" aria-hidden><path d="M4 9h13l-4-4M20 15H7l4 4" /></svg>

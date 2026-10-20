@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from . import archives, config, exfat, inventory, logos, scanner
 from .consoles import IMAGE_EXTS, AdapterError, DriveInfo, InstalledGameInfo, RemovalResult
 from .database import SessionLocal
-from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, _id, now
+from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id, now
 
 ACTIVE = ("queued", "preflight", "extracting", "transferring", "registering")
 RUNNING = ACTIVE[1:]
@@ -583,6 +583,105 @@ async def _move(move_id: str):
             _notify(f"{m['title']}: {'moved' if m['status'] == 'success' else 'move failed'}", m["message"])
         if m["status"] == "success" and not m["tile_left"]:
             m["message"] += " " + await _logo_once_listed(db, console, m["title_id"])
+
+
+def pc_destination(row: InstalledGame, root: LibraryRoot) -> Path:
+    """Under the library folder, with the name it has on the console, so installing it again gives the same name."""
+    return Path(root.path) / re.sub(r'[<>:"\\|?*]', "_", (row.source_path or "").rpartition("/")[2])
+
+
+def move_to_pc_blocker(db: Session, row: InstalledGame, root: LibraryRoot | None) -> str | None:
+    if row.install_route != "shadowmountplus" or not row.source_path:
+        return "Only games installed through ShadowMountPlus can be moved."
+    if row.status == "orphaned_icon":
+        return "Its files are already gone from the console, so there's nothing to move."
+    if row.game_id:
+        return "It's already in your PC library. Remove it from the console instead."
+    if not root or not root.enabled or root.kind != "game":
+        return "Pick one of your game library folders."
+    if not os.path.isdir(root.path):
+        return f"Can't reach {root.path}. Is the drive plugged in?"
+    if pc_destination(row, root).exists():
+        return f"{pc_destination(row, root)} already exists on this PC."
+    if reason := removal_blocker(db, row):
+        return reason
+    if any(m["console_id"] == row.console_id and m["status"] == "moving" for m in moves.values()):
+        return "Another game is being moved on this console. Wait for it to finish."
+    return None
+
+
+def start_move_to_pc(db: Session, console: Console, installed_game_id: str, root_id: str) -> dict:
+    """Copies the game into a library folder, adds it to the library, then deletes it from the console.
+    Raises ValueError with the reason when it can't."""
+    row, root = db.get(InstalledGame, installed_game_id), db.get(LibraryRoot, root_id)
+    if not row or row.console_id != console.id:
+        raise ValueError("That game isn't on this console.")
+    if reason := move_to_pc_blocker(db, row, root):
+        raise ValueError(reason)
+    if inventory.status.get(console.id, {}).get("state") != "online":
+        raise ValueError("The console isn't online.")
+    move_id = _id()
+    m = moves[move_id] = {"id": move_id, "console_id": console.id, "installed_game_id": row.id, "title_id": row.title_id, "title": row.title,
+                          "source_path": row.source_path, "dest": str(pc_destination(row, root)), "drive_label": "this PC",
+                          "status": "moving", "progress": 0.0, "bytes_done": 0, "bytes_total": 0, "tile_left": False,
+                          "message": "Copying to this PC. Then it's added to the library and deleted from the console."}
+    _move_stop[move_id] = threading.Event()
+    _spawn(_move_to_pc(move_id))
+    return m
+
+
+async def _move_to_pc(move_id: str):
+    m = moves[move_id]
+    dest = Path(m["dest"])
+
+    def progress(done: int, total: int):  # called from the adapter's thread; plain assignments
+        m["bytes_done"], m["bytes_total"], m["progress"] = done, total, done / total if total else 0.0
+
+    with SessionLocal() as db:
+        console = db.get(Console, m["console_id"])
+        game = InstalledGameInfo(m["title_id"], m["title"], None, "shadowmountplus", None, m["source_path"], m["source_path"], 0)
+        try:
+            if not console:
+                raise AdapterError("not_found", "The console was deleted.")
+            adapter = inventory.adapter_for(db, console)
+            size = await adapter.copy_to_pc(m["source_path"], dest, progress, _move_stop[move_id])
+            m["message"] = "Adding it to the library."
+            while await asyncio.to_thread(scanner.run_scan_locked, SessionLocal) is None:
+                await asyncio.sleep(1)  # a scan was already running and may have missed it
+            db.expire_all()
+            same = lambda p: os.path.normcase(os.path.abspath(p)) == os.path.normcase(os.path.abspath(dest))  # noqa: E731
+            if not any(same(g.source_path) for g in db.scalars(select(Game).where(Game.title_id == m["title_id"]))):
+                raise AdapterError("not_in_library", f"Copied to {dest}, but the library scan didn't list it as {m['title_id']}, "
+                                                     "so it was left on the console too. Check the copy, or delete it.")
+            m["message"] = "Deleting it from the console."
+            removed = await adapter.remove_shadowmount_source(game, lambda d, t: None)
+            if not removed.ok:
+                raise AdapterError("failed", f"Copied to {dest} and added to the library, but deleting it from the console "
+                                             f"failed: {removed.message}")
+            tile = await adapter.remove_home_screen_icon(m["title_id"])
+            try:
+                await inventory.refresh(db, console)
+            except AdapterError:
+                pass  # the move is done; the next inventory read shows it
+            m["status"], m["tile_left"], m["progress"] = "success", not tile.ok, 1.0
+            m["message"] = (f"Moved to {dest} ({size / 1e9:.1f} GB) and added to the library." if tile.ok else
+                            f"Moved to {dest} and added to the library, but its tile is still on the PS5 home screen: delete it "
+                            f"there (Options, then Delete). ({tile.message})")
+        except AdapterError as e:
+            m["status"], m["message"] = ("canceled" if e.code == "canceled" else "failed"), e.message
+        except OSError as e:
+            m["status"], m["message"] = "failed", f"Couldn't write to this PC: {e.strerror or e}"
+        except Exception as e:  # a bug must fail the move, not leave it "moving"
+            log.exception("move to PC %s", move_id)
+            m["status"], m["message"] = "failed", f"Unexpected error: {e}"
+        finally:
+            _move_stop.pop(move_id, None)
+        db.add(AuditLog(action="move", console_id=m["console_id"], title_id=m["title_id"], target_path=m["source_path"],
+                        result={"success": "success", "canceled": "canceled"}.get(m["status"], "failed"),
+                        details={"to": str(dest), "message": m["message"]}))
+        db.commit()
+        if m["status"] != "canceled":
+            _notify(f"{m['title']}: {'moved to this PC' if m['status'] == 'success' else 'move failed'}", m["message"])
 
 
 # ---------------------------------------------------------------- save data backups (read from the console only)

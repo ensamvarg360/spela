@@ -433,10 +433,29 @@ async def get_store_images(game_id: str, db: Session = Depends(get_db)):
     g = _game(db, game_id)
     if not g.title_id:
         raise HTTPException(404, {"error": "not_found", "message": "This game has no title ID."})
+    return await _store_images(g.title_id, g.content_id)
+
+
+@api.get("/titles/{title_id}/store-images")
+async def get_title_store_images(title_id: str):
+    """The same for a title ID, for games on a console that aren't in the library."""
+    TITLE_ID.fullmatch(title_id) or _not_found()
+    return await _store_images(title_id, None)
+
+
+async def _store_images(title_id: str, content_id: str | None):
     try:
-        return await asyncio.to_thread(logos.store_images, g.title_id, g.content_id)
+        return await asyncio.to_thread(logos.store_images, title_id, content_id)
     except (OSError, ValueError):
         raise HTTPException(502, {"error": "store_unreachable", "message": "Couldn't reach PlayStation Store. Is this PC online?"})
+
+
+@api.get("/titles/{title_id}/poster")
+def get_title_poster(title_id: str):
+    """The portrait key art for a title ID (logos.poster); 404 when PlayStation Store has none."""
+    if not TITLE_ID.fullmatch(title_id) or not (path := logos.poster(title_id)):
+        _not_found()
+    return FileResponse(path)
 
 
 COVER_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
@@ -933,7 +952,8 @@ def get_removal(removal_id: str):
 
 class MoveIn(BaseModel):
     installed_game_id: str
-    drive_id: str
+    drive_id: str | None = None
+    root_id: str | None = None  # a game library folder on this PC, instead of a drive
 
 
 class MoveOut(BaseModel):
@@ -953,9 +973,12 @@ class MoveOut(BaseModel):
 
 @api.post("/consoles/{console_id}/move", response_model=MoveOut, status_code=202)
 async def move_game(console_id: str, body: MoveIn, db: Session = Depends(get_db)):
-    """Moves an installed game to another drive of the same console (jobs.start_move)."""
+    """Moves an installed game to another drive of the same console (jobs.start_move), or to this PC (jobs.start_move_to_pc)."""
+    console = db.get(Console, console_id) or _not_found()
     try:
-        return jobs.start_move(db, db.get(Console, console_id) or _not_found(), body.installed_game_id, body.drive_id)
+        if body.root_id:
+            return jobs.start_move_to_pc(db, console, body.installed_game_id, body.root_id)
+        return jobs.start_move(db, console, body.installed_game_id, body.drive_id or "")
     except ValueError as e:
         raise HTTPException(409, {"error": "cannot_move", "message": str(e)})
 
@@ -1022,15 +1045,26 @@ async def set_home_logo(game_id: str, db: Session = Depends(get_db)):
     console_ids = set(db.scalars(select(InstalledGame.console_id).where(InstalledGame.title_id == g.title_id))) if g.title_id else set()
     if not console_ids:
         raise HTTPException(409, {"error": "not_installed", "message": "Install the game on a console first."})
+    return await _apply_logo(db, console_ids, g.title_id)
+
+
+@api.post("/consoles/{console_id}/home-logo/{title_id}")
+async def set_console_home_logo(console_id: str, title_id: str, db: Session = Depends(get_db)):
+    """The same for a game on one console, also one that isn't in the library."""
+    db.get(Console, console_id) or _not_found()
+    return await _apply_logo(db, {console_id}, title_id)
+
+
+async def _apply_logo(db: Session, console_ids: set[str], title_id: str) -> list[dict]:
     results = []
     for c in db.scalars(select(Console).where(Console.id.in_(console_ids)).order_by(Console.name)):
         ok, message = True, "Logo set."
         try:
-            await logos.apply(db, c, g.title_id)
+            await logos.apply(db, c, title_id)
         except AdapterError as e:
             ok, message = False, e.message
         results.append({"console": c.name, "ok": ok, "message": message})
-        logos.audit(db, c, g.title_id, ok, message)
+        logos.audit(db, c, title_id, ok, message)
     db.commit()
     return results
 

@@ -4,7 +4,7 @@ import { api, ApiError, appVersion, session } from "./api";
 import Library, { NO_VIEW, type View } from "./Library";
 import Cart, { useCart } from "./Cart";
 import Dashboard from "./Dashboard";
-import GameDetail from "./GameDetail";
+import GameDetail, { ConsoleGameDetail } from "./GameDetail";
 import Installed from "./Installed";
 import Settings from "./Settings";
 import Setup from "./Setup";
@@ -46,6 +46,7 @@ export default function App() {
   session.readOnly = user === "viewer";
 
   const gameId = route.match(/^\/game\/([\w-]+)$/)?.[1];
+  const onConsole = route.match(/^\/installed\/([\w-]+)\/([\w-]+)$/); // a console's game that isn't in the library
   const logout = () => api("/auth/logout", { method: "POST" }).then(() => setUser(null));
 
   const dlc = route === "/dlc";
@@ -62,7 +63,7 @@ export default function App() {
           <a href="#/dashboard" aria-current={route === "/dashboard" ? "page" : undefined}>Dashboard</a>
           <a href="#/" aria-current={route === "/" || !!gameId ? "page" : undefined}>Library</a>
           <a href="#/dlc" aria-current={dlc ? "page" : undefined}>DLC</a>
-          <a href="#/installed" aria-current={route === "/installed" ? "page" : undefined}>Installed</a>
+          <a href="#/installed" aria-current={route === "/installed" || !!onConsole ? "page" : undefined}>Installed</a>
         </nav>
         <div className="topbar-end">
           {newer && !session.readOnly && <a className="badge installed" href={newer.url} target="_blank" rel="noreferrer" title="Download the new version from GitHub">v{newer.version} available</a>}
@@ -84,7 +85,7 @@ export default function App() {
         </div>
       </header>
       <main>
-        {gameId ? <GameDetail id={gameId} from={from.current} /> : route === "/dashboard" ? <Dashboard /> : route === "/settings" ? (session.readOnly
+        {gameId ? <GameDetail id={gameId} from={from.current} /> : onConsole ? <ConsoleGameDetail key={route} consoleId={onConsole[1]} id={onConsole[2]} /> : route === "/dashboard" ? <Dashboard /> : route === "/settings" ? (session.readOnly
           ? <p className="muted">Settings need the admin password. <button className="link" onClick={logout}>Log out</button> and log in with it.</p> : <Settings />) : route === "/installed" ? <Installed /> : route === "/cart" && !session.readOnly ? <Cart />
           : route === "/setup" && !session.readOnly ? <Setup />
           : dlc ? <Library key="dlc" kind="dlc" view={dlcView} setView={setDlcView} /> : <Library key="game" kind="game" view={view} setView={setView} />}

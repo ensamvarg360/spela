@@ -11,6 +11,7 @@ import json
 import re
 import socket
 import os
+import shutil
 import sqlite3
 import struct
 import threading
@@ -159,6 +160,9 @@ class ConsoleAdapter(Protocol):
     async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
     # Copies every save folder of `title_id` (all users) under `dest`, mirroring console paths. Reads only. Returns files copied.
     async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int: ...
+    # Copies a ShadowMountPlus source (folder or image) to `dest` on this PC. Reads only. Returns bytes copied.
+    async def copy_to_pc(self, source_path: str, dest: Path, progress_callback: ProgressCallback,
+                         cancel: threading.Event | None = None) -> int: ...
     async def set_home_logo(self, title_id: str, png: bytes) -> None: ...  # raises AdapterError
 
 
@@ -342,6 +346,17 @@ class MockConsoleAdapter:
         save.write_bytes(b"mock save")
         progress_callback(9, 9)
         return 1
+
+    async def copy_to_pc(self, source_path: str, dest: Path, progress_callback: ProgressCallback,
+                         cancel: threading.Event | None = None) -> int:
+        self._check()
+        if cancel and cancel.is_set():
+            raise AdapterError("canceled", "Canceled.")
+        if not any(g.source_path == source_path for g in self.games):
+            raise AdapterError("not_found", f"{source_path} isn't on the console any more.")
+        dest.write_bytes(b"\0" * 0x1055C + (0x19540119).to_bytes(4, "little"))  # a UFS2 signature, so the library takes it
+        progress_callback(10, 10)
+        return 10
 
     async def get_home_db(self) -> bytes:
         self._check()
@@ -1138,6 +1153,55 @@ class FTPConsoleAdapter:
         if not TITLE_ID.fullmatch(title_id):
             raise AdapterError("bad_title_id", f"{title_id} isn't a title ID.")
         return await self._run(lambda ftp: self._backup_saves(ftp, title_id, dest, progress_callback))
+
+    def _copy_to_pc(self, ftp, source: str, dest: Path, progress: ProgressCallback, cancel: threading.Event) -> int:
+        parent, _, name = source.rpartition("/")
+        entry = ftp.ls(parent).get(name)
+        if not entry:
+            raise AdapterError("not_found", f"{source} isn't on the console any more.")
+        # ponytail: empty folders aren't copied; game dumps don't need them
+        files = self._sizes(ftp, source) if entry[0] else {"": entry[1]}
+        total, done = sum(files.values()), 0
+        if shutil.disk_usage(dest.parent).free < total:
+            raise AdapterError("no_space", f"Not enough free space in {dest.parent}: it needs {total / GiB:.1f} GiB.")
+        tmp = dest.with_name(f".{dest.name}.partial")
+        if entry[0]:
+            tmp.mkdir()
+            (tmp / ".partial").touch()  # the library scan skips a folder dump holding this marker
+        progress(0, total)
+        for rel, size in files.items():
+            local = Path(f"{tmp}{rel}")
+            local.parent.mkdir(parents=True, exist_ok=True)
+            with open(local, "wb") as f:
+                def write(block: bytes):
+                    nonlocal done
+                    f.write(block)
+                    done += len(block)
+                    progress(done, total)
+                    if cancel.is_set():
+                        raise AdapterError("canceled", "Canceled.")
+                ftp.fetch(source + rel, write)
+            if local.stat().st_size != size:
+                raise AdapterError("verify_failed", f"{source}{rel} came to this PC with {local.stat().st_size} of {size} bytes.")
+        if entry[0]:
+            (tmp / ".partial").unlink()
+        tmp.rename(dest)
+        return total
+
+    async def copy_to_pc(self, source_path: str, dest: Path, progress_callback: ProgressCallback,
+                         cancel: threading.Event | None = None) -> int:
+        """Copies a ShadowMountPlus folder dump or image from the console to `dest` on this PC. It's written under a
+        hidden `.partial` name and renamed once every file has its full size. Reads only. Returns bytes copied."""
+        if dest.exists():
+            raise AdapterError("already_there", f"{dest} already exists on this PC.")
+        tmp = dest.with_name(f".{dest.name}.partial")
+        clean = lambda: shutil.rmtree(tmp, True) if tmp.is_dir() else tmp.unlink(missing_ok=True)  # noqa: E731
+        await asyncio.to_thread(clean)  # left over from an interrupted attempt
+        try:
+            return await self._run(lambda ftp: self._copy_to_pc(ftp, source_path, dest, progress_callback, cancel or threading.Event()))
+        except BaseException:
+            await asyncio.to_thread(clean)  # a half copy must not pass for a whole one
+            raise
 
     async def get_home_db(self) -> bytes:
         if not (data := await self._run(lambda fs: fs.get(HOME_DB))):

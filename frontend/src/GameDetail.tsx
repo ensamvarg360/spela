@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STATUS_LABEL, useConsoles, type Drive, type Game, type InstalledGame, type Job } from "./api";
 import { cart, useCart } from "./Cart";
 import { Cover } from "./Library";
-import { when } from "./Installed";
+import { Art, MoveDialog, RemoveDialog, when } from "./Installed";
 
 /** A titled card on the detail page; collapsible unless `open` is omitted-and-fixed via `fixed`. */
 function Section({ title, open = true, fixed, children }: { title?: string; open?: boolean; fixed?: boolean; children: React.ReactNode }) {
@@ -120,19 +120,19 @@ function Install({ game: opened }: { game: Game }) {
   );
 }
 
-/** Replaces the plain-text name on the game's PS5 home-screen page with its logo from PlayStation Store. */
-function HomeLogo({ game }: { game: Game }) {
+/** Replaces the plain-text name on the game's PS5 home-screen page with its logo from PlayStation Store.
+ * `consoleId`: on that console only; else on every console the game is on. */
+function HomeLogo({ url, consoleId }: { url: string; consoleId?: string }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const { consoles } = useConsoles();
-
-  if (!game.installed) return null;
+  const target = consoles.find((c) => (consoleId ? c.id === consoleId : c.state === "online"));
 
   async function apply() {
     setBusy(true);
     setMsg(null);
     try {
-      const results = await api<{ console: string; ok: boolean; message: string }[]>(`/games/${game.id}/home-logo`, { method: "POST" });
+      const results = await api<{ console: string; ok: boolean; message: string }[]>(url, { method: "POST" });
       setMsg({
         text: results.length === 1 ? results[0].message : results.map((r) => `${r.console}: ${r.message}`).join(" "),
         error: results.some((r) => !r.ok),
@@ -147,7 +147,7 @@ function HomeLogo({ game }: { game: Game }) {
   return (
     <div className="toolbar">
       {/* applies on every console the game is on; ponytail: any online console enables it, the result names the ones that failed */}
-      <button className="secondary" onClick={apply} {...needsOnline(consoles.find((c) => c.state === "online"))} disabled={busy || !consoles.some((c) => c.state === "online")}>{busy ? "Setting logo…" : "Show logo on PS5 home screen"}</button>
+      <button className="secondary" onClick={apply} {...needsOnline(target)} disabled={busy || target?.state !== "online"}>{busy ? "Setting logo…" : "Show logo on PS5 home screen"}</button>
       {msg && <span className={msg.error ? "error" : "muted"} role="status">{msg.text}</span>}
     </div>
   );
@@ -156,18 +156,16 @@ function HomeLogo({ game }: { game: Game }) {
 type StoreImages = { store: string; name: string | null; sources: { label: string; images: { type: string | null; url: string }[] }[] }[];
 
 /** Lists every image PlayStation Store has for the game, by store and edition, to see which ones exist. */
-function StoreImageBrowser({ game }: { game: Game }) {
+function StoreImageBrowser({ url }: { url: string }) {
   const [stores, setStores] = useState<StoreImages | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  if (!game.title_id) return null;
 
   async function load() {
     setBusy(true);
     setError("");
     try {
-      setStores(await api<StoreImages>(`/games/${game.id}/store-images`));
+      setStores(await api<StoreImages>(url));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -294,12 +292,13 @@ type SaveBackup = { id: string; status: "copying" | "success" | "failed"; progre
 type SavedBackup = { name: string; path: string; files: number; bytes: number };
 
 /** Copies the game's save data from a console to this PC. The console is only read; restoring is by hand. */
-function SaveBackups({ game }: { game: Game }) {
-  const { consoles, cid, setCid, console: target } = useConsoles();
+function SaveBackups({ tid, consoleId }: { tid: string; consoleId?: string }) {
+  const { consoles, cid: picked, setCid, console: chosen } = useConsoles();
+  const cid = consoleId ?? picked;
+  const target = consoleId ? consoles.find((c) => c.id === consoleId) : chosen;
   const [list, setList] = useState<SavedBackup[]>([]);
   const [b, setB] = useState<SaveBackup | null>(null);
   const [error, setError] = useState("");
-  const tid = game.title_id;
   const load = () => tid && api<SavedBackup[]>(`/save-backups?title_id=${tid}`).then(setList, () => {});
   useEffect(() => {
     load();
@@ -310,7 +309,7 @@ function SaveBackups({ game }: { game: Game }) {
     return () => clearInterval(t);
   }, [b?.id, b?.status]);
 
-  if (!tid || game.kind !== "game" || !consoles.length) return null;
+  if (!consoles.length) return null;
   const start = () => (setError(""), api<SaveBackup>(`/consoles/${cid}/save-backups`, { json: { title_id: tid } }).then(setB, (e) => setError(e.message)));
 
   return (
@@ -318,7 +317,7 @@ function SaveBackups({ game }: { game: Game }) {
       <p className="muted">Copies this game's saves from the console to this PC, for every user. They stay encrypted and only work on the
         same console and account; to restore, copy the folder back with an FTP payload.</p>
       <div className="toolbar">
-        {consoles.length > 1 && (
+        {consoles.length > 1 && !consoleId && (
           <select aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
             {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
@@ -414,7 +413,7 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
         {!session.readOnly && (
           <Section fixed>
             <Install game={game} />
-            <HomeLogo game={game} />
+            {game.installed && <HomeLogo url={`/games/${game.id}/home-logo`} />}
             <Convert game={game} />
           </Section>
         )}
@@ -436,8 +435,8 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
         )}
 
         <InstallHistory game={game} />
-        <StoreImageBrowser game={game} />
-        {!session.readOnly && <SaveBackups game={game} />}
+        {game.title_id && <StoreImageBrowser url={`/games/${game.id}/store-images`} />}
+        {!session.readOnly && game.title_id && game.kind === "game" && <SaveBackups tid={game.title_id} />}
 
         <Section title="File details">
         <dl className="facts">
@@ -512,6 +511,68 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
 
         {!session.readOnly && <button className="danger" onClick={remove}>Remove from catalog</button>}
       </section>
+    </div>
+  );
+}
+
+/** A game on a console that isn't in the library: what the console says about it, and what can be done with it there. */
+export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: string }) {
+  const { consoles } = useConsoles();
+  const c = consoles.find((x) => x.id === consoleId);
+  const [g, setG] = useState<InstalledGame | null | undefined>(undefined);
+  const [drives, setDrives] = useState<Drive[]>([]);
+  const [dialog, setDialog] = useState<"move" | "remove" | null>(null);
+  const load = () => Promise.all([
+    api<Drive[]>(`/consoles/${consoleId}/drives`).then(setDrives),
+    // a move to another drive gives the game a new id: then it's found by title ID
+    api<InstalledGame[]>(`/consoles/${consoleId}/installed`).then((rows) => setG((cur) =>
+      rows.find((r) => r.id === id) ?? (cur && rows.find((r) => r.title_id === cur.title_id && !rows.some((x) => x.id === cur.id))) ?? null)),
+  ]).catch(() => setG((cur) => cur ?? null));
+  useEffect(() => { load(); }, [consoleId, id]);
+  useEffect(() => { // a removal or move still running after its dialog closed
+    if (!g?.removing && !g?.moving) return;
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
+  }, [g?.removing, g?.moving]);
+
+  if (g === undefined) return <p className="muted">Loading…</p>;
+  const back = <a href="#/installed" className="muted">← Installed</a>;
+  if (!g) return <section>{back}<p>This game isn't on the console any more. If you moved it to this PC, it's in the <a href="#/">Library</a>.</p></section>;
+  const smp = g.install_route === "shadowmountplus" && !g.removing && !g.moving && !session.readOnly;
+  const online = c?.state === "online";
+
+  return (
+    <div className="detail">
+      <aside><Art key={g.id} g={g} /></aside>
+      <section>
+        {back}
+        <h1>{g.title}</h1>
+        <p className="muted">Not in your PC library. {g.removing ? "Being removed…" : g.moving ? "Being moved…" : ""}</p>
+        {!session.readOnly && (
+          <Section fixed>
+            <div className="toolbar">
+              {smp && g.status !== "orphaned_icon" && <button {...needsOnline(c)} disabled={!online} onClick={() => setDialog("move")}>Move…</button>}
+              {smp && <button className="secondary" {...needsOnline(c)} disabled={!online} onClick={() => setDialog("remove")}>Remove from console…</button>}
+            </div>
+            <HomeLogo url={`/consoles/${consoleId}/home-logo/${g.title_id}`} consoleId={consoleId} />
+          </Section>
+        )}
+        <Section title="On the console">
+          <dl className="facts">
+            <dt>Console</dt><dd>{c?.name ?? "…"}</dd>
+            <dt>Drive</dt><dd>{drives.find((d) => d.id === g.drive_id)?.label ?? "Unknown drive"}</dd>
+            <dt>Title ID</dt><dd><code>{g.title_id}</code></dd>
+            <dt>Version</dt><dd>{g.version ?? "Unknown"}</dd>
+            <dt>Size</dt><dd>{g.size_bytes ? formatBytes(g.size_bytes) : "Unknown"}</dd>
+            <dt>Path</dt><dd><code>{g.source_path ?? g.installed_path}</code></dd>
+            <dt>Last checked</dt><dd>{when(g.last_verified_at)}</dd>
+          </dl>
+        </Section>
+        <StoreImageBrowser url={`/titles/${g.title_id}/store-images`} />
+        {!session.readOnly && <SaveBackups tid={g.title_id} consoleId={consoleId} />}
+      </section>
+      {dialog === "move" && <MoveDialog consoleId={consoleId} game={g} drives={drives} onClose={() => { setDialog(null); load(); }} />}
+      {dialog === "remove" && <RemoveDialog consoleId={consoleId} game={g} onClose={() => { setDialog(null); load(); }} />}
     </div>
   );
 }
