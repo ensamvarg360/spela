@@ -3,7 +3,27 @@ import Problem from "./Problem";
 import { api, appVersion, needsOnline, type Console } from "./api";
 import { STATE_BADGE, STATE_LABEL, when } from "./Installed";
 
-function Facts({ c, version, busy, act }: { c: Console; version: string; busy: boolean; act: (path: string) => void }) {
+/** Saves the console's RP-RegistKey right where it's missing, so waking doesn't need a trip through Edit. */
+function WakeKey({ c, onSaved }: { c: Console; onSaved: () => void }) {
+  const [key, setKey] = useState("");
+  const [error, setError] = useState<unknown>("");
+  const save = (e: FormEvent) => {
+    e.preventDefault();
+    setError("");
+    api(`/consoles/${c.id}`, { method: "PATCH", json: { wake_key: key } }).then(onSaved, setError);
+  };
+  return (
+    <form className="inline" onSubmit={save}>
+      <input required autoComplete="off" spellCheck={false} aria-label="Remote Play key" placeholder="RP-RegistKey, e.g. 1a2b3c4d"
+        value={key} onChange={(e) => setKey(e.target.value)} />
+      <button className="small" type="submit">Save</button>
+      <span className="muted"> From Chiaki-ng; see Edit for how.</span>
+      <Problem error={error} />
+    </form>
+  );
+}
+
+function Facts({ c, version, busy, act, onSaved }: { c: Console; version: string; busy: boolean; act: (path: string) => void; onSaved: () => void }) {
   const helper = c.helper_status.helper; // "missing", a version, or absent before the first check
   const helperOk = !!version && helper === version;
   const consoleApp = c.helper_status.console_app; // same: "missing", a version, or absent
@@ -37,7 +57,7 @@ function Facts({ c, version, busy, act }: { c: Console; version: string; busy: b
       </dd>
       <dt>Wake from rest mode</dt>
       <dd>
-        {c.has_wake_key ? "Remote Play key saved" : "Add its Remote Play key (Edit) to wake it from here"}
+        {c.has_wake_key ? "Remote Play key saved" : <WakeKey c={c} onSaved={onSaved} />}
         {c.has_wake_key && c.state === "standby" && <button className="small" disabled={busy} onClick={() => act("wake")}>Wake</button>}
       </dd>
       <dt>Connections</dt><dd>{Object.entries(c.helper_status).filter(([k]) => !["banner", "helper", "console_app"].includes(k)).map(([k, v]) => `${k}: ${v}`).join(", ") || c.connection_type}</dd>
@@ -237,7 +257,7 @@ export default function Consoles() {
                 <button className="link" onClick={() => remove(c)}>Remove</button>
               </span>
               {c.status_fix && <p className="callout status-fix">{c.status_fix}</p>}
-              <Facts c={c} version={version} busy={busy} act={(path) => act(c, path)} />
+              <Facts c={c} version={version} busy={busy} act={(path) => act(c, path)} onSaved={load} />
             </li>
           ))}
       </ul>
