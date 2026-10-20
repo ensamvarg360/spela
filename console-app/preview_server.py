@@ -1,32 +1,49 @@
 """A stand-in for the PC app's console API, for build.ps1 -Preview. Invented games in every state.
-The real API is console_api in backend/app/main.py; keep the line format in step with it."""
+The real API is console_api in backend/app/main.py; keep the line format in step with it.
+Needs Pillow (python3-pil, which build.sh installs for the preview) for the invented posters."""
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from PIL import Image, ImageOps
 
 W, H = 256, 320
 GAMES = [  # id, title, title ID, version, size, state, progress, has cover, kind, format[, done, total, rate, eta, step]
-    ["g01", "Harbor Lights", "PPSA01001", "01.000.000", 41_200_000_000, "installable", "", "1", "game", "folder_dump"],
-    ["g02", "Iron Orchard", "PPSA01002", "01.020.000", 88_900_000_000, "installed", "", "1", "game", "image"],
-    ["g03", "Night Courier", "PPSA01003", "01.004.000", 23_400_000_000, "installable", "", "1", "game", "image"],
-    ["g04", "Pale Summit", "PPSA01004", "02.000.000", 65_000_000_000, "update", "", "1", "game", "folder_dump"],
-    ["g05", "Small Hours", "PPSA01005", "01.000.000", 7_800_000_000, "installing", "0.420", "1", "game", "image",
+    ["g01", "Neon Drift: Tokyo 2099", "PPSA01001", "01.000.000", 41_200_000_000, "installable", "", "1", "game", "folder_dump"],
+    ["g02", "Deep Sea 9", "PPSA01002", "01.020.000", 88_900_000_000, "installed", "", "1", "game", "image"],
+    ["g03", "Sugar Rush Rally", "PPSA01003", "01.004.000", 23_400_000_000, "installable", "", "1", "game", "image"],
+    ["g04", "Frostline: Expedition Zero", "PPSA01004", "02.000.000", 65_000_000_000, "update", "", "1", "game", "folder_dump"],
+    ["g05", "Mecha Brawl: Uprising", "PPSA01005", "01.000.000", 7_800_000_000, "installing", "0.420", "1", "game", "image",
      3_276_000_000, 7_800_000_000, 84_600_000, 53, "Copying to USB Extended Storage."],
-    ["g06", "The Long Signal: Director's Extended Edition", "PPSA01006", "01.100.000", 102_000_000_000, "installable", "", "1",
+    ["g06", "Echoes of the Hollow: Director's Extended Edition", "PPSA01006", "01.100.000", 102_000_000_000, "installable", "", "1",
      "game", "folder_dump"],
     ["g07", "Tidewater", "CUSA01007", "01.05", 12_100_000_000,
      "blocked:This console has no package installer. Only folder dumps and disc images can be installed.", "", "0", "game", "ps4_pkg"],
-    ["g08", "Undertow", "PPSA01008", "01.000.000", 30_500_000_000, "queued", "", "1", "game", "image"],
-    ["g09", "Velvet Circuit", "PPSA01009", "01.002.000", 19_900_000_000, "installable", "", "0", "game", "image"],
-    ["g10", "Winter Ledger", "PPSA01010", "01.000.000", 54_300_000_000, "installable", "", "1", "game", "image"],
-    ["g11", "Yellow Line", "PPSA01011", "01.000.000", 8_200_000_000, "installable", "", "1", "game", "image"],
-    ["g12", "Zero Meridian", "PPSA01012", "01.010.000", 71_700_000_000, "installable", "", "1", "game", "image"],
-    ["d01", "Iron Orchard: Season Pass", "PPSA01002", "", 2_100_000_000, "installable", "", "1", "dlc", "unlocker"],
-    ["d02", "Pale Summit: Ridge Pack", "PPSA01004", "01.000.000", 900_000_000, "installable", "", "0", "dlc", "ps5_pkg"],
+    ["g08", "Chrono Heist", "PPSA01008", "01.000.000", 30_500_000_000, "queued", "", "1", "game", "image"],
+    ["g09", "Tiny Kingdoms", "PPSA01009", "01.002.000", 19_900_000_000, "installable", "", "1", "game", "image"],
+    ["g10", "Wasteland Diner", "PPSA01010", "01.000.000", 54_300_000_000, "installable", "", "1", "game", "image"],
+    ["g11", "Neon Samurai: Ghost Protocol", "PPSA01011", "01.000.000", 8_200_000_000, "installable", "", "1", "game", "image"],
+    ["g12", "Void Runners", "PPSA01012", "01.010.000", 71_700_000_000, "installable", "", "1", "game", "image"],
+    ["d01", "Deep Sea 9: Abyss Season Pass", "PPSA01002", "", 2_100_000_000, "installable", "", "1", "dlc", "unlocker"],
+    ["d02", "Frostline: Whiteout Pack", "PPSA01004", "01.000.000", 900_000_000, "installable", "", "0", "dlc", "ps5_pkg"],
 ]
 DRIVES = [  # id, label, free, total
     ["dr1", "Internal", 61_000_000_000, 825_000_000_000],
     ["dr2", "USB Extended Storage", 1_420_000_000_000, 2_000_000_000_000],
 ]
+
+
+# The posters docs/screenshots/make_screenshots.py uses too; games without one get a generated gradient.
+POSTERS = {"g01": "neon-drift", "g02": "deep-sea-9", "g03": "sugar-rush-rally", "g04": "frostline", "g05": "mecha-brawl",
+           "g06": "echoes-of-the-hollow", "g08": "chrono-heist", "g09": "tiny-kingdoms", "g10": "wasteland-diner",
+           "g11": "neon-samurai", "g12": "void-runners", "d01": "deep-sea-9"}
+POSTER_DIR = Path(__file__).resolve().parent.parent / "docs" / "screenshots" / "demo-covers"
+
+
+def poster(name: str) -> bytes:
+    """Cut to the console app's cover size the way the PC app does (ImageOps.fit, backend/app/main.py)."""
+    with Image.open(POSTER_DIR / f"{name}.jpg") as im:
+        return ImageOps.fit(im.convert("RGBA"), (W, H)).tobytes()
 
 
 def cover(seed: int) -> bytes:
@@ -69,7 +86,8 @@ class Handler(BaseHTTPRequestHandler):
             gid = self.path.rsplit("/", 1)[1]
             idx = next((i for i, g in enumerate(GAMES) if g[0] == gid), None)
             if idx is not None and GAMES[idx][7] == "1":
-                return self._send(200, cover(idx + 3), "application/octet-stream")
+                data = poster(POSTERS[gid]) if gid in POSTERS else cover(idx + 3)
+                return self._send(200, data, "application/octet-stream")
         if self.path.startswith("/api/v1/console-app/removals/"):  # still running on the first ask, then done
             game = next((g for g in GAMES if g[0] == self.path.rsplit("/", 1)[1].removeprefix("rm-")), None)
             if game:

@@ -52,7 +52,7 @@ Browse them on your PC, install them to your console over your home network, rem
   </tr>
 </table>
 
-<sub>The screenshots show invented games with generated covers. `docs/screenshots/make_screenshots.py` rebuilds the PC ones from a demo library.</sub>
+<sub>The screenshots show invented games with invented posters, kept in `docs/screenshots/demo-covers/`. `docs/screenshots/make_screenshots.py` rebuilds the PC ones from a demo library, and `./console-app/build.ps1 -Preview` renders the PS5 ones.</sub>
 
 ## What you need
 

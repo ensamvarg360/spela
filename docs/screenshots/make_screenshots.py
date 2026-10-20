@@ -1,4 +1,5 @@
-"""Regenerates the README screenshots from an invented library (fake titles, generated covers, a mock console).
+"""Regenerates the README screenshots from an invented library: invented games with invented posters (demo-covers/),
+and a mock console.
 
     python docs/screenshots/make_screenshots.py
 
@@ -26,19 +27,20 @@ PORT = 8799
 BASE = f"http://127.0.0.1:{PORT}"
 PASSWORD = "demo-password-1"
 
-GAMES = [  # title, title ID, version
-    ("Harbor Lights", "PPSA01234", "01.000.000"),
-    ("Iron Orchard", "PPSA01002", "01.020.000"),
-    ("Night Courier", "PPSA05678", "01.004.000"),
-    ("Pale Summit", "PPSA01004", "02.000.000"),
-    ("Small Hours", "PPSA01005", "01.000.000"),
-    ("The Long Signal", "PPSA01006", "01.100.000"),
-    ("Undertow", "PPSA01008", "01.000.000"),
-    ("Velvet Circuit", "PPSA01009", "01.002.000"),
-    ("Winter Ledger", "PPSA01010", "01.000.000"),
-    ("Yellow Line", "PPSA01011", "01.000.000"),
-    ("Zero Meridian", "PPSA01012", "01.010.000"),
-    ("Copper Tide", "PPSA01013", "01.000.000"),
+COVERS = OUT / "demo-covers"  # invented posters for invented games; console-app/preview_server.py uses them too
+GAMES = [  # title, title ID, version, poster in COVERS (None: a generated cover). The mock console has the 2nd and 3rd.
+    ("Neon Drift: Tokyo 2099", "PPSA01002", "01.000.000", "neon-drift"),
+    ("Deep Sea 9", "PPSA01234", "01.020.000", "deep-sea-9"),
+    ("Chrono Heist", "PPSA05678", "01.004.000", "chrono-heist"),
+    ("Frostline: Expedition Zero", "PPSA01004", "02.000.000", "frostline"),
+    ("Mecha Brawl: Uprising", "PPSA01005", "01.000.000", "mecha-brawl"),
+    ("Echoes of the Hollow", "PPSA01006", "01.100.000", "echoes-of-the-hollow"),
+    ("Sugar Rush Rally", "PPSA01008", "01.000.000", "sugar-rush-rally"),
+    ("Wasteland Diner", "PPSA01009", "01.002.000", "wasteland-diner"),
+    ("Neon Samurai: Ghost Protocol", "PPSA01010", "01.000.000", "neon-samurai"),
+    ("Void Runners", "PPSA01011", "01.000.000", "void-runners"),
+    ("Tiny Kingdoms", "PPSA01012", "01.010.000", "tiny-kingdoms"),
+    ("Willow Creek", "PPSA01013", "01.000.000", None),
 ]
 
 
@@ -76,20 +78,27 @@ def cover(seed: int, title: str) -> bytes:
 
 
 def seed(library: Path):
-    for i, (title, tid, version) in enumerate(GAMES):
-        sys_dir = library / title / "sce_sys"
-        sys_dir.mkdir(parents=True)
-        (sys_dir / "param.json").write_text(json.dumps({
+    for i, (title, tid, version, _) in enumerate(GAMES):
+        folder = library / f"{title.replace(':', '')} [{tid}]"  # Windows folder names can't hold ":"
+        (folder / "sce_sys").mkdir(parents=True)
+        (folder / "sce_sys" / "param.json").write_text(json.dumps({
             "titleId": tid, "contentId": f"EP0001-{tid}_00-DEMO000000000000", "contentVersion": version,
             "localizedParameters": {"defaultLanguage": "en-US", "en-US": {"titleName": title}},
         }))
-        (library / title / "eboot.bin").write_bytes(b"\0" * (1 + i) * 4096)
+        (folder / "eboot.bin").write_bytes(b"\0" * (1 + i) * 4096)
 
 
 def main():
     work = Path(tempfile.mkdtemp(prefix="spela-shots-"))
     library = work / "Library"
     seed(library)
+    # Invented title IDs can belong to real games: mark each as "not in PlayStation Store" in the app's store cache
+    # (backend/app/logos.py), so no real publisher, genre or rating ends up in the screenshots.
+    store = work / "data" / "store"
+    store.mkdir(parents=True)
+    for _, tid, _, _ in GAMES:
+        (store / f"{tid}.json").write_text("{}")
+        (store / f"{tid}.none").touch()
     env = {**os.environ, "DATA_DIR": str(work / "data"), "PORT": str(PORT), "HOST": "127.0.0.1",
            "SCAN_INTERVAL_MINUTES": "0", "STATIC_DIR": str(ROOT / "frontend" / "dist")}
     server = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(PORT)],
@@ -103,22 +112,6 @@ def main():
                 time.sleep(0.5)
         c = httpx.Client(base_url=f"{BASE}/api/v1", timeout=30)
         c.post("/auth/setup", json={"password": PASSWORD}).raise_for_status()
-        c.post("/library/roots", json={"path": str(library)}).raise_for_status()
-        c.post("/library/scan")
-        for _ in range(60):
-            s = c.get("/library/scan-status").json()
-            if not s.get("running"):
-                break
-            time.sleep(0.5)
-        games = c.get("/games").json()
-        for i, g in enumerate(games):
-            c.post(f"/games/{g['id']}/cover", files={"file": ("c.png", cover(i + 1, g["title"]), "image/png")})
-        r = c.post("/consoles", json={"name": "Living Room PS5", "ip_address": "192.168.1.50",
-                                      "connection_type": "mock", "port": 9021})
-        r.raise_for_status()
-        console = r.json()["id"]
-        c.post(f"/consoles/{console}/rescan")
-
         with sync_playwright() as p:
             browser = p.chromium.launch(channel="msedge")
             page = browser.new_page(viewport={"width": 1400, "height": 900}, device_scale_factor=1)
@@ -141,9 +134,38 @@ def main():
                 page.wait_for_timeout(wait_ms)
                 snap(name, height)
 
+            # the guide as a new user first sees it; shot before anything is added, so it never looks for a real PS5
+            page.set_viewport_size({"width": 1000, "height": 900})
+            page.goto(f"{BASE}/#/setup")
+            page.wait_for_selector("text=Get started")
+            page.wait_for_timeout(800)
+            page.screenshot(path=str(OUT / "setup.png"))
+            print("wrote setup")
+
+            c.post("/library/roots", json={"path": str(library)}).raise_for_status()
+            c.post("/library/scan")
+            for _ in range(60):
+                s = c.get("/library/scan-status").json()
+                if not s.get("running"):
+                    break
+                time.sleep(0.5)
+            posters = {title: poster for title, _, _, poster in GAMES}
+            for i, g in enumerate(c.get("/games").json()):
+                if poster := posters.get(g["title"]):
+                    file = ("c.jpg", (COVERS / f"{poster}.jpg").read_bytes(), "image/jpeg")
+                else:
+                    file = ("c.png", cover(i + 1, g["title"]), "image/png")
+                c.post(f"/games/{g['id']}/cover", files={"file": file})
+            r = c.post("/consoles", json={"name": "Living Room PS5", "ip_address": "192.168.1.50",
+                                          "connection_type": "mock", "port": 9021})
+            r.raise_for_status()
+            console = r.json()["id"]
+            c.post(f"/consoles/{console}/rescan")
+            c.post("/setup", json={"dismissed": True})  # keep the setup card off the Dashboard shot
+
             shot("dashboard", "/dashboard", 700)
             shot("library", "/")
-            page.get_by_text("Pale Summit").first.click()
+            page.get_by_text("Neon Drift: Tokyo 2099").first.click()
             page.wait_for_timeout(1500)
             snap("game")
             browser.close()

@@ -12,7 +12,7 @@ COMMIT=bbe19054ee2e7ec069254775273aeb8846c4bd3e
 TITLE_ID=PPSA99787 # also CONSOLE_APP_TITLE_ID in backend/app/consoles.py
 
 packages=(clang-18 lld-18 llvm-18 make ninja-build ccache pkg-config python3 curl wget git unzip xz-utils ca-certificates file)
-[[ $mode == preview ]] && packages+=(libegl-dev libgl-dev libegl-mesa0 libgl1-mesa-dri)
+[[ $mode == preview ]] && packages+=(libegl-dev libgl-dev libegl-mesa0 libgl1-mesa-dri python3-pil)
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${packages[@]}" >/dev/null
 
