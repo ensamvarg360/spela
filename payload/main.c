@@ -455,6 +455,12 @@ static void uninstall_tile(int c, const char *query) {
   int status = smp_uninstall(id, msg, sizeof msg);
   if (status == 200) {
     ok(c);
+    return;
+  }
+  /* ShadowMountPlus missing, or refusing (it may not list a game whose files are gone): the console's own uninstall */
+  int r = appinstutil_uninstall(id);
+  if (!r) {
+    ok(c);
   } else if (status) {
     buf_t b = {0};  /* pass on ShadowMountPlus's answer: {"status", "error", "error_reason"} */
     put(&b, "%s", msg);
@@ -462,11 +468,9 @@ static void uninstall_tile(int c, const char *query) {
     snprintf(line, sizeof line, "%d ShadowMountPlus", status);
     reply(c, line, &b);
     free(b.s);
-  } else if ((status = appinstutil_uninstall(id))) {
-    snprintf(msg, sizeof msg, "the console refused (0x%08X)", (unsigned)status);
-    fail(c, "500 Internal Server Error", msg);
   } else {
-    ok(c);
+    snprintf(msg, sizeof msg, "the console refused (0x%08X)", (unsigned)r);
+    fail(c, "500 Internal Server Error", msg);
   }
 }
 
