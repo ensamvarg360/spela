@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, ApiError, type Console, type Root } from "./api";
+import { FindConsole } from "./Consoles";
 import { STATE_BADGE, STATE_LABEL } from "./Installed";
 import { useScan } from "./Library";
 import Problem from "./Problem";
@@ -72,7 +73,7 @@ export function SetupCard() {
   );
 }
 
-/** Step 3: the two things a console needs to be found, nothing else. Settings → Consoles has the rest. */
+/** Step 3: found on the network, or typed in by name and IP, nothing else. Settings → Consoles has the rest. */
 function AddConsole({ onAdded }: { onAdded: () => void }) {
   const [name, setName] = useState("");
   const [ip, setIp] = useState("");
@@ -92,16 +93,20 @@ function AddConsole({ onAdded }: { onAdded: () => void }) {
   }
 
   return (
-    <form className="setup-form" onSubmit={add}>
-      <div className="fields">
-        <label>Name<input required maxLength={100} placeholder="Living Room PS5" value={name} onChange={(e) => setName(e.target.value)} /></label>
-        <label>IP address<input required inputMode="decimal" placeholder="192.168.1.50" value={ip} onChange={(e) => setIp(e.target.value)} /></label>
-      </div>
-      <p className="muted">On the PS5: <em>Settings → Network → Connection Status → View Connection Status</em>, under <em>IPv4 address</em>.
-        It can change when the router restarts; most routers let you reserve one for the PS5.</p>
-      <div className="actions"><button type="submit">Add console</button></div>
-      <Problem error={error} />
-    </form>
+    <div className="add-console">
+      <FindConsole onAdded={onAdded} />
+      <form className="setup-form add-option" onSubmit={add}>
+        <h3>I know its IP address</h3>
+        <div className="fields">
+          <label>Name<input required maxLength={100} placeholder="Living Room PS5" value={name} onChange={(e) => setName(e.target.value)} /></label>
+          <label>IP address<input required inputMode="decimal" placeholder="192.168.1.50" value={ip} onChange={(e) => setIp(e.target.value)} /></label>
+        </div>
+        <p className="muted">On the PS5: <em>Settings → Network → Connection Status → View Connection Status</em>, under <em>IPv4 address</em>.
+          It can change when the router restarts; most routers let you reserve one for the PS5.</p>
+        <div className="actions"><button type="submit">Add console</button></div>
+        <Problem error={error} />
+      </form>
+    </div>
   );
 }
 

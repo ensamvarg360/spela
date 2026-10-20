@@ -37,6 +37,52 @@ function Facts({ c, version, busy, act }: { c: Console; version: string; busy: b
   );
 }
 
+interface Found { ip: string; name: string; state: "online" | "standby"; added: boolean }
+
+/** Looks for PS5s on this network (POST /consoles/discover, about 2 s) as soon as it shows, and adds one with a click.
+ *  Added consoles use the helper payload; Edit switches that. */
+export function FindConsole({ onAdded }: { onAdded: () => void }) {
+  const [found, setFound] = useState<Found[] | null>(null);
+  const [looking, setLooking] = useState(false);
+  const [error, setError] = useState<unknown>("");
+
+  const look = () => {
+    setLooking(true);
+    setError("");
+    api<Found[]>("/consoles/discover", { method: "POST" }).then(setFound, setError).finally(() => setLooking(false));
+  };
+  useEffect(look, []);
+
+  const add = (p: Found) => api("/consoles", { json: { name: p.name, ip_address: p.ip, connection_type: "helper", port: 7735 } })
+    .then(() => (setFound((f) => f!.map((x) => (x.ip === p.ip ? { ...x, added: true } : x))), onAdded()), setError);
+
+  return (
+    <div className="add-option">
+      <h3>Find it on my network</h3>
+      <p className="muted">Finds a PS5 that's switched on, or in rest mode with <em>Stay connected to the internet</em> on.</p>
+      {found && found.length > 0 && (
+        <ul className="found">
+          {found.map((p) => (
+            <li key={p.ip}>
+              <span><strong>{p.name}</strong> <code>{p.ip}</code></span>
+              <span className={`badge ${p.state === "online" ? "ready" : "needs_attention"}`}>{p.state === "online" ? "On" : "Rest mode"}</span>
+              {p.added ? <span className="muted">Added</span> : <button className="small" onClick={() => add(p)}>Add</button>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {found && !found.length && !looking && (
+        <Problem error="No PS5 answered." fix={"It may be switched off, on another network, or the router may keep devices " +
+          "from seeing each other (client or AP isolation, common on guest Wi-Fi). Enter its IP address instead."} />
+      )}
+      <Problem error={error} />
+      <div><button type="button" className="secondary" disabled={looking} onClick={look}>
+        {looking ? <><span className="spinner" aria-hidden />Looking…</> : found ? "Look again" : "Look for it"}
+      </button></div>
+    </div>
+  );
+}
+
 const EMPTY = { name: "", ip_address: "", connection_type: "helper", port: "7735", username: "", password: "", wake_key: "" };
 type Draft = typeof EMPTY;
 
@@ -173,7 +219,15 @@ export default function Consoles() {
             </li>
           ))}
       </ul>
-      {editing === "new" ? <ConsoleForm onDone={done} /> : <button onClick={() => setEditing("new")}>Add console</button>}
+      {editing === "new" ? (
+        <div className="add-console">
+          <FindConsole onAdded={done} />
+          <div className="add-option">
+            <h3>I know its IP address</h3>
+            <ConsoleForm onDone={done} />
+          </div>
+        </div>
+      ) : <button onClick={() => setEditing("new")}>Add console</button>}
       {notice && <p role="status">{notice}</p>}
       <Problem error={error?.e} retry={error?.retry} />
     </section>

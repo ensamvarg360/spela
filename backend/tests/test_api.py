@@ -133,6 +133,18 @@ def test_setup_checklist(tmp_path):
             c.delete(f"/api/v1/library/roots/{r['id']}")
 
 
+def test_discover_marks_added_consoles(monkeypatch):
+    from app import main
+    monkeypatch.setattr(main, "discover", lambda: [{"ip": "192.168.0.3", "name": "PS5-806", "state": "online"},
+                                                   {"ip": "192.168.0.9", "name": "PS5-111", "state": "standby"}])
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.post("/api/v1/auth/login", json={"password": "password1"})  # set up in test_flow
+        r = c.post("/api/v1/consoles", json={"name": "Den", "ip_address": "192.168.0.3", "connection_type": "mock", "port": 1})
+        found = c.post("/api/v1/consoles/discover").json()
+        assert [(p["name"], p["added"]) for p in found] == [("PS5-806", True), ("PS5-111", False)]
+        c.delete(f"/api/v1/consoles/{r.json()['id']}")
+
+
 def test_convert_folder_dump_to_exfat(tmp_path):
     import time
     from conftest import PARAM_JSON, write

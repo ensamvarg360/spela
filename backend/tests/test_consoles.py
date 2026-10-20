@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.consoles import GiB, AdapterError, not_answering, MockConsoleAdapter, UnsupportedConsoleConnectionError, get_adapter
+from app.consoles import GiB, AdapterError, not_answering, parse_ddp, MockConsoleAdapter, UnsupportedConsoleConnectionError, get_adapter
 from app.models import Console
 
 
@@ -64,3 +64,13 @@ def test_not_answering_warns_about_another_network(monkeypatch):
     monkeypatch.setattr("app.consoles.socket.socket", Sock)
     assert "Connection Status" in not_answering("192.168.0.50") and "isn't" not in not_answering("192.168.0.50")
     assert "This PC is on 192.168.0.x, and 192.168.1.50 isn't" in not_answering("192.168.1.50")
+
+
+def test_parse_ddp():
+    """Discovery answers become found PS5s; a PS4 or anything else is skipped."""
+    awake = b"HTTP/1.1 200 Ok\nhost-id:ABC\nhost-type:PS5\nhost-name:PS5-806\nhost-request-port:997\n"
+    assert parse_ddp(awake, "192.168.0.3") == {"ip": "192.168.0.3", "name": "PS5-806", "state": "online"}
+    assert parse_ddp(awake.replace(b"200 Ok", b"620 Server Standby"), "192.168.0.3")["state"] == "standby"
+    assert parse_ddp(awake.replace(b"host-name:PS5-806\n", b""), "10.0.0.2")["name"] == "10.0.0.2"
+    assert parse_ddp(awake.replace(b"PS5", b"PS4", 1), "192.168.0.3") is None
+    assert parse_ddp(b"garbage", "192.168.0.3") is None

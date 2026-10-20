@@ -346,6 +346,53 @@ HELPER_KEY_HEADER = "X-Storefront-Key"
 
 
 DDP_PORT = 9302  # Sony's device discovery (UDP), what Remote Play uses to find and wake a PS5
+DDP_PROBE = b"SRCH * HTTP/1.1\ndevice-discovery-protocol-version:00030010\n"
+
+
+def parse_ddp(data: bytes, ip: str) -> dict | None:
+    """A discovery answer ("HTTP/1.1 200 Ok" or "... 620 Server Standby", then "key:value" lines) as a found PS5,
+    or None for anything else (a PS4 answers too)."""
+    lines = data.decode(errors="replace").splitlines()
+    if not lines or not lines[0].startswith("HTTP/"):
+        return None
+    h = dict(line.split(":", 1) for line in lines[1:] if ":" in line)
+    if h.get("host-type", "").strip().upper() != "PS5":
+        return None
+    return {"ip": ip, "name": h.get("host-name", "").strip() or ip, "state": "standby" if " 620 " in lines[0] else "online"}
+
+
+def discover(seconds: float = 2.0) -> list[dict]:
+    """PS5s on this PC's network that answer Sony's discovery probe: switched on, or in rest mode with "Stay connected
+    to the internet" on. Asks the whole network (255.255.255.255) and this PC's own subnet, which Windows sends out
+    the right network card even when there are several."""
+    targets = {"255.255.255.255"}
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("8.8.8.8", 9))  # sends nothing: picks the network card with the default route
+            targets.add(s.getsockname()[0].rsplit(".", 1)[0] + ".255")  # ponytail: /24, like not_answering()
+        except OSError:
+            pass
+    found: dict[str, dict] = {}
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        s.settimeout(0.25)
+        for _ in range(2):  # UDP: a probe can get lost
+            for t in targets:
+                try:
+                    s.sendto(DDP_PROBE, (t, DDP_PORT))
+                except OSError:
+                    pass
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            try:
+                data, (ip, _) = s.recvfrom(2048)
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            if ps5 := parse_ddp(data, ip):
+                found[ip] = ps5
+    return sorted(found.values(), key=lambda p: p["name"].lower())
 
 
 def wake_credential(key: str) -> str:
@@ -573,7 +620,7 @@ class FTPConsoleAdapter:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.settimeout(1)
             try:
-                s.sendto(b"SRCH * HTTP/1.1\ndevice-discovery-protocol-version:00030010\n", (self.host, self.DDP_PORT))
+                s.sendto(DDP_PROBE, (self.host, self.DDP_PORT))
                 return s.recv(2048).split(b"\n", 1)[0]
             except OSError:
                 return b""

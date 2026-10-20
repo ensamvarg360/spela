@@ -22,7 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import __version__, config, credentials, inventory, jobs, logos, migrations, scanner
-from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError, send_wake, wake_credential
+from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError, discover, send_wake, wake_credential
 from .database import SessionLocal, engine, get_db
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id, now
 
@@ -625,6 +625,13 @@ def _save_console(db: Session, c: Console, changes: dict):
 @api.get("/consoles", response_model=list[ConsoleOut])
 def list_consoles(db: Session = Depends(get_db)):
     return [_console_out(c) for c in db.scalars(select(Console).order_by(Console.name))]
+
+
+@api.post("/consoles/discover", dependencies=[Depends(require_admin)])
+async def discover_consoles(db: Session = Depends(get_db)):
+    """PS5s on this network that answer discovery (about 2 s), each marked when it's already added."""
+    known = set(db.scalars(select(Console.ip_address)))
+    return [p | {"added": p["ip"] in known} for p in await asyncio.to_thread(discover)]
 
 
 @api.post("/consoles", response_model=ConsoleOut, status_code=201)
