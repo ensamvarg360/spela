@@ -322,3 +322,45 @@ def test_remove_helper_stops_it_and_its_resending(monkeypatch):
         assert c.post(f"{url}/test-connection").json()["state"] == "degraded" and Stoppable.sent == 0  # not sent again
         assert c.post(f"{url}/helper").json()["auto_helper"] and Stoppable.sent == 1  # clicked: on again
         c.delete(url)
+
+
+def test_outdated_console_app_is_updated_by_itself(monkeypatch):
+    """An installed PS5 app older than this PC's is copied again; a console without the app never gets it."""
+    from app import inventory
+    from app.consoles import ConsoleStatus, MockConsoleAdapter
+    from app.models import AuditLog
+
+    class WithApp(MockConsoleAdapter):
+        app = "0.1.0"
+        copied: list = []
+
+        async def connect(self):
+            return ConsoleStatus("online", "", {"helper": __version__, "console_app": WithApp.app})
+
+        async def install_console_app(self, files):
+            WithApp.copied.append(files["assets/version.txt"].decode())
+
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: WithApp(c))
+    monkeypatch.setattr(inventory, "refresh", lambda db, c: asyncio.sleep(0))
+    monkeypatch.setattr(inventory.relay, "ensure", lambda *a: None)
+    monkeypatch.setattr(inventory.time, "monotonic", lambda: 1e9)
+    with SessionLocal() as db:
+        con = Console(name="Couch", ip_address="10.0.0.4", connection_type="helper", port=7735)
+        db.add(con)
+        db.commit()
+    asyncio.run(inventory.check(con.id))
+    assert WithApp.copied == [__version__]
+    with SessionLocal() as db:
+        assert db.get(Console, con.id).helper_status["console_app"] == __version__
+    WithApp.app = "missing"  # removed, or never installed
+    monkeypatch.setitem(inventory._auto_app_at, con.id, 0.0)
+    asyncio.run(inventory.check(con.id))
+    assert WithApp.copied == [__version__]
+    with SessionLocal() as db:
+        log = db.scalars(select(AuditLog).where(AuditLog.console_id == con.id)).all()
+        assert [(a.action, a.details["automatic"]) for a in log] == [("console_app_install", True)]
+        inventory.forget(db, con.id)
+        for a in log:
+            db.delete(a)
+        db.delete(db.get(Console, con.id))
+        db.commit()

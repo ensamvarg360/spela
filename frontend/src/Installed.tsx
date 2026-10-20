@@ -258,7 +258,8 @@ export default function Installed() {
   const c = consoles.find((x) => x.id === id) ?? consoles[0];
   const driveLabel = Object.fromEntries(drives.map((d) => [d.id, d.label]));
   const helperBad = !!version && c.helper_status.helper !== version;
-  const consoleAppBad = !!version && c.helper_status.console_app !== version;
+  const app = c.helper_status.console_app; // not installed is a choice, nothing to update
+  const consoleAppBad = !!version && !!app && app !== "missing" && app !== version;
 
   async function rescan() {
     setBusy(true);

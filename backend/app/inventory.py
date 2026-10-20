@@ -1,6 +1,7 @@
 """Console inventory sync and health monitor (project.md §9, §11). Copies what an adapter
 reports into drives/installed_games; those tables are a cache of the console, not a source of truth."""
 import asyncio
+import hmac
 import re
 import time
 
@@ -8,18 +9,35 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from . import __version__, config, credentials, relay
-from .consoles import TITLE_ID, AdapterError, ConsoleAdapter, ConsoleStatus, get_adapter
+from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError, ConsoleAdapter, ConsoleStatus, HelperConsoleAdapter, get_adapter
 from .database import SessionLocal
 from .models import AuditLog, Console, Drive, Game, InstalledGame, now
 
 BACKOFF = (2, 5, 10, 30, 60)  # seconds between checks after 1, 2, 3... failures in a row
 status: dict[str, dict] = {}  # console id -> {state, message, checked_at, failures}; live, so in memory
-AUTO_HELPER_SECONDS = 60  # between tries to send the helper to a console that's on without it
+AUTO_HELPER_SECONDS = 60  # between tries to send the helper (or an update of the PS5 app) to a console
 _auto_helper_at: dict[str, float] = {}
+_auto_app_at: dict[str, float] = {}
 
 
 def adapter_for(db: Session, console: Console) -> ConsoleAdapter:
     return get_adapter(console, credentials.get_password(db, console))
+
+
+def console_app_token(console_id: str) -> str:
+    """The PS5 app's key: names its console and proves the PC issued it. Nothing is stored; deleting the console revokes it."""
+    sig = hmac.new(config.SECRET_KEY.encode(), f"console-app:{console_id}".encode(), "sha256").hexdigest()
+    return f"{console_id}.{sig}"
+
+
+def console_app_files(console: Console) -> dict[str, bytes]:
+    """The PS5 app as copied to the console, paired with this PC. The app asks the helper on its own console, which
+    passes its requests on to this PC (relay.py), so it needs no address of the PC."""
+    files = {p.relative_to(CONSOLE_APP_DIR).as_posix(): p.read_bytes() for p in CONSOLE_APP_DIR.rglob("*") if p.is_file()}
+    files["assets/server.txt"] = (f"url=http://127.0.0.1:{HelperConsoleAdapter.HELPER_PORT}\n"
+                                  f"token={console_app_token(console.id)}\n").encode()
+    files["assets/version.txt"] = __version__.encode()
+    return files
 
 
 def _ver(v: str | None) -> tuple[int, ...]:
@@ -121,6 +139,7 @@ async def check(console_id: str) -> dict:
         if not console.auto_helper and result.state == "degraded" and result.helper_status.get("helper") == "missing":
             result.message, result.fix = "The helper is removed.", ("Spela won't send it again until you click "
                                                                   "Install helper in Settings → Consoles.")
+        await _auto_console_app(db, console, adapter, result)
         prev = record(console_id, result.state, result.message, result.fix)
         if result.state == "online":
             console.last_seen_at, console.helper_status = now(), result.helper_status
@@ -152,6 +171,25 @@ async def _auto_helper(db: Session, console: Console, adapter: ConsoleAdapter, r
     db.add(AuditLog(action="helper_install", console_id=console.id, result="success", details={"version": version, "automatic": True}))
     db.commit()
     return True
+
+
+async def _auto_console_app(db: Session, console: Console, adapter: ConsoleAdapter, result: ConsoleStatus):
+    """Brings an installed PS5 app up to this version, as _auto_helper does for the helper. Never installs it on a
+    console without it, so Remove PS5 app keeps it removed."""
+    app = result.helper_status.get("console_app")
+    if console.connection_type not in ("helper", "ftp") or result.state != "online"             or app in (None, "missing", __version__) or not CONSOLE_APP_DIR.is_dir():
+        return
+    if time.monotonic() - _auto_app_at.get(console.id, float("-inf")) < AUTO_HELPER_SECONDS:
+        return
+    _auto_app_at[console.id] = time.monotonic()
+    try:
+        await adapter.install_console_app(console_app_files(console))
+    except AdapterError:  # tried again in a minute; Update PS5 app in Settings shows why
+        return
+    result.helper_status["console_app"] = __version__
+    db.add(AuditLog(action="console_app_install", console_id=console.id, result="success",
+                    details={"version": __version__, "from": app, "automatic": True}))
+    db.commit()
 
 
 async def monitor():

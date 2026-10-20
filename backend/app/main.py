@@ -23,8 +23,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import __version__, config, credentials, inventory, jobs, logos, migrations, scanner
-from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError, HelperConsoleAdapter, discover, send_wake, wake_credential
+from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError, discover, send_wake, wake_credential
 from .database import SessionLocal, engine, get_db
+from .inventory import console_app_token
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id, now
 
 
@@ -1201,12 +1202,6 @@ def audit_logs(before: datetime | None = None, db: Session = Depends(get_db)):
 
 # ---------------------------------------------------------------- PS5 app
 
-def console_app_token(console_id: str) -> str:
-    """The PS5 app's key: names its console and proves the PC issued it. Nothing is stored; deleting the console revokes it."""
-    sig = hmac.new(config.SECRET_KEY.encode(), f"console-app:{console_id}".encode(), "sha256").hexdigest()
-    return f"{console_id}.{sig}"
-
-
 def console_from_token(request: Request, db: Session = Depends(get_db)) -> Console:
     token = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
     c = db.get(Console, token.split(".")[0]) if token else None
@@ -1337,17 +1332,12 @@ def console_removal(removal_id: str, c: Console = Depends(console_from_token)):
 
 @api.post("/consoles/{console_id}/console-app", response_model=ConsoleOut)
 async def install_console_app(console_id: str, db: Session = Depends(get_db)):
-    """Puts the PS5 app on the console (or updates it), paired with this PC. The app asks the helper on its own
-    console, which passes its requests on to this PC (relay.py), so it needs no address of the PC."""
+    """Puts the PS5 app on the console (or updates it), paired with this PC. The monitor updates an installed one by itself."""
     c = db.get(Console, console_id) or _not_found()
     if not CONSOLE_APP_DIR.is_dir():
         raise HTTPException(409, {"error": "not_bundled", "message": "This build doesn't include the PS5 app."})
-    files = {p.relative_to(CONSOLE_APP_DIR).as_posix(): p.read_bytes() for p in CONSOLE_APP_DIR.rglob("*") if p.is_file()}
-    files["assets/server.txt"] = (f"url=http://127.0.0.1:{HelperConsoleAdapter.HELPER_PORT}\n"
-                                  f"token={console_app_token(c.id)}\n").encode()
-    files["assets/version.txt"] = __version__.encode()
     try:
-        await inventory.adapter_for(db, c).install_console_app(files)
+        await inventory.adapter_for(db, c).install_console_app(inventory.console_app_files(c))
         await inventory.refresh(db, c)
     except AdapterError as e:
         db.add(AuditLog(action="console_app_install", console_id=c.id, result="failed", details={"error": e.code}))
