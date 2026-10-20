@@ -330,3 +330,22 @@ def test_relay_answers_the_ps5_app_through_the_helper(tmp_path, monkeypatch):
 def test_relay_reaches_only_the_ps5_app_api():
     from app import relay
     assert relay._forward("GET", "/api/v1/games", "")[0] == 403  # refused before anything is asked
+
+
+def test_relay_worker_survives_a_bad_request(monkeypatch):
+    """A control character in a relayed path raises InvalidURL (not an OSError); the worker must keep relaying."""
+    import http.client
+    from app import relay
+    calls = []
+
+    def serve_one(host, key):
+        calls.append(host)
+        if len(calls) == 1:
+            raise http.client.InvalidURL("URL can't contain control characters.")
+        relay.forget("c1")  # second round: stop the loop
+    monkeypatch.setattr(relay, "serve_one", serve_one)
+    monkeypatch.setattr(relay, "RETRY_SECONDS", 0)
+    monkeypatch.setattr(relay, "helper_key", lambda cid: "k")
+    relay._wanted["c1"] = "10.0.0.5"
+    relay._worker("c1", "10.0.0.5")
+    assert len(calls) == 2

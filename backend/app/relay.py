@@ -60,7 +60,7 @@ def _worker(console_id: str, host: str):
     while _wanted.get(console_id) == host:  # stops when the console is removed, or its address changes
         try:
             serve_one(host, key)
-        except (OSError, ValueError, KeyError):
+        except Exception:  # whatever a request holds, the worker keeps going (a control character raised InvalidURL)
             time.sleep(RETRY_SECONDS)
 
 
