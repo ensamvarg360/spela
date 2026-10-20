@@ -71,12 +71,6 @@ def _lan_url() -> str | None:
             return None
 
 
-def _network_is_public() -> bool:
-    out = subprocess.run(["powershell", "-NoProfile", "-Command", "(Get-NetConnectionProfile).NetworkCategory"],
-                         capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW).stdout
-    return "Public" in out
-
-
 def _allow_through_firewall() -> bool:
     """Adds an inbound rule for the port on private networks. Asks for admin rights; False if refused."""
     rule = f'name="{APP_NAME}"'
@@ -163,10 +157,6 @@ def main():
                 return _message("Other devices weren't allowed: Windows needs admin rights to let them through "
                                 "the firewall.", 0x30)  # MB_ICONWARNING
             config.LAN_FILE.touch()
-            if _network_is_public():
-                _message("Windows treats this network as Public and blocks other devices on it.\n\nIf this is your "
-                         "home network, open Settings → Network & internet → your connection, and choose Private "
-                         "network.", 0x30)
         restart(icon)
 
     lan_url = _lan_url()
