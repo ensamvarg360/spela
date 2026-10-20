@@ -177,5 +177,5 @@ If a root or subfolder can't be read, the scan reports an error and leaves exist
 - **SQLite.** No Postgres, Redis or ARQ yet: a scan is the only background task. Models are portable; set `DATABASE_URL` (and add `psycopg`) to switch to Postgres.
 - **Numbered migrations, not Alembic.** `backend/app/migrations.py` upgrades an older database at startup, tracked in SQLite's `user_version`. Adding a model column means appending a step there. A data folder from a newer version is refused rather than opened by an older one.
 - **Interval rescans, no watchdog.** Filesystem events aren't reliable on SMB/NFS mounts.
-- Login is rate-limited to 5 failures per minute per IP. Read-only users aren't built yet.
+- Login is rate-limited to 5 failures per minute per IP. Read-only access is one shared view-only password, not separate accounts.
 - **Removals are tracked in memory**, not in the `removal_jobs` table: its foreign key would block dropping the installed game once it's gone. The audit log keeps the record; a restart forgets previews and progress. Previews expire after 10 minutes.
