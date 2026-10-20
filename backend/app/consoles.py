@@ -151,6 +151,7 @@ class ConsoleAdapter(Protocol):
     async def install_helper(self) -> str: ...
     async def stop_helper(self) -> None: ...  # until the PS5 restarts, or Install helper sends it again
     async def install_console_app(self, files: dict[str, bytes]) -> None: ...  # relative path -> content
+    async def remove_console_app(self) -> RemovalResult: ...  # its folder, then its tile (ok False: tile left)
     async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
     # Copies every save folder of `title_id` (all users) under `dest`, mirroring console paths. Reads only. Returns files copied.
     async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int: ...
@@ -313,6 +314,11 @@ class MockConsoleAdapter:
     async def install_console_app(self, files: dict[str, bytes]) -> None:
         self._check()
         self.console_app = dict(files)
+
+    async def remove_console_app(self) -> RemovalResult:
+        self._check()
+        self.console_app = {}
+        return RemovalResult(True, "Tile removed.")
 
     async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int:
         self._check()
@@ -851,6 +857,19 @@ class FTPConsoleAdapter:
             self._put_files(ftp, files)
             self._verify_files(ftp, files)
         await self._run(put)
+
+    async def remove_console_app(self) -> RemovalResult:
+        """Deletes the PS5 app's folder, then its tile (which ShadowMountPlus would otherwise keep or add back)."""
+        def rm(ftp: ftplib.FTP):
+            tmp = f"{CONSOLE_APP_PATH.rpartition('/')[0]}/.{CONSOLE_APP_TITLE_ID}.partial"
+            try:
+                ftp.rename(CONSOLE_APP_PATH, tmp)  # hidden first, so ShadowMountPlus never mounts half of it
+            except ftplib.error_perm:
+                pass  # already gone; still remove a tile left behind
+            if f".{CONSOLE_APP_TITLE_ID}.partial" in ftp.ls(tmp.rpartition("/")[0]):
+                self._rm_partial(ftp, tmp)
+        await self._run(rm)
+        return await self.remove_home_screen_icon(CONSOLE_APP_TITLE_ID)
 
     def _game_entry(self, ftp: ftplib.FTP, game: InstalledGameInfo, verb: str) -> tuple[str, str]:
         """(homebrew folder, name) of an installed game. Only a direct entry of a homebrew folder (project.md §13

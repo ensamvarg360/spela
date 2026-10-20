@@ -177,6 +177,11 @@ def test_helper_adapter_stages_scans_and_removes(ps5, monkeypatch):
         assert asyncio.run(a.remove_shadowmount_source(games["PPSA03333"], lambda d, t: None)).ok
         assert list((root / "data/homebrew").iterdir()) == []
 
+        write(root / "data/homebrew/PPSA99787/assets/version.txt", b"1")
+        asyncio.run(a.remove_console_app())  # the test helper has no /uninstall: the folder goes, the tile is left
+        asyncio.run(a.remove_console_app())  # already gone: still fine
+        assert list((root / "data/homebrew").iterdir()) == []
+
         stop = threading.Event()
         with pytest.raises(AdapterError, match="Canceled"):
             asyncio.run(a.stage_shadowmount_content(str(lib / "Dump PPSA03333"), INTERNAL,

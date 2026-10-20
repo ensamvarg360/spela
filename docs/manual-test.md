@@ -179,6 +179,8 @@ Also check:
   **Expect:** removed. If space doesn't come back, it does after restarting the PS5.
 - [ ] On the PS5, delete a ShadowMountPlus game's files some other way (FTP), then click **Refresh inventory**.
   **Expect:** it shows *Icon only*, and **Remove from console** removes just its tile.
+- [ ] Under **Settings → Consoles**, click **Remove PS5 app**, then **Install PS5 app**.
+  **Expect:** the *Spela* tile disappears from the home screen and the game library, with no "tile is still there" message. After installing again it comes back and opens.
 - [ ] Try **Remove from console** on a package-installed game.
   **Expect:** refused, with a message to delete it on the PS5.
 

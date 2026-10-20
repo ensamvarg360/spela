@@ -1331,6 +1331,24 @@ async def install_console_app(console_id: str, db: Session = Depends(get_db)):
     return _console_out(c)
 
 
+@api.delete("/consoles/{console_id}/console-app")
+async def remove_console_app(console_id: str, db: Session = Depends(get_db)):
+    """Deletes the PS5 app's folder and its home-screen tile. {"tile_left", "message"}."""
+    c = db.get(Console, console_id) or _not_found()
+    try:
+        tile = await inventory.adapter_for(db, c).remove_console_app()
+        await inventory.refresh(db, c)
+    except AdapterError as e:
+        db.add(AuditLog(action="console_app_remove", console_id=c.id, result="failed", details={"error": e.code}))
+        db.commit()
+        raise _adapter_failed(502, e)
+    db.add(AuditLog(action="console_app_remove", console_id=c.id, result="success", details={"tile_left": not tile.ok}))
+    db.commit()
+    return {"tile_left": not tile.ok, "message": f"The PS5 app is removed from {c.name}" + (
+        ", and its tile is gone from the home screen." if tile.ok else
+        f". Its tile is still on the home screen: delete it there (Options, then Delete). It won't come back. ({tile.message})")}
+
+
 def _not_found():
     raise HTTPException(404, {"error": "not_found", "message": "Not found."})
 

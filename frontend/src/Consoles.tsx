@@ -30,6 +30,10 @@ function Facts({ c, version, busy, act }: { c: Console; version: string; busy: b
         {!consoleApp || consoleApp === "missing" ? "Not installed" : `v${consoleApp}`}
         <button className="small" disabled={busy || c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
           onClick={() => act("console-app")}>{!consoleApp || consoleApp === "missing" ? "Install PS5 app" : consoleAppOk ? "Reinstall PS5 app" : "Update PS5 app"}</button>
+        {consoleApp && consoleApp !== "missing" && (
+          <button className="small secondary" disabled={busy || c.state !== "online"} title={c.state !== "online" ? "The console must be online." : undefined}
+            onClick={() => act("remove-console-app")}>Remove PS5 app</button>
+        )}
       </dd>
       <dt>Wake from rest mode</dt>
       <dd>
@@ -185,10 +189,17 @@ export default function Consoles() {
     if (removing && !confirm(`Remove the helper from ${c.name}?\n\nIt stops now, and Spela stops sending it by itself, so the ` +
       "PS5 is free for other tools. Nothing of it stays on the PS5. Installed games, the PS5 app and logos are kept.\n\n" +
       "Spela can't read or install to this console until you click Install helper again.")) return;
+    if (path === "remove-console-app" && !confirm(`Remove the PS5 app from ${c.name}?\n\nIts folder and its home-screen tile ` +
+      "are deleted. If it's open on the PS5, close it first. Install PS5 app puts it back.")) return;
     setBusy(true);
     setError(null);
     setNotice("");
     try {
+      if (path === "remove-console-app") {
+        setNotice((await api<{ message: string }>(`/consoles/${c.id}/console-app`, { method: "DELETE" })).message);
+        await load();
+        return;
+      }
       const after = await api<Console>(`/consoles/${c.id}/${removing ? "helper" : path}`, { method: removing ? "DELETE" : "POST" });
       if (removing) setNotice(`The helper is stopped on ${c.name}, and Spela won't send it again until you click Install helper.`);
       if (path === "helper") setNotice(`Helper v${after.helper_status.helper} is running on ${c.name}.`);
