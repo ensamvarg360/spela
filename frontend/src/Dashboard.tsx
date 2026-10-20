@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Problem, { StatusNote } from "./Problem";
 import { api, appVersion, formatBytes, session, wakeConsole, type AuditEntry, type Console, type Drive, type Game, type InstalledGame } from "./api";
 import { ACTION_LABEL } from "./AuditLog";
 import { Jobs, STATE_BADGE, STATE_LABEL, when } from "./Installed";
@@ -11,11 +12,11 @@ function ConsoleCard({ c, version, onRefreshed }: { c: Console; version: string;
   const [drives, setDrives] = useState<Drive[]>([]);
   const [count, setCount] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>("");
   const load = () => Promise.all([
     api<Drive[]>(`/consoles/${c.id}/drives`).then(setDrives),
     api<InstalledGame[]>(`/consoles/${c.id}/installed`).then((gs) => setCount(gs.length)),
-  ]).catch((e) => setError(e.message));
+  ]).catch(setError);
   useEffect(() => { load(); }, [c.id, c.last_inventory_scan_at]);
 
   async function wake() {
@@ -26,7 +27,7 @@ function ConsoleCard({ c, version, onRefreshed }: { c: Console; version: string;
       if (woken.state === "standby") setError("It's still in rest mode. Check its Remote Play key and rest-mode settings.");
       onRefreshed();
     } catch (e) {
-      setError((e as Error).message);
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -40,7 +41,7 @@ function ConsoleCard({ c, version, onRefreshed }: { c: Console; version: string;
       await load();
       onRefreshed();
     } catch (e) {
-      setError((e as Error).message);
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -56,7 +57,7 @@ function ConsoleCard({ c, version, onRefreshed }: { c: Console; version: string;
         {!session.readOnly && c.state === "standby" && c.has_wake_key && <button className="small" disabled={busy} onClick={wake}>{busy ? "Waking…" : "Wake"}</button>}
         {!session.readOnly && <button className="secondary small" disabled={busy || c.state !== "online"} onClick={refresh}>{busy ? "Reading…" : "Refresh inventory"}</button>}
       </div>
-      {c.status_message && <p className="muted">{c.status_message}</p>}
+      {c.status_message && <p><StatusNote message={c.status_message} fix={c.status_fix} /></p>}
       <dl className="facts">
         <dt>Firmware</dt><dd>{c.firmware ?? "Unknown"}</dd>
         <dt>Helper</dt><dd>{!helper || helper === "missing" ? "Not running" : `v${helper}`}{version && helper && helper !== "missing" && helper !== version && ` (needs v${version})`}</dd>
@@ -76,7 +77,7 @@ function ConsoleCard({ c, version, onRefreshed }: { c: Console; version: string;
           ))}
         </ul>
       )}
-      {error && <p className="error" role="alert">{error}</p>}
+      <Problem error={error} />
       <Jobs consoleId={c.id} onDone={load} />
     </section>
   );

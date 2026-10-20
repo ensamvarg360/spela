@@ -96,10 +96,10 @@ def forget(db: Session, console_id: str):
     status.pop(console_id, None)
 
 
-def record(console_id: str, state: str, message: str = "") -> dict:
+def record(console_id: str, state: str, message: str = "", fix: str = "") -> dict:
     prev = status.get(console_id, {})
     failures = 0 if state == "online" else prev.get("failures", 0) + 1
-    status[console_id] = {"state": state, "message": message, "checked_at": now(), "failures": failures}
+    status[console_id] = {"state": state, "message": message, "fix": fix, "checked_at": now(), "failures": failures}
     return prev
 
 
@@ -115,9 +115,9 @@ async def check(console_id: str) -> dict:
             if await _auto_helper(db, console, adapter, result):
                 result = await adapter.connect()
         except AdapterError as e:  # unsupported connection type, unreadable password
-            record(console_id, "degraded", e.message)
+            record(console_id, "degraded", e.message, e.fix)
             return status[console_id]
-        prev = record(console_id, result.state, result.message)
+        prev = record(console_id, result.state, result.message, result.fix)
         if result.state == "online":
             console.last_seen_at, console.helper_status = now(), result.helper_status
             db.commit()
@@ -125,7 +125,7 @@ async def check(console_id: str) -> dict:
                 try:
                     await refresh(db, console)
                 except AdapterError as e:
-                    record(console_id, "degraded", e.message)
+                    record(console_id, "degraded", e.message, e.fix)
         return status[console_id]
 
 

@@ -94,6 +94,7 @@ export interface Console {
   enabled: boolean;
   state: ConsoleState;
   status_message: string;
+  status_fix: string; // what the user can do about status_message
 }
 
 export type ConsoleState = "online" | "standby" | "degraded" | "offline" | "disabled" | "unknown";
@@ -208,7 +209,7 @@ export interface ScanStatus {
 export const session = { readOnly: false };
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string) {
+  constructor(public status: number, public code: string, message: string, public fix = "") {
     super(message);
   }
 }
@@ -243,7 +244,7 @@ export async function api<T>(path: string, opts: { method?: string; json?: unkno
   if (!res.ok) {
     // 422 validation errors come back as {detail: [...]}
     const msg = data.message ?? (Array.isArray(data.detail) ? data.detail.map((d: { msg: string }) => d.msg).join("; ") : res.statusText);
-    throw new ApiError(res.status, data.error ?? "http_error", msg);
+    throw new ApiError(res.status, data.error ?? "http_error", msg, data.fix ?? "");
   }
   return data as T;
 }

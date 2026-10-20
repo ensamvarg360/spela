@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.consoles import GiB, AdapterError, MockConsoleAdapter, UnsupportedConsoleConnectionError, get_adapter
+from app.consoles import GiB, AdapterError, not_answering, MockConsoleAdapter, UnsupportedConsoleConnectionError, get_adapter
 from app.models import Console
 
 
@@ -51,3 +51,16 @@ def test_mock_refusals():
     with pytest.raises(AdapterError) as e:
         run(a.list_drives())
     assert e.value.code == "console_offline"
+
+
+def test_not_answering_warns_about_another_network(monkeypatch):
+    """The fix for an offline console flags an address that isn't on this PC's network."""
+    class Sock:
+        def __init__(self, *a): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def connect(self, addr): pass
+        def getsockname(self): return ("192.168.0.40", 5000)
+    monkeypatch.setattr("app.consoles.socket.socket", Sock)
+    assert "Connection Status" in not_answering("192.168.0.50") and "isn't" not in not_answering("192.168.0.50")
+    assert "This PC is on 192.168.0.x, and 192.168.1.50 isn't" in not_answering("192.168.1.50")

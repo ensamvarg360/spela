@@ -13,7 +13,8 @@ def test_flow(library):
         assert c.get("/api/v1/auth/me").json()["error"] == "setup_required"
         assert c.post("/api/v1/auth/login", json={"password": "password1"}).status_code == 409
         assert c.post("/api/v1/auth/setup", json={"password": "short"}).status_code == 422
-        assert c.post("/api/v1/auth/setup", json={"password": "password1"}).status_code == 403  # not from loopback
+        r = c.post("/api/v1/auth/setup", json={"password": "password1"})
+        assert r.status_code == 403 and "tray icon" in r.json()["fix"]  # not from loopback; says where to do it
     # DNS rebinding: a website that points its own name at 127.0.0.1 must not reach setup (or anything else)
     with TestClient(app, base_url="http://evil.example:8787", client=("127.0.0.1", 50000)) as rebound:
         assert rebound.post("/api/v1/auth/setup", json={"password": "password1"}).status_code == 421
@@ -34,6 +35,8 @@ def test_flow(library):
         assert c.get("/api/v1/auth/me").status_code == 200
 
         assert c.post("/api/v1/library/roots", json={"path": "relative/path"}).status_code == 400
+        r = c.post("/api/v1/library/roots", json={"path": str(library / "not-there")})
+        assert r.status_code == 400 and "no folder" in r.json()["message"] and "Browse" in r.json()["fix"]
         for r in c.get("/api/v1/library/roots").json():
             c.delete(f"/api/v1/library/roots/{r['id']}")
         r = c.post("/api/v1/library/roots", json={"path": str(library), "exclude_patterns": ["skip"]})

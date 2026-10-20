@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import Problem from "./Problem";
 import { api, appVersion, needsOnline, type Console } from "./api";
 import { STATE_BADGE, STATE_LABEL, when } from "./Installed";
 
@@ -45,7 +46,7 @@ function ConsoleForm({ console: c, onDone }: { console?: Console; onDone: () => 
   } : EMPTY);
   const [forget, setForget] = useState(false);
   const [forgetWake, setForgetWake] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>("");
   const field = (k: keyof Draft) => ({ value: d[k], onChange: (e: { target: { value: string } }) => setD({ ...d, [k]: e.target.value }) });
 
   async function save(e: FormEvent) {
@@ -60,7 +61,7 @@ function ConsoleForm({ console: c, onDone }: { console?: Console; onDone: () => 
       await (c ? api(`/consoles/${c.id}`, { method: "PATCH", json: body }) : api("/consoles", { json: body }));
       onDone();
     } catch (err) {
-      setError((err as Error).message);
+      setError(err);
     }
   }
 
@@ -105,8 +106,8 @@ function ConsoleForm({ console: c, onDone }: { console?: Console; onDone: () => 
       <div className="actions">
         <button type="submit">{c ? "Save" : "Add console"}</button>
         <button type="button" className="link" onClick={onDone}>Cancel</button>
-        {error && <span className="error" role="alert">{error}</span>}
       </div>
+      <Problem error={error} />
     </form>
   );
 }
@@ -114,13 +115,13 @@ function ConsoleForm({ console: c, onDone }: { console?: Console; onDone: () => 
 export default function Consoles() {
   const [consoles, setConsoles] = useState<Console[]>([]);
   const [editing, setEditing] = useState<string | null>(null); // console id, "new", or null
-  const [error, setError] = useState("");
+  const [error, setError] = useState<{ e: unknown; retry?: () => void } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [version, setVersion] = useState("");
   useEffect(() => { appVersion.then(setVersion); }, []);
 
-  const load = () => api<Console[]>("/consoles").then(setConsoles, (e) => setError(e.message));
+  const load = () => api<Console[]>("/consoles").then(setConsoles, (e) => setError({ e, retry: load }));
   useEffect(() => {
     load();
     const t = setInterval(load, 15000); // the backend checks every 15 s
@@ -129,7 +130,7 @@ export default function Consoles() {
   const done = () => (setEditing(null), load());
   async function act(c: Console, path: string) {
     setBusy(true);
-    setError("");
+    setError(null);
     setNotice("");
     try {
       const after = await api<Console>(`/consoles/${c.id}/${path}`, { method: "POST" });
@@ -139,14 +140,14 @@ export default function Consoles() {
           "If the PS5 says it can't start it, remove it in ShadowMount+, restart ShadowMount+ (or the PS5), then install again.");
       await load();
     } catch (e) {
-      setError((e as Error).message);
+      setError({ e, retry: () => act(c, path) });
     } finally {
       setBusy(false);
     }
   }
   const remove = (c: Console) =>
     confirm(`Remove ${c.name}? Nothing on the console is changed.`) &&
-    api(`/consoles/${c.id}`, { method: "DELETE" }).then(load, (e) => setError(e.message));
+    api(`/consoles/${c.id}`, { method: "DELETE" }).then(load, (e) => setError({ e }));
 
   return (
     <section className="card">
@@ -167,13 +168,14 @@ export default function Consoles() {
                 <button className="link" onClick={() => setEditing(c.id)}>Edit</button>
                 <button className="link" onClick={() => remove(c)}>Remove</button>
               </span>
+              {c.status_fix && <p className="callout status-fix">{c.status_fix}</p>}
               <Facts c={c} version={version} busy={busy} act={(path) => act(c, path)} />
             </li>
           ))}
       </ul>
       {editing === "new" ? <ConsoleForm onDone={done} /> : <button onClick={() => setEditing("new")}>Add console</button>}
       {notice && <p role="status">{notice}</p>}
-      {error && <p className="error" role="alert">{error}</p>}
+      <Problem error={error?.e} retry={error?.retry} />
     </section>
   );
 }

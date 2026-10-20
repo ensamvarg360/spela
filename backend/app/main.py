@@ -84,7 +84,8 @@ async def revalidate_html(request: Request, call_next):
 
 @app.exception_handler(StarletteHTTPException)
 async def error_body(request: Request, exc: StarletteHTTPException):
-    """Errors are {"error": code, "message": text} (project.md §17), not FastAPI's {"detail": ...}."""
+    """Errors are {"error": code, "message": text} (project.md §17), not FastAPI's {"detail": ...}, plus "fix" (what
+    to do about it) when there's something the user can do."""
     body = exc.detail if isinstance(exc.detail, dict) else {"error": "http_error", "message": str(exc.detail)}
     return JSONResponse(body, status_code=exc.status_code)
 
@@ -119,6 +120,10 @@ def require_admin(request: Request):
     """For what a view-only login mustn't even read: the PC's folders, the activity log (it holds IP addresses)."""
     if request.session.get("user") != "admin":
         raise HTTPException(403, {"error": "admin_only", "message": "This needs the admin password."})
+
+
+def _adapter_failed(status: int, e: AdapterError) -> HTTPException:
+    return HTTPException(status, {"error": e.code, "message": e.message} | ({"fix": e.fix} if e.fix else {}))
 
 
 public = APIRouter(prefix="/api/v1")
@@ -164,7 +169,8 @@ def _require_setup_done():
 def setup(body: SetupIn, request: Request, db: Session = Depends(get_db)):
     """First run only: sets the admin password. Allowed only from this PC, so nobody on the LAN can claim it first."""
     if not request.client or request.client.host not in ("127.0.0.1", "::1"):
-        raise HTTPException(403, {"error": "local_only", "message": "Set the password on the PC running the app."})
+        raise HTTPException(403, {"error": "local_only", "message": "The first password has to be set on the PC running Spela.",
+                                  "fix": "On that PC, open Spela from its tray icon and set it there. Then reload this page."})
     salt = os.urandom(16)
     try:
         with open(config.PASSWORD_FILE, "x") as f:  # exclusive create: the first setup wins
@@ -183,7 +189,9 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     ip = request.client.host if request.client else "?"
     recent = [t for t in _failures.get(ip, []) if time.time() - t < 60]
     if len(recent) >= 5:
-        raise HTTPException(429, {"error": "rate_limited", "message": "Too many attempts. Wait a minute."})
+        raise HTTPException(429, {"error": "rate_limited", "message": "Too many attempts. Wait a minute.",
+                                  "fix": "Forgot it? On the PC running Spela, delete admin_password in %LOCALAPPDATA%\\Spela "
+                                         "and restart Spela from its tray icon to choose a new one."})
     role = next((r for r in PASSWORD_FILES if _check_password(body.password, r)), None)
     db.add(AuditLog(action="login", result="success" if role else "failed", details={"ip": ip, **({"role": role} if role else {})}))
     db.commit()
@@ -467,10 +475,20 @@ def list_roots(db: Session = Depends(get_db)):
 @api.post("/library/roots", response_model=RootOut, status_code=201)
 def add_root(body: RootIn, db: Session = Depends(get_db)):
     path = os.path.realpath(body.path)
-    if not os.path.isabs(body.path) or not os.path.isdir(path):
-        raise HTTPException(400, {"error": "invalid_root", "message": f"Not a readable directory: {body.path}"})
+    if not os.path.isabs(body.path):
+        raise HTTPException(400, {"error": "invalid_root", "message": f"{body.path} isn't a full path.",
+                                  "fix": "Start it with a drive letter, like G:\\Games, or click Browse… to pick the folder."})
+    if not os.path.isdir(path):
+        raise HTTPException(400, {"error": "invalid_root", "message": f"There's no folder at {body.path}.",
+                                  "fix": "Is the drive plugged in? Drive letters can change when it's plugged in again. "
+                                         "Click Browse… to pick the folder."})
+    try:
+        os.scandir(path).close()
+    except OSError:
+        raise HTTPException(400, {"error": "invalid_root", "message": f"Windows won't let Spela read {body.path}.",
+                                  "fix": "Pick a folder inside it instead, or check its permissions in File Explorer."})
     if db.scalar(select(LibraryRoot).where(LibraryRoot.path == path)):
-        raise HTTPException(409, {"error": "duplicate_root", "message": "Root already added."})
+        raise HTTPException(409, {"error": "duplicate_root", "message": "That folder is already in the list."})
     r = LibraryRoot(path=path, enabled=body.enabled, exclude_patterns=body.exclude_patterns, kind=body.kind)
     db.add(r)
     db.commit()
@@ -566,6 +584,7 @@ class ConsoleOut(BaseModel):
     enabled: bool
     state: str = "unknown"  # online|standby|degraded|offline|disabled|unknown (not checked yet)
     status_message: str = ""
+    status_fix: str = ""  # what the user can do about status_message
 
 
 def _console_out(c: Console) -> ConsoleOut:
@@ -575,6 +594,7 @@ def _console_out(c: Console) -> ConsoleOut:
         "has_wake_key": bool(c.wake_secret_id),
         "state": s.get("state", "unknown") if c.enabled else "disabled",
         "status_message": s.get("message", ""),
+        "status_fix": s.get("fix", ""),
     })
 
 
@@ -650,7 +670,7 @@ def delete_console(console_id: str, db: Session = Depends(get_db)):
 @api.get("/consoles/{console_id}/status")
 def console_status(console_id: str, db: Session = Depends(get_db)):
     c = _console_out(db.get(Console, console_id) or _not_found())
-    return {"state": c.state, "message": c.status_message, "last_seen_at": c.last_seen_at}
+    return {"state": c.state, "message": c.status_message, "fix": c.status_fix, "last_seen_at": c.last_seen_at}
 
 
 @api.post("/consoles/{console_id}/test-connection", response_model=ConsoleOut)
@@ -669,9 +689,10 @@ async def wake_console(console_id: str, db: Session = Depends(get_db)):
     try:
         credential = credentials.get_password(db, c, "wake_secret_id")
     except AdapterError as e:
-        raise HTTPException(409, {"error": e.code, "message": e.message})
+        raise _adapter_failed(409, e)
     if not credential:
-        raise HTTPException(409, {"error": "no_wake_key", "message": "Add the console's Remote Play key in Settings → Consoles first."})
+        raise HTTPException(409, {"error": "no_wake_key", "message": "Spela can't wake this console yet.",
+                                  "fix": "Add its Remote Play key under Settings → Consoles → Edit."})
     if c.connection_type != "mock":
         await asyncio.to_thread(send_wake, c.ip_address, credential)
     db.add(AuditLog(action="wake", console_id=c.id, result="success", details={"name": c.name}))
@@ -693,7 +714,7 @@ async def rescan_console(console_id: str, db: Session = Depends(get_db)):
     try:
         await inventory.refresh(db, c)
     except AdapterError as e:
-        raise HTTPException(502, {"error": e.code, "message": e.message})
+        raise _adapter_failed(502, e)
     inventory.record(c.id, "online")
     return _console_out(c)
 
@@ -708,7 +729,7 @@ async def install_helper(console_id: str, db: Session = Depends(get_db)):
     except AdapterError as e:
         db.add(AuditLog(action="helper_install", console_id=c.id, result="failed", details={"error": e.code}))
         db.commit()
-        raise HTTPException(502, {"error": e.code, "message": e.message})
+        raise _adapter_failed(502, e)
     db.add(AuditLog(action="helper_install", console_id=c.id, result="success", details={"version": version}))
     db.commit()
     inventory.record(c.id, "online")
@@ -1230,8 +1251,9 @@ async def install_console_app(console_id: str, db: Session = Depends(get_db)):
     """Puts the PS5 app on the console (or updates it), paired with this PC."""
     c = db.get(Console, console_id) or _not_found()
     if config.HOST == "127.0.0.1":
-        raise HTTPException(409, {"error": "lan_off", "message": "The PS5 can't reach this PC yet. Right-click the tray icon, "
-                                  "tick \"Allow other devices on my network\", then try again."})
+        raise HTTPException(409, {"error": "lan_off", "message": "The PS5 can't reach this PC yet.",
+                                  "fix": "Right-click Spela's tray icon, tick \"Allow other devices on my network\", then try again. "
+                                         "If Windows calls your network Public, switch it to Private first."})
     if not CONSOLE_APP_DIR.is_dir():
         raise HTTPException(409, {"error": "not_bundled", "message": "This build doesn't include the PS5 app."})
     files = {p.relative_to(CONSOLE_APP_DIR).as_posix(): p.read_bytes() for p in CONSOLE_APP_DIR.rglob("*") if p.is_file()}
@@ -1244,7 +1266,7 @@ async def install_console_app(console_id: str, db: Session = Depends(get_db)):
     except AdapterError as e:
         db.add(AuditLog(action="console_app_install", console_id=c.id, result="failed", details={"error": e.code}))
         db.commit()
-        raise HTTPException(502, {"error": e.code, "message": e.message})
+        raise _adapter_failed(502, e)
     db.add(AuditLog(action="console_app_install", console_id=c.id, result="success", details={"version": __version__}))
     db.commit()
     inventory.record(c.id, "online")

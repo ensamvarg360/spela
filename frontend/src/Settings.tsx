@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, type Kind, type Root, type ScanStatus } from "./api";
+import Problem from "./Problem";
+import { api, type Game, type Kind, type Root, type ScanStatus } from "./api";
 import AuditLog from "./AuditLog";
 import { useScan } from "./Library";
 import Consoles from "./Consoles";
@@ -8,9 +9,9 @@ interface Listing { path: string; parent: string | null; dirs: string[] }
 
 function FolderPicker({ start, onPick, onClose }: { start: string; onPick: (path: string) => void; onClose: () => void }) {
   const [list, setList] = useState<Listing | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>("");
   const open = (path: string) =>
-    api<Listing>(`/library/browse?path=${encodeURIComponent(path)}`).then((l) => (setList(l), setError("")), (e) => setError(e.message));
+    api<Listing>(`/library/browse?path=${encodeURIComponent(path)}`).then((l) => (setList(l), setError("")), setError);
   useEffect(() => { open(start); }, []);
   const name = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() || p;
 
@@ -22,7 +23,7 @@ function FolderPicker({ start, onPick, onClose }: { start: string; onPick: (path
         <button type="button" disabled={!list?.path} onClick={() => onPick(list!.path)}>Add this folder</button>
         <button type="button" className="link" onClick={onClose}>Cancel</button>
       </div>
-      {error && <p className="error" role="alert">{error}</p>}
+      <Problem error={error} />
       <ul className="picker-list">
         {list?.dirs.map((d) => <li key={d}><button type="button" className="link" onClick={() => open(d)}>{name(d)}</button></li>)}
         {list && !list.dirs.length && <li className="muted">No subfolders</li>}
@@ -111,11 +112,15 @@ function ViewOnly() {
 
 export default function Settings() {
   const [roots, setRoots] = useState<Root[]>([]);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>("");
   const [finished, setFinished] = useState(false); // a scan started or seen running here has ended
-  const [scan, setScan] = useScan(() => setFinished(true));
+  const [empty, setEmpty] = useState(false); // the library has no games after the scan
+  const [scan, setScan] = useScan(() => {
+    setFinished(true);
+    api<Game[]>("/games").then((gs) => setEmpty(!gs.some((g) => !g.missing)), () => {});
+  });
 
-  const load = () => api<Root[]>("/library/roots").then(setRoots, (e) => setError(e.message));
+  const load = () => api<Root[]>("/library/roots").then(setRoots, setError);
 
   useEffect(() => {
     load();
@@ -128,7 +133,7 @@ export default function Settings() {
       await p;
       await load();
     } catch (e) {
-      setError((e as Error).message);
+      setError(e);
     }
   }
 
@@ -146,7 +151,7 @@ export default function Settings() {
         <p className="muted">Where you keep DLC packages and DLC unlocker folders. DLC inside game folders is found too, and
           shows on the DLC page either way.</p>
         <Folders kind="dlc" roots={roots} act={act} />
-        {error && <p className="error" role="alert">{error}</p>}
+        <Problem error={error} />
         <div className="toolbar scan-bar">
           <button onClick={startScan} disabled={scan?.running || !roots.length}>
             {scan?.running ? <><span className="spinner" aria-hidden />Scanning…</> : "Scan now"}
@@ -157,6 +162,12 @@ export default function Settings() {
               : null}
           </span>
         </div>
+        {finished && empty && !scan?.running && scan?.report && (
+          <Problem error="Nothing in these folders looks like a PS5 game." fix={"Spela recognizes game folders with sce_sys/param.json " +
+            "inside, .exfat, .ffpkg, .ffpfs and .pkg files, and .zip, .7z and .rar archives that hold one of them. " +
+            (scan.report.unknown.length ? `${scan.report.unknown.length} files couldn't be identified; they're listed under "unknown" below. ` : "") +
+            "Check that the folder holds your backups, or add the one that does."} />
+        )}
         {scan?.report && !scan.running && (
           <>
             <p className="muted">Last scan finished {new Date(scan.finished_at!).toLocaleString()}</p>

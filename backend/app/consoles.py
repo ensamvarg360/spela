@@ -30,11 +30,34 @@ ProgressCallback = Callable[[int, int], None]  # (bytes_done, bytes_total)
 
 
 class AdapterError(Exception):
-    """Structured adapter failure; `code` is machine-readable, `message` is for the UI."""
+    """Structured adapter failure; `code` is machine-readable, `message` (what happened) and `fix` (what to do about
+    it, when there's something) are for the UI."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, fix: str = ""):
         super().__init__(message)
-        self.code, self.message = code, message
+        self.code, self.message, self.fix = code, message, fix
+
+
+RUN_LOADER = "Run your jailbreak on the PS5. Once its ELF loader is up, Spela sends the helper by itself within a minute."
+WAKE_UP = "Press the PS button on the controller, or click Wake if you've saved the console's Remote Play key."
+INSTALL_HELPER = "Click Install helper in Settings → Consoles, or run your jailbreak: Spela sends it by itself within a minute."
+UPDATE_HELPER = "Click Update helper in Settings → Consoles, or wait: Spela replaces it by itself within a minute."
+
+
+def not_answering(host: str) -> str:
+    """What to check when nothing answers at `host`, with a warning when it isn't on this PC's network."""
+    fix = ("Check that the PS5 is switched on, not in rest mode, and on the same network as this PC. Its IP address is "
+           "under Settings → Network → Connection Status → View Connection Status on the PS5.")
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect((host, 9))  # sends nothing: picks the network card that would reach `host`
+            mine = s.getsockname()[0]
+    except OSError:
+        return fix
+    # ponytail: assumes a /24 home network; read the real netmask if people hit false warnings
+    if mine.rsplit(".", 1)[0] != host.rsplit(".", 1)[0]:
+        fix += f" This PC is on {mine.rsplit('.', 1)[0]}.x, and {host} isn't, so check the address."
+    return fix
 
 
 class UnsupportedConsoleConnectionError(AdapterError):
@@ -47,6 +70,7 @@ class ConsoleStatus:
     state: Literal["online", "standby", "degraded", "offline"]
     message: str = ""
     helper_status: dict = field(default_factory=dict)
+    fix: str = ""  # what the user can do about it
 
 
 @dataclass
@@ -425,15 +449,17 @@ class FTPConsoleAdapter:
         try:
             ftp.connect(self.host, self.port)
         except ConnectionRefusedError:  # the console answered, but nothing listens on the port
-            raise AdapterError("helper_unreachable", "The console is on, but its FTP server isn't running.")
+            raise AdapterError("helper_unreachable", "The console is on, but its FTP server isn't running.",
+                               f"Start your FTP payload on the PS5, and check that it listens on port {self.port}.")
         except (OSError, EOFError, ftplib.Error):
-            raise AdapterError("console_offline", "The console isn't reachable.")
+            raise AdapterError("console_offline", f"Nothing answers at {self.host}.", not_answering(self.host))
         try:
             ftp.login(self.user, self.password)
             ftp.voidcmd("TYPE I")
         except (OSError, EOFError, ftplib.Error):
             ftp.close()
-            raise AdapterError("auth_failed", "The FTP server rejected the username or password.")
+            raise AdapterError("auth_failed", "The FTP server rejected the username or password.",
+                               "Most PS5 FTP payloads need no login: clear both under Settings → Consoles → Edit.")
         return ftp
 
     def _call(self, fn):
@@ -560,8 +586,8 @@ class FTPConsoleAdapter:
             status, _ = await self._helper_status()
         except AdapterError as e:
             if await asyncio.to_thread(self._asleep):  # payloads don't run in rest mode, so FTP fails too
-                return ConsoleStatus("standby", "The console is in rest mode.", {"ftp": e.code})
-            return ConsoleStatus("offline" if e.code == "console_offline" else "degraded", e.message, {"ftp": e.code})
+                return ConsoleStatus("standby", "The console is in rest mode.", {"ftp": e.code}, WAKE_UP)
+            return ConsoleStatus("offline" if e.code == "console_offline" else "degraded", e.message, {"ftp": e.code}, e.fix)
         return ConsoleStatus("online", "", status)
 
     async def get_console_info(self) -> ConsoleInfo:
@@ -574,13 +600,15 @@ class FTPConsoleAdapter:
             with socket.create_connection((self.host, self.LOADER_PORT), timeout=self.TIMEOUT) as s:
                 s.sendall(helper_elf(self.key))
         except OSError:
-            raise AdapterError("loader_unreachable", f"The console's ELF loader isn't running (port {self.LOADER_PORT}). "
-                                                     "Start it with your jailbreak, then try again.")
+            raise AdapterError("loader_unreachable", f"The PS5's ELF loader isn't running (port {self.LOADER_PORT}).",
+                               "Run your jailbreak on the PS5, wait until it says the loader is up, then try again.")
         for _ in range(15):  # it may wait for the old copy to let go of the port
             time.sleep(1)
             if (info := self._helper()) and info.get("version") == __version__:
                 return __version__
-        raise AdapterError("helper_not_started", "The helper was sent but didn't start. Check the console for a message.")
+        raise AdapterError("helper_not_started", "The helper was sent but didn't start.",
+                           f"Look for a message on the PS5. Another payload may be using port {self.HELPER_PORT}: restart "
+                           "the PS5, run your jailbreak, and try again.")
 
     async def install_helper(self) -> str:
         """Sends the bundled helper payload through the console's ELF loader. Returns the running version."""
@@ -877,10 +905,10 @@ class FTPConsoleAdapter:
             except (ValueError, KeyError, TypeError):
                 why = e.reason
             if why == "not_found":  # the helper's answer to an endpoint it doesn't have
-                raise AdapterError("helper_outdated", "The helper is too old to do it. Update it on the Installed page.")
+                raise AdapterError("helper_outdated", "The helper is too old to do this.", UPDATE_HELPER)
             raise AdapterError("helper_refused", f"The console refused: {why}")
         except (OSError, ValueError):
-            raise AdapterError("helper_unreachable", "The helper isn't running. Install it on the Installed page.")
+            raise AdapterError("helper_unreachable", "The helper isn't running.", INSTALL_HELPER)
 
     MOVE_POLL_SECONDS = 1.0
 
@@ -1003,12 +1031,12 @@ class FTPConsoleAdapter:
             except (ValueError, KeyError, TypeError):
                 why = e.reason
             if why == "not_found":  # the helper's answer to an endpoint it doesn't have
-                raise AdapterError("helper_outdated", "The helper is too old to do it. Update it on the Installed page.")
+                raise AdapterError("helper_outdated", "The helper is too old to do this.", UPDATE_HELPER)
             if e.code == 404:  # the game isn't on the home screen (yet)
                 raise AdapterError("not_found", f"The console says {why}.")
             raise AdapterError("logo_refused", f"The console refused: {why}")
         except OSError:
-            raise AdapterError("helper_unreachable", "The helper isn't running. Install it on the Installed page.")
+            raise AdapterError("helper_unreachable", "The helper isn't running.", INSTALL_HELPER)
 
     async def set_home_logo(self, title_id: str, png: bytes) -> None:
         """Has the helper put `png` on the game's home-screen page as its title logo (payload/main.c, set_logo)."""
@@ -1154,10 +1182,10 @@ class HelperConsoleAdapter(FTPConsoleAdapter):
     def _session(self) -> HelperFS:
         info = self._helper()
         if not info:
-            raise AdapterError("helper_unreachable", "The helper payload isn't running. Install it on the Installed page.")
+            raise AdapterError("helper_unreachable", "The helper isn't running.", INSTALL_HELPER)
         if info.get("version") != __version__:  # an older helper has no file API; its 404s would read as an empty console
             raise AdapterError("helper_outdated", f"The console runs helper v{info.get('version')}; this app needs "
-                                                  f"v{__version__}. Update it on the Installed page.")
+                                                  f"v{__version__}.", UPDATE_HELPER)
         return HelperFS(self.host, self.HELPER_PORT, self.TIMEOUT, info, self.key)
 
     async def _helper_status(self) -> tuple[dict, dict | None]:
@@ -1173,13 +1201,14 @@ class HelperConsoleAdapter(FTPConsoleAdapter):
         info = await asyncio.to_thread(self._helper)
         helper = {"helper": info["version"] if info else "missing"}
         if info:  # running, but outdated
-            return ConsoleStatus("degraded", error.message, helper)
+            return ConsoleStatus("degraded", error.message, helper, error.fix)
         ddp = await asyncio.to_thread(self._ddp)
         if b" 620 " in ddp:  # payloads don't run in rest mode
-            return ConsoleStatus("standby", "The console is in rest mode.", helper)
+            return ConsoleStatus("standby", "The console is in rest mode.", helper, WAKE_UP)
         if b" 200 " in ddp:
-            return ConsoleStatus("degraded", "The console is on, but the helper isn't running.", helper)
-        return ConsoleStatus("offline", "The console doesn't answer. If it's on, install the helper.", helper)
+            return ConsoleStatus("degraded", "Your PS5 is on, but the helper isn't running yet.", helper, RUN_LOADER)
+        return ConsoleStatus("offline", f"Nothing answers at {self.host}.", helper,
+                             not_answering(self.host) + " If it is on and awake, run your jailbreak: Spela sends the helper by itself.")
 
 
 def get_adapter(console: Console, password: str | None = None) -> ConsoleAdapter:

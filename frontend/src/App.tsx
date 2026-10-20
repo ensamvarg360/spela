@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import Problem from "./Problem";
 import { api, ApiError, appVersion, session } from "./api";
 import Library, { NO_VIEW, type View } from "./Library";
 import Cart, { useCart } from "./Cart";
@@ -90,7 +91,7 @@ export default function App() {
 function Login({ setup, onLogin }: { setup: boolean; onLogin: (u: string) => void }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>("");
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -98,7 +99,7 @@ function Login({ setup, onLogin }: { setup: boolean; onLogin: (u: string) => voi
     try {
       onLogin((await api<{ user: string }>(setup ? "/auth/setup" : "/auth/login", { json: { password } })).user);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Login failed.");
+      setError(err instanceof ApiError ? err : "Login failed.");
     }
   }
 
@@ -117,7 +118,7 @@ function Login({ setup, onLogin }: { setup: boolean; onLogin: (u: string) => voi
           <input type="password" required autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
         </label>
       )}
-      {error && <p className="error" role="alert">{error}</p>}
+      <Problem error={error} />
       <button type="submit">{setup ? "Set password" : "Log in"}</button>
     </form>
   );

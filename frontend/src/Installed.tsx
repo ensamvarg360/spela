@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { StatusNote } from "./Problem";
 import { api, appVersion, formatBytes, JOB_ACTIVE, needsOnline, session, wakeConsole, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal } from "./api";
 
 const JOB_LABEL: Record<JobStatus, [string, string]> = {
@@ -301,7 +302,7 @@ export default function Installed() {
           </select>
         ) : <h2 className="inline-title">{c.name}</h2>}
         <span className={`badge ${STATE_BADGE[c.state]}`}>{STATE_LABEL[c.state]}</span>
-        {c.status_message && <span className="muted">{c.status_message}</span>}
+        <StatusNote message={c.status_message} fix={c.status_fix} />
         {c.state === "standby" && c.has_wake_key && !session.readOnly && <button className="small" disabled={busy} onClick={wake}>{busy ? "Waking…" : "Wake"}</button>}
         {(helperBad || consoleAppBad) && !session.readOnly && <a href="#/settings">Update needed in Settings</a>}
         <span className="spacer" />
