@@ -41,28 +41,36 @@ Also have ready:
 
 ## 2. Log in locally
 
-- [x] On first run, choose an admin password of at least 8 characters.
-  **Expect:** you're logged in and land on the Library.
-- [x] **Log out**, then log in with a wrong password 5 times.
-  **Expect:** the 6th attempt says to wait a minute.
+- [ ] On first run (an empty data folder: set `DATA_DIR` to a new folder), choose an admin password of at least 8 characters.
+  **Expect:** you're logged in and land on **Get started**, with *Before you start* open and step 1 *Add your game folder* open below it.
+- [ ] Open **Dashboard**.
+  **Expect:** a *Finish setting up Spela* card with *0 of 5 done*. **Continue setup** goes back to the guide.
+- [ ] **Log out**, then log in with a wrong password 5 times.
+  **Expect:** the 6th attempt says to wait a minute, and how to reset a forgotten password.
 - [x] After a minute, log in with the right password.
   **Expect:** it works.
 - [x] Tick **Allow other devices on my network** in the tray menu, then open the address the tray shows on your phone.
   **Expect:** the login page. Nothing else is reachable before you log in.
 - [x] On the phone, open the app by the PC's name instead of its IP address (for example `http://mypc:8787`).
   **Expect:** "Open the app by its IP address".
+- [ ] Only with an empty data folder: on the phone, try to choose the first admin password.
+  **Expect:** "The first password has to be set on the PC running Spela", and that you open Spela from the PC's tray icon to set it.
 
 ## 3. Add library roots
 
-- [x] In **Settings**, click **Browse…**, pick the test library folder, then **Add this folder**.
-  **Expect:** it's listed under **Library folders**.
+- [ ] In the setup guide's step 1, type a folder that doesn't exist, like `Q:\nope`, and click **Add folder**.
+  **Expect:** "There's no folder at Q:\nope.", with what to check, right under that list.
+- [ ] Click **Browse…**, pick the test library folder, then **Add this folder**.
+  **Expect:** step 1 is ticked, and step 2 *Scan it* opens. In **Settings** the folder is listed under **Game folders**.
+- [ ] Add an empty folder as a second game folder in **Settings**, untick the first one, and click **Scan now**.
+  **Expect:** "Nothing in these folders looks like a PS5 game.", with the file types Spela recognizes. Tick the first folder again and remove the empty one.
 - [x] Add a second folder, for example on another drive or a network share.
   **Expect:** both are listed and shown as reachable.
 
 ## 4. Scan a mixed library
 
-- [x] Click **Scan now** and wait for it to finish.
-  **Expect** each test item to show this way:
+- [ ] In the setup guide, click **Scan now** and wait for it to finish.
+  **Expect:** step 2 is ticked and step 3 *Add your PS5* opens. In the Library, each test item shows this way:
 
 | Item | Expect |
 |---|---|
@@ -86,9 +94,20 @@ Also have ready:
 
 ## 6. Connect the console and view installed games
 
-- [x] In **Settings → Consoles**, add the PS5 with **Helper payload**, a name and its IP address.
-- [x] On **Installed**, click **Install helper**.
-  **Expect:** the PS5 shows a notification that the helper is running, and the console changes to *Online*.
+- [ ] In the setup guide's step 3, wait for **Find it on my network**, with the PS5 switched on.
+  **Expect:** the PS5 is listed by its PS5 name and IP address, marked *On*. Put it in rest mode and click **Look again**: still listed, marked *Rest mode* in amber (with *Stay connected to the internet* on). Wake it up again.
+- [ ] Turn the PS5 off completely and click **Look again**.
+  **Expect:** "No PS5 answered.", with the reasons and a pointer to typing the IP address. Turn it back on.
+- [ ] In **I know its IP address**, add a console with a made-up address on another network, like `10.9.9.9`, then click **Check now** in step 4.
+  **Expect:** *Offline*, "Nothing answers at 10.9.9.9", with what to check and that this PC's network is a different one. Remove that console in **Settings → Consoles**.
+- [ ] Back in step 3, click **Add** next to the real PS5.
+  **Expect:** it's added under its PS5 name, and step 4 *Start the helper* opens.
+- [ ] Before running the jailbreak (restart the PS5 if the loader is already up), look at step 4.
+  **Expect:** *Degraded*, "Your PS5 is on, but the helper isn't running yet.", with "Run your jailbreak…" under it.
+- [ ] Run the jailbreak's ELF loader on the PS5 and wait, without clicking anything.
+  **Expect:** within about a minute the PS5 shows the helper's notification, the console changes to *Online*, and step 4 is ticked.
+- [ ] In **Settings → Consoles**, click **Reinstall helper**.
+  **Expect:** "Helper v… is running on …", and the console stays *Online*.
 - [x] Check the games already on the console.
   **Expect:** each one is listed with title, title ID, version, drive and path. Games also in your library show as matched, with the library's cover.
 - [x] From the PC, run `curl http://<PS5 IP>:7735/info`.
@@ -104,8 +123,8 @@ Also have ready:
   **Expect:** it appears as a new drive card.
 - [x] Unplug it and click **Refresh inventory** again.
   **Expect:** it disappears. Its games don't show as *Icon only*.
-- [x] Put the PS5 in rest mode and wait 30 seconds.
-  **Expect:** *Rest mode*, or *Offline* if "Stay connected to the internet" is off. Wake it up and reinstall the helper.
+- [ ] Put the PS5 in rest mode and wait 30 seconds.
+  **Expect:** *Rest mode* in amber, with "Press the PS button…" under it in **Settings → Consoles**, or *Offline* if "Stay connected to the internet" is off. Wake it up and reinstall the helper.
   **Expect:** back to *Online*.
 
 ## 8. Queue an install
@@ -118,6 +137,8 @@ For each of the folder dump, the disc image and the archive:
   **Expect:** refused with "Already queued" or "Already installed".
 - [ ] When it finishes, check the PS5 home screen.
   **Expect:** the game's tile appears within about a minute, with its store logo within about 3 minutes, and it launches.
+- [ ] After the first install, open **Get started** and the **Dashboard**.
+  **Expect:** the guide says *5 of 5 done* with **Open your library**, and the Dashboard's setup card is gone.
 
 Also check:
 
@@ -188,10 +209,15 @@ Also check:
 
 ## 16. PS5 app
 
-- [ ] Click **Install PS5 app** on the **Installed** page.
+- [ ] With **Allow other devices on my network** unticked in the tray, click **Install PS5 app** in **Settings → Consoles**.
+  **Expect:** "The PS5 can't reach this PC yet.", with where to tick it. Tick it.
+- [ ] Click **Install PS5 app** in **Settings → Consoles**.
   **Expect:** *Spela* appears on the PS5 home screen.
 - [ ] Open it on the PS5.
-  **Expect:** your PC library with covers.
+  **Expect:** the Spela logo at the top left, and your PC library with covers.
+- [ ] Untick **Allow other devices on my network** in the tray (the app restarts), then press Triangle in the PS5 app.
+  **Expect:** a red line under the tabs starting "Can't reach your PC". Close and reopen the PS5 app: *Can't reach your PC* in the middle of the screen, with what to check, all of it on screen. Tick the option again.
+  **Expect:** once Spela has restarted, within about 10 seconds and without touching the PS5, the library is back.
 - [ ] Press L1 and R1.
   **Expect:** the tabs switch between **Games**, **Installed**, **DLC** and **Cart**. DLC shows only under **DLC**, never as *Installed*.
 - [ ] With two install drives set on the PC, press Cross on a game that isn't installed, pick the other drive with the D-pad, and press Cross.

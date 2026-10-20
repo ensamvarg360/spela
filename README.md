@@ -47,6 +47,9 @@ Browse them on your PC, install them to your console over your home network, rem
     <td width="50%"><img src="docs/screenshots/ps5-games.png" alt="The Spela app on the PS5: the games on your PC"><br><sub><b>On the PS5</b>: the games on your PC, with what's installed, updatable or in progress.</sub></td>
     <td width="50%"><img src="docs/screenshots/ps5-install.png" alt="The PS5 app's install dialog with a drive picker"><br><sub><b>Pick a drive</b> and press Cross. The one with the most free space is chosen for you.</sub></td>
   </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/screenshots/setup.png" alt="The setup guide: five steps from adding a game folder to installing a game" width="70%"><br><sub><b>Setup guide</b>: the first run, one step at a time, picking up where you left off.</sub></td>
+  </tr>
 </table>
 
 <sub>The screenshots show invented games with generated covers. `docs/screenshots/make_screenshots.py` rebuilds the PC ones from a demo library.</sub>
@@ -60,10 +63,14 @@ Browse them on your PC, install them to your console over your home network, rem
 ## Get started
 
 1. Download **`Spela-<version>.exe`** from the [latest release](https://github.com/ensamvarg360/spela/releases/latest) and double-click it. There's nothing to install. Windows may show a SmartScreen warning because the app isn't code-signed; the release has a `SHA256SUMS.txt` to check your download against.
-2. Choose an admin password, go to **Settings**, add your game folder (or a whole drive such as `G:\`) and click **Scan now**.
-3. Add your console under **Settings → Consoles** (just a name and its IP address), start your jailbreak's ELF loader, then open **Installed** and click **Install helper**.
-4. Open a game and click **Install**.
-5. Optional: tick **Allow other devices on my network** in the tray menu, then click **Install PS5 app** on the **Installed** page to get Spela on the console's home screen.
+2. Choose an admin password. The **setup guide** opens and takes you through the rest, one step at a time:
+   - add your game folder (or a whole drive such as `G:\`) and scan it
+   - add your PS5: Spela can find it on your network, or you type its IP address
+   - run your jailbreak's ELF loader, and Spela sends its helper to the PS5 by itself
+   - install a game
+
+   You can leave halfway: the guide remembers where you got to, and stays on the Dashboard until you're done. When something goes wrong, it says what to check.
+3. Optional: tick **Allow other devices on my network** in the tray menu, then click **Install PS5 app** under **Settings → Consoles** to get Spela on the console's home screen.
 
 Everything Spela knows is kept in `%LOCALAPPDATA%\Spela`. Your game files never are. The full walkthrough, backups, and a troubleshooting table are in the **[user guide](docs/user-guide.md)**.
 
