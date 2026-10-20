@@ -317,6 +317,20 @@ def _check_contents(db: Session, console: Console, game: Game, item: scanner.Ite
         raise AdapterError("already_installed", f"{tid} is already installed on this console.")
 
 
+def in_progress() -> list[str]:
+    """What quitting now would cut short, one line each, for the launcher's Quit and Restart."""
+    with SessionLocal() as db:
+        rows = db.execute(select(InstallJob.status, Game.title).join(Game, Game.id == InstallJob.game_id)
+                          .where(InstallJob.status.in_(ACTIVE)).order_by(InstallJob.created_at)).all()
+        busy = [f"{'Waiting to install' if status == 'queued' else 'Installing'} {title}" for status, title in rows]
+        busy += [f"Converting {g.title if (g := db.get(Game, gid)) else 'a game'} to .exfat"
+                 for gid, c in conversions.items() if c["status"] == "converting"]
+    busy += [f"Removing {r['title']}" for r in removals.values() if r["status"] == "removing"]
+    busy += [f"Moving {m['title']} to another drive" for m in moves.values() if m["status"] == "moving"]
+    busy += [f"Backing up the saves of {b['title_id']}" for b in save_backups.values() if b["status"] == "copying"]
+    return busy
+
+
 def recover():
     """Jobs that were running when the app stopped can't be resumed: mark them interrupted, and drop their staging."""
     archives.clean()

@@ -729,3 +729,19 @@ def test_clean_up_api_waits_for_running_work(ps5, monkeypatch):
             for a in log:
                 db.delete(a)
             db.commit()
+
+
+def test_in_progress_lists_what_quitting_would_cut_short(ps5, monkeypatch):
+    _, port, lib = ps5
+    assert jobs.in_progress() == []
+    with SessionLocal() as db:
+        c, (a, b) = _setup(db, port, lib, (lib / "Racer PPSA04444.exfat", "image"), (lib / "Dump PPSA03333", "folder_dump"))
+        db.add_all([InstallJob(console_id=c.id, game_id=a.id, status="transferring"),
+                    InstallJob(console_id=c.id, game_id=b.id, status="queued"),
+                    InstallJob(console_id=c.id, game_id=b.id, status="failed")])
+        db.commit()
+        monkeypatch.setitem(jobs.conversions, b.id, {"status": "converting"})
+    monkeypatch.setitem(jobs.removals, "r", {"status": "removing", "title": "Old Game"})
+    monkeypatch.setitem(jobs.moves, "m", {"status": "success", "title": "Done Game"})  # finished: not listed
+    assert jobs.in_progress() == ["Installing Racer PPSA04444.exfat", "Waiting to install Dump PPSA03333",
+                                  "Converting Dump PPSA03333 to .exfat", "Removing Old Game"]

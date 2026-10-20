@@ -149,6 +149,47 @@ def main():
         icon.stop()
         window.destroy()
 
+    pending: str | None = None  # "quit" or "restart" while waiting for running work to finish
+
+    def when_done(verb: str, action):
+        """Runs action now when nothing is running. Otherwise asks: when it's done, now, or not at all."""
+        nonlocal pending
+        busy = jobs.in_progress()
+        if not busy:
+            return action()
+        shown = "\n".join(f"•  {b}" for b in busy[:8]) + (f"\n…and {len(busy) - 8} more" if len(busy) > 8 else "")
+        choice = ctypes.windll.user32.MessageBoxW(
+            None, f"Spela is still working:\n\n{shown}\n\n"
+                  f"Yes: {verb} when all of it is done.\n"
+                  f"No: {verb} now. Running work stops; an install has to be queued again.\n"
+                  "Cancel: keep Spela running.",
+            APP_NAME, 0x3 | 0x30 | 0x10000 | 0x40000)  # MB_YESNOCANCEL, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST
+        if choice == 7:  # IDNO
+            pending = None
+            return action()
+        if choice != 6:  # IDCANCEL
+            return
+        already, pending = pending, verb
+        icon.update_menu()
+        icon.notify(f"Spela will {verb} once the work in progress is done. To stop that, use the tray menu.", APP_NAME)
+        if already:  # its thread is still waiting
+            return
+
+        def wait():
+            nonlocal pending
+            while pending and jobs.in_progress():
+                time.sleep(2)
+            if pending:
+                pending = None
+                action()
+
+        threading.Thread(target=wait, daemon=True).start()
+
+    def keep_running():
+        nonlocal pending
+        pending = None
+        icon.update_menu()
+
     def toggle_lan(icon):
         if config.LAN_FILE.exists():
             config.LAN_FILE.unlink()
@@ -164,12 +205,14 @@ def main():
         pystray.MenuItem("Open", open_window, default=True),
         pystray.MenuItem("Open data folder", lambda: os.startfile(config.DATA_DIR)),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Allow other devices on my network", toggle_lan, checked=lambda _: config.LAN_FILE.exists(),
+        pystray.MenuItem("Allow other devices on my network", lambda: when_done("restart", lambda: toggle_lan(icon)),
+                         checked=lambda _: config.LAN_FILE.exists(),
                          enabled="HOST" not in os.environ),  # the variable wins, so the option would do nothing
         pystray.MenuItem(f"On other devices: {lan_url}", lambda: webbrowser.open(lan_url), visible=bool(lan_url)),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Restart", restart),
-        pystray.MenuItem("Quit", quit_),
+        pystray.MenuItem(lambda _: f"Don't {pending} after all", keep_running, visible=lambda _: pending is not None),
+        pystray.MenuItem("Restart", lambda: when_done("restart", lambda: restart(icon))),
+        pystray.MenuItem("Quit", lambda: when_done("quit", lambda: quit_(icon))),
     ))
     jobs.notify = lambda title, message: icon.notify(message, title)  # installs and conversions that end
     thread.start()
