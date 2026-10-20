@@ -174,3 +174,19 @@ def test_convert_folder_dump_to_exfat(tmp_path):
         r = c.post(f"/api/v1/games/{folder['id']}/convert")
         assert r.status_code == 409 and "already exists" in r.json()["message"]
         assert c.post(f"/api/v1/games/{image['id']}/convert").status_code == 409  # only folder dumps
+
+
+def test_update_check(monkeypatch):
+    import io, json
+    from app import __version__, main
+    for tag, expect in [("v999.0.0", "999.0.0"), (f"v{__version__}", None)]:
+        body = json.dumps({"tag_name": tag, "html_url": "https://example/r"}).encode()
+        monkeypatch.setattr(main.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(body))
+        monkeypatch.setattr(main, "_release_checked", None)
+        with TestClient(app, base_url="http://127.0.0.1") as c:
+            c.post("/api/v1/auth/login", json={"password": "password1"})  # set up in test_flow
+            latest = c.get("/api/v1/update").json()["latest"]
+        assert (latest and latest["version"]) == expect
+    monkeypatch.setattr(main.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    monkeypatch.setattr(main, "_release_checked", None)
+    assert main.latest_release() is None

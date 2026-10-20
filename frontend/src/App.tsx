@@ -30,6 +30,7 @@ export default function App() {
   const [version, setVersion] = useState("");
   const [view, setView] = useState<View>(NO_VIEW); // here, so filters survive opening a game and coming back
   const [dlcView, setDlcView] = useState<View>(NO_VIEW);
+  const [newer, setNewer] = useState<{ version: string; url: string } | null>(null);
   useEffect(() => { appVersion.then(setVersion); }, []);
 
   useEffect(() => {
@@ -38,6 +39,7 @@ export default function App() {
       setUser(null);
     });
   }, []);
+  useEffect(() => { if (user) api<{ latest: { version: string; url: string } | null }>("/update").then((r) => setNewer(r.latest), () => {}); }, [user]);
 
   if (user === undefined) return null;
   if (!user) return <Login setup={needsSetup} onLogin={setUser} />;
@@ -63,6 +65,7 @@ export default function App() {
           <a href="#/installed" aria-current={route === "/installed" ? "page" : undefined}>Installed</a>
         </nav>
         <div className="topbar-end">
+          {newer && !session.readOnly && <a className="badge installed" href={newer.url} target="_blank" rel="noreferrer" title="Download the new version from GitHub">v{newer.version} available</a>}
           {session.readOnly && <span className="badge installed" title="Logged in with the view-only password: you can look, not change anything.">View only</span>}
           {!session.readOnly && (
             <a href="#/cart" className="icon-btn" title="Cart" aria-label={`Cart${inCart.length ? `, ${inCart.length} items` : ""}`} aria-current={route === "/cart" ? "page" : undefined}>

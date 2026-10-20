@@ -2,9 +2,11 @@ import asyncio
 import hashlib
 import hmac
 import ipaddress
+import json
 import os
 import time
 import urllib.parse
+import urllib.request
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -48,6 +50,7 @@ async def _scheduled_scans():
 
 
 APP_ID = "ps5-local-storefront"
+LATEST_RELEASE = "https://api.github.com/repos/ensamvarg360/spela/releases/latest"
 app = FastAPI(title="Spela", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=config.SECRET_KEY, same_site="strict",
                    session_cookie="ps5sf_session", max_age=7 * 24 * 3600)
@@ -244,6 +247,31 @@ def set_viewer(body: ViewerIn, db: Session = Depends(get_db)):
 @public.get("/health")
 def health():
     return {"status": "ok", "app": APP_ID, "version": __version__}  # the launcher checks `app` to recognise a running copy
+
+
+_release_checked: float | None = None
+_release: dict | None = None
+
+
+def latest_release() -> dict | None:
+    """The newest published release on GitHub, asked at most every 6 hours. None when GitHub can't be reached."""
+    global _release_checked, _release
+    if _release_checked is None or time.monotonic() - _release_checked > 6 * 3600:
+        _release_checked = time.monotonic()
+        req = urllib.request.Request(LATEST_RELEASE, headers={"Accept": "application/vnd.github+json", "User-Agent": f"Spela/{__version__}"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read(1_000_000))
+            _release = {"version": data["tag_name"].lstrip("v"), "url": data["html_url"]}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            _release = None  # offline or rate-limited: say nothing until the next check
+    return _release
+
+
+@api.get("/update")
+def update():
+    r = latest_release()
+    return {"version": __version__, "latest": r if r and inventory._ver(r["version"]) > inventory._ver(__version__) else None}
 
 
 # ---------------------------------------------------------------- library
