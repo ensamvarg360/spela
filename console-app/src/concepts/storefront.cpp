@@ -14,6 +14,7 @@
 // store::Client on its own thread.
 
 #include "concepts/concepts.hpp"
+#include "concepts/logo.hpp"
 
 #include "gfx/gl_batch.hpp"
 #include "store/client.hpp"
@@ -228,6 +229,8 @@ class Storefront final : public app::Concept
         age_ += dt;
         clock_ += dt;
         message_age_ += dt;
+        if (logo_ == 0 && store::texture_batch() != nullptr)
+            logo_ = store::texture_batch()->create_texture(kLogoWidth, kLogoHeight, kLogoRgba);
 
         std::string error;
         const store::Game *was = focused();
@@ -770,8 +773,11 @@ class Storefront final : public app::Concept
     void draw_screen(gfx::DrawList &list) const
     {
         const ui::Fonts &fonts = context_.fonts;
-        ui::text(list, fonts.semibold, "SPELA", kMargin + 2, 84, 18, kInk.with_alpha(0.55f),
-                 gfx::Align::left, 4.0f);
+        if (logo_ != 0)
+            list.image(logo_, {kMargin, 40, kLogoWidth, kLogoHeight}, gfx::kFullUv, kWhite);
+        else // no GPU batch yet
+            ui::text(list, fonts.semibold, "SPELA", kMargin + 2, 84, 18, kInk.with_alpha(0.55f),
+                     gfx::Align::left, 4.0f);
         if (client_.paired() && loaded_ && !games_.empty())
             draw_tabs(list);
         else
@@ -1300,6 +1306,7 @@ class Storefront final : public app::Concept
     std::string error_;
     bool loaded_ = false;
     std::unordered_map<std::string, std::uint32_t> covers_;
+    std::uint32_t logo_ = 0; // the wordmark's texture, made once the GPU batch exists
     std::unordered_map<std::string, Tones> tones_;
     std::unordered_set<std::string> requested_;
     std::string message_;
