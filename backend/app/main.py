@@ -1024,7 +1024,7 @@ def game_history(game_id: str, db: Session = Depends(get_db)):
     consoles = {c.id: c.name for c in db.scalars(select(Console))}
     drives = {d.id: d.label for d in db.scalars(select(Drive))}
     installed = [] if g.kind != "game" or not g.title_id else [
-        {"console": consoles.get(r.console_id, ""), "drive": drives.get(r.drive_id, ""), "path": r.installed_path,
+        {"id": r.id, "console_id": r.console_id, "console": consoles.get(r.console_id, ""), "drive": drives.get(r.drive_id, ""), "path": r.installed_path,
          "version": r.version, "status": r.status}
         for r in db.scalars(select(InstalledGame).where(InstalledGame.title_id == g.title_id).order_by(InstalledGame.console_id))]
     events = [{"at": j.finished_at or j.created_at, "what": "install", "result": j.status, "console": consoles.get(j.console_id, ""),

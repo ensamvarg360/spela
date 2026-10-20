@@ -260,10 +260,16 @@ export default function Installed() {
     return () => clearInterval(t);
   }, [id, games]);
 
+  // one card per title: a game on several drives lists each copy on its detail page
+  const titles = useMemo(() => {
+    const by = new Map<string, InstalledGame[]>();
+    for (const g of games) by.set(g.title_id, [...(by.get(g.title_id) ?? []), g]);
+    return [...by.values()];
+  }, [games]);
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return games.filter((g) => !needle || g.title.toLowerCase().includes(needle) || g.title_id.toLowerCase().includes(needle));
-  }, [games, q]);
+    return titles.filter(([g]) => !needle || g.title.toLowerCase().includes(needle) || g.title_id.toLowerCase().includes(needle));
+  }, [titles, q]);
 
   if (error && !consoles) return <p className="error" role="alert">{error}</p>;
   if (!consoles) return <p className="muted">Loading…</p>;
@@ -376,30 +382,32 @@ export default function Installed() {
         <>
           <div className="toolbar">
             <input type="search" placeholder="Search title or title ID" aria-label="Search installed games" value={q} onChange={(e) => setQ(e.target.value)} />
-            <span className="muted">{shown.length} of {games.length}</span>
+            <span className="muted">{shown.length} of {titles.length}</span>
           </div>
           <ul className="games compact">
-            {shown.map((g) => {
+            {shown.map((copies) => {
+              const g = copies.find((x) => x.removing || x.moving || x.status !== "installed") ?? copies[0];
+              const single = copies.length === 1;
               const [label, cls] = g.removing ? ["Removing", "needs_attention"] : g.moving ? ["Moving", "needs_attention"] : STATUS[g.status];
-              const tip = `${g.title_id} · v${g.version ?? "?"} · ${bytes(g.size_bytes)}\n${g.installed_path}`;
+              const tip = copies.map((x) => `${x.title_id} · v${x.version ?? "?"} · ${bytes(x.size_bytes)}\n${x.installed_path}`).join("\n");
               const body = <>
                 <Art g={g} />
                 <div className="name">
                   <strong>{g.title}</strong>
-                  <span className="genre">{(g.drive_id && driveLabel[g.drive_id]) || "Unknown drive"}</span>
+                  <span className="genre">{copies.map((x) => (x.drive_id && driveLabel[x.drive_id]) || "Unknown drive").join(" · ")}</span>
                   {(g.removing || g.moving || g.status !== "installed") && <span className={`badge ${cls}`}>{label}</span>}
                 </div>
               </>;
               return (
-                <li key={g.id}>
+                <li key={g.title_id}>
                   <a className="game" href={g.game_id ? `#/game/${g.game_id}` : `#/installed/${c.id}/${g.id}`} title={tip}>{body}</a>
-                  {g.install_route === "shadowmountplus" && !g.removing && !g.moving && g.status !== "orphaned_icon" && (drives.length > 1 || !g.game_id) && !session.readOnly && (
+                  {single && g.install_route === "shadowmountplus" && !g.removing && !g.moving && g.status !== "orphaned_icon" && (drives.length > 1 || !g.game_id) && !session.readOnly && (
                     <button className="fav move" disabled={c.state !== "online"} title={c.state !== "online" ? "The console must be online." : "Move to another drive"}
                       aria-label={`Move ${g.title} to another drive`} onClick={() => setMoving(g)}>
                       <svg viewBox="0 0 24 24" aria-hidden><path d="M4 9h13l-4-4M20 15H7l4 4" /></svg>
                     </button>
                   )}
-                  {g.install_route === "shadowmountplus" && !g.removing && !g.moving && !session.readOnly && (
+                  {single && g.install_route === "shadowmountplus" && !g.removing && !g.moving && !session.readOnly && (
                     <button className="fav" disabled={c.state !== "online"} title={c.state !== "online" ? "The console must be online." : "Remove from console"}
                       aria-label={`Remove ${g.title} from console`} onClick={() => setRemoving(g)}>
                       <svg viewBox="0 0 24 24" aria-hidden><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" /></svg>

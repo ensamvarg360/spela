@@ -253,7 +253,7 @@ function Convert({ game }: { game: Game }) {
 }
 
 type History = {
-  installed: { console: string; drive: string; path: string; version: string | null; status: string }[];
+  installed: { id: string; console_id: string; console: string; drive: string; path: string; version: string | null; status: string }[];
   events: { at: string; what: string; result: string; console: string; drive: string; message: string }[];
 };
 const WHAT: Record<string, string> = { install: "Install", uninstall: "Removed", move: "Moved" };
@@ -269,7 +269,10 @@ function InstallHistory({ game }: { game: Game }) {
       {h.installed.length > 0 && (
         <Section title="On your consoles">
           <ul>{h.installed.map((i) => (
-            <li key={i.console + i.path}><strong>{i.console}</strong> · {i.drive || "Unknown drive"}{i.version && ` · v${i.version}`} <code>{i.path}</code></li>
+            <li key={i.id}>
+              <strong>{i.console}</strong> · {i.drive || "Unknown drive"}{i.version && ` · v${i.version}`} <code>{i.path}</code>{" "}
+              <a href={`#/installed/${i.console_id}/${i.id}`}>{session.readOnly ? "Details" : "Move or remove"}</a>
+            </li>
           ))}</ul>
         </Section>
       )}
@@ -515,30 +518,35 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
   );
 }
 
-/** A game on a console that isn't in the library: what the console says about it, and what can be done with it there. */
+/** A game on a console: every copy of it there (one per drive), what the console says about each, and what can be done with it. */
 export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: string }) {
   const { consoles } = useConsoles();
   const c = consoles.find((x) => x.id === consoleId);
-  const [g, setG] = useState<InstalledGame | null | undefined>(undefined);
+  const [tid, setTid] = useState<string | null | undefined>(undefined);
+  const [rows, setRows] = useState<InstalledGame[]>([]);
   const [drives, setDrives] = useState<Drive[]>([]);
-  const [dialog, setDialog] = useState<"move" | "remove" | null>(null);
+  const [dialog, setDialog] = useState<{ kind: "move" | "remove"; game: InstalledGame } | null>(null);
   const load = () => Promise.all([
     api<Drive[]>(`/consoles/${consoleId}/drives`).then(setDrives),
-    // a move to another drive gives the game a new id: then it's found by title ID
-    api<InstalledGame[]>(`/consoles/${consoleId}/installed`).then((rows) => setG((cur) =>
-      rows.find((r) => r.id === id) ?? (cur && rows.find((r) => r.title_id === cur.title_id && !rows.some((x) => x.id === cur.id))) ?? null)),
-  ]).catch(() => setG((cur) => cur ?? null));
-  useEffect(() => { load(); }, [consoleId, id]);
+    // a move to another drive gives the copy a new id, so the page follows the title ID once it's known
+    api<InstalledGame[]>(`/consoles/${consoleId}/installed`).then((rs) => {
+      setRows(rs);
+      setTid((cur) => cur ?? rs.find((r) => r.id === id)?.title_id ?? null);
+    }),
+  ]).catch(() => setTid((cur) => cur ?? null));
+  useEffect(() => { setTid(undefined); load(); }, [consoleId, id]);
+  const copies = rows.filter((r) => r.title_id === tid);
+  const busy = copies.some((r) => r.removing || r.moving);
   useEffect(() => { // a removal or move still running after its dialog closed
-    if (!g?.removing && !g?.moving) return;
+    if (!busy) return;
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
-  }, [g?.removing, g?.moving]);
+  }, [busy]);
 
-  if (g === undefined) return <p className="muted">Loading…</p>;
+  if (tid === undefined) return <p className="muted">Loading…</p>;
   const back = <a href="#/installed" className="muted">← Installed</a>;
+  const g = copies[0];
   if (!g) return <section>{back}<p>This game isn't on the console any more. If you moved it to this PC, it's in the <a href="#/">Library</a>.</p></section>;
-  const smp = g.install_route === "shadowmountplus" && !g.removing && !g.moving && !session.readOnly;
   const online = c?.state === "online";
 
   return (
@@ -547,32 +555,41 @@ export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: st
       <section>
         {back}
         <h1>{g.title}</h1>
-        <p className="muted">Not in your PC library. {g.removing ? "Being removed…" : g.moving ? "Being moved…" : ""}</p>
+        <p className="muted">{g.game_id ? <a href={`#/game/${g.game_id}`}>Open in your PC library</a> : "Not in your PC library."}</p>
         {!session.readOnly && (
           <Section fixed>
-            <div className="toolbar">
-              {smp && g.status !== "orphaned_icon" && <button {...needsOnline(c)} disabled={!online} onClick={() => setDialog("move")}>Move…</button>}
-              {smp && <button className="secondary" {...needsOnline(c)} disabled={!online} onClick={() => setDialog("remove")}>Remove from console…</button>}
-            </div>
             <HomeLogo url={`/consoles/${consoleId}/home-logo/${g.title_id}`} consoleId={consoleId} />
           </Section>
         )}
-        <Section title="On the console">
-          <dl className="facts">
-            <dt>Console</dt><dd>{c?.name ?? "…"}</dd>
-            <dt>Drive</dt><dd>{drives.find((d) => d.id === g.drive_id)?.label ?? "Unknown drive"}</dd>
-            <dt>Title ID</dt><dd><code>{g.title_id}</code></dd>
-            <dt>Version</dt><dd>{g.version ?? "Unknown"}</dd>
-            <dt>Size</dt><dd>{g.size_bytes ? formatBytes(g.size_bytes) : "Unknown"}</dd>
-            <dt>Path</dt><dd><code>{g.source_path ?? g.installed_path}</code></dd>
-            <dt>Last checked</dt><dd>{when(g.last_verified_at)}</dd>
-          </dl>
-        </Section>
+        {copies.map((r) => {
+          const smp = r.install_route === "shadowmountplus" && !r.removing && !r.moving && !session.readOnly;
+          const drive = drives.find((d) => d.id === r.drive_id)?.label ?? "Unknown drive";
+          return (
+            <Section key={r.id} title={copies.length > 1 ? `On ${drive}` : "On the console"}>
+              <dl className="facts">
+                <dt>Console</dt><dd>{c?.name ?? "…"}</dd>
+                <dt>Drive</dt><dd>{drive}</dd>
+                <dt>Title ID</dt><dd><code>{r.title_id}</code></dd>
+                <dt>Version</dt><dd>{r.version ?? "Unknown"}</dd>
+                <dt>Size</dt><dd>{r.size_bytes ? formatBytes(r.size_bytes) : "Unknown"}</dd>
+                <dt>Path</dt><dd><code>{r.source_path ?? r.installed_path}</code></dd>
+                <dt>Last checked</dt><dd>{when(r.last_verified_at)}</dd>
+              </dl>
+              {(r.removing || r.moving) && <p className="muted">{r.removing ? "Being removed…" : "Being moved…"}</p>}
+              {smp && (
+                <div className="toolbar">
+                  {r.status !== "orphaned_icon" && <button {...needsOnline(c)} disabled={!online} onClick={() => setDialog({ kind: "move", game: r })}>Move…</button>}
+                  <button className="secondary" {...needsOnline(c)} disabled={!online} onClick={() => setDialog({ kind: "remove", game: r })}>Remove from console…</button>
+                </div>
+              )}
+            </Section>
+          );
+        })}
         <StoreImageBrowser url={`/titles/${g.title_id}/store-images`} />
         {!session.readOnly && <SaveBackups tid={g.title_id} consoleId={consoleId} />}
       </section>
-      {dialog === "move" && <MoveDialog consoleId={consoleId} game={g} drives={drives} onClose={() => { setDialog(null); load(); }} />}
-      {dialog === "remove" && <RemoveDialog consoleId={consoleId} game={g} onClose={() => { setDialog(null); load(); }} />}
+      {dialog?.kind === "move" && <MoveDialog consoleId={consoleId} game={dialog.game} drives={drives} onClose={() => { setDialog(null); load(); }} />}
+      {dialog?.kind === "remove" && <RemoveDialog consoleId={consoleId} game={dialog.game} onClose={() => { setDialog(null); load(); }} />}
     </div>
   );
 }
