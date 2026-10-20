@@ -1349,6 +1349,34 @@ async def install_console_app(console_id: str, db: Session = Depends(get_db)):
     return _console_out(c)
 
 
+@api.get("/consoles/{console_id}/leftovers")
+async def leftovers(console_id: str, db: Session = Depends(get_db)):
+    """Hidden copies left on the console by installs, moves and removals that stopped partway. {"bytes", "paths"}."""
+    c = db.get(Console, console_id) or _not_found()
+    try:
+        found = await inventory.adapter_for(db, c).list_leftovers()
+    except AdapterError as e:
+        raise _adapter_failed(502, e)
+    return {"bytes": sum(found.values()), "paths": sorted(found)}
+
+
+@api.post("/consoles/{console_id}/leftovers/clean")
+async def clean_leftovers(console_id: str, db: Session = Depends(get_db)):
+    """Deletes them all. Refused while anything Spela runs on that console could be writing one. {"bytes_freed"}."""
+    c = db.get(Console, console_id) or _not_found()
+    if reason := jobs.leftovers_blocker(db, c.id):
+        raise HTTPException(409, {"error": "busy", "message": reason})
+    try:
+        freed = await inventory.adapter_for(db, c).remove_leftovers()
+    except AdapterError as e:
+        db.add(AuditLog(action="leftovers_clean", console_id=c.id, result="failed", details={"error": e.message}))
+        db.commit()
+        raise _adapter_failed(409 if e.code == "busy" else 502, e)
+    db.add(AuditLog(action="leftovers_clean", console_id=c.id, result="success", details={"bytes_freed": freed}))
+    db.commit()
+    return {"bytes_freed": freed}
+
+
 @api.delete("/consoles/{console_id}/console-app")
 async def remove_console_app(console_id: str, db: Session = Depends(get_db)):
     """Deletes the PS5 app's folder and its home-screen tile. {"tile_left", "message"}."""

@@ -234,6 +234,11 @@ export default function Installed() {
     return () => clearInterval(t);
   }, []);
   useEffect(() => { if (id) loadInventory(id); }, [id]);
+  const [leftover, setLeftover] = useState(0); // bytes of hidden copies left by installs, moves and removals that stopped
+  const loadLeftovers = (cid: string) =>
+    api<{ bytes: number }>(`/consoles/${cid}/leftovers`).then((r) => setLeftover(r.bytes), () => setLeftover(0));
+  const online = consoles?.find((x) => x.id === id)?.state === "online";
+  useEffect(() => { setLeftover(0); if (id && online && !session.readOnly) loadLeftovers(id); }, [id, online]);
   useEffect(() => { // a removal or move still running after its dialog closed
     if (!id || !games.some((g) => g.removing || g.moving)) return;
     const t = setInterval(() => loadInventory(id), 3000);
@@ -273,6 +278,22 @@ export default function Installed() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function cleanUp() {
+    if (!confirm(`Delete ${formatBytes(leftover)} of unfinished copies from ${c.name}?\n\nThey're hidden copies left by ` +
+      "installs, moves or removals that stopped partway. Installed games, save data and everything else stay as they are.")) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/consoles/${c.id}/leftovers/clean`, { method: "POST" });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+    await loadLeftovers(c.id);
+    await rescan(); // the drives' free space
   }
 
   async function wake() {
@@ -326,6 +347,12 @@ export default function Installed() {
         ))}
         {!session.readOnly && <button {...needsOnline(c)} disabled={busy || c.state !== "online"} onClick={rescan}>{busy ? "Working…" : "Refresh inventory"}</button>}
       </div>
+      {leftover > 0 && !session.readOnly && (
+        <p className="muted">
+          {formatBytes(leftover)} on this console is taken by unfinished copies, left by an install, move or removal that stopped partway.{" "}
+          <button className="small secondary" disabled={busy || c.state !== "online"} onClick={cleanUp}>Clean up</button>
+        </p>
+      )}
       {error && <p className="error" role="alert">{error}</p>}
 
       <Jobs consoleId={c.id} onDone={() => loadInventory(c.id)} />

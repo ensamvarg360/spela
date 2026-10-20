@@ -124,6 +124,7 @@ Keep `secret_key` together with `app.db`. Without it, saved console passwords ca
 | Install fails with "can't see free space" | Install the helper; FTP alone can't report drive space. |
 | Install fails with "Not enough space on this PC to extract" | Free space on the PC, or point `STAGING_DIR` at a bigger drive. |
 | Install shows *Interrupted* | The app or the connection stopped mid-copy. Queue it again; the leftover partial copy is replaced. |
+| Installed page says unfinished copies take space | An install, move or removal stopped partway (the app closed, or the connection dropped) and left a hidden copy in a drive's `homebrew` folder. Click **Clean up**. It deletes only those hidden copies, and waits while anything is installing, moving or being removed on that console. |
 | Removed game's tile is still on the home screen | Delete the tile on the PS5 (Options, then Delete). It won't come back, since its files are gone. |
 | PS5 app says "The Spela helper isn't running" | The PS5 restarted, which stops the helper. Run your jailbreak's ELF loader: Spela on the PC sends the helper within a minute. The PS5 app tries again by itself. |
 | PS5 app says "Spela on your PC isn't answering" | Start Spela on the PC, and check that this PS5 is added under **Settings → Consoles**. Within about half a minute the PS5 app shows the library again. |
@@ -178,4 +179,4 @@ If a root or subfolder can't be read, the scan reports an error and leaves exist
 - **Numbered migrations, not Alembic.** `backend/app/migrations.py` upgrades an older database at startup, tracked in SQLite's `user_version`. Adding a model column means appending a step there. A data folder from a newer version is refused rather than opened by an older one.
 - **Interval rescans, no watchdog.** Filesystem events aren't reliable on SMB/NFS mounts.
 - Login is rate-limited to 5 failures per minute per IP. Read-only access is one shared view-only password, not separate accounts.
-- **Removals are tracked in memory**, not in the `removal_jobs` table: its foreign key would block dropping the installed game once it's gone. The audit log keeps the record; a restart forgets previews and progress. Previews expire after 10 minutes.
+- **Removals are tracked in memory**, not in the `removal_jobs` table: its foreign key would block dropping the installed game once it's gone. The audit log keeps the record; a restart forgets previews and progress, and a removal cut short leaves a hidden copy for **Clean up** on the Installed page. Previews expire after 10 minutes.

@@ -355,6 +355,15 @@ def removing(installed_game_id: str) -> bool:
     return active_removal(installed_game_id) is not None
 
 
+def leftovers_blocker(db: Session, console_id: str) -> str | None:
+    """Why the console's hidden .partial copies can't be cleaned up now: an install, move or removal may be writing one."""
+    if db.scalar(select(InstallJob.id).where(InstallJob.console_id == console_id, InstallJob.status.in_(ACTIVE))):
+        return "An install to this console is queued or running. Clean up once it's done."
+    if any(x["console_id"] == console_id and x["status"] in ("moving", "removing") for x in (*moves.values(), *removals.values())):
+        return "A game on this console is being moved or removed. Clean up once that's done."
+    return None
+
+
 def removal_blocker(db: Session, row: InstalledGame) -> str | None:
     if row.install_route != "shadowmountplus" or not row.source_path:
         return "Only games installed through ShadowMountPlus can be removed from here. Delete this one on the PS5."

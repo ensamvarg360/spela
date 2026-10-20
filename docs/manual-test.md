@@ -156,6 +156,8 @@ Also check:
   **Expect:** it completes, and the leftover partial copy is replaced.
 - [ ] Start an install, then **Quit** from the tray halfway through. Start the app again.
   **Expect:** the job shows *Interrupted* with "The app was closed during the install."
+- [ ] Before queuing it again, open the **Installed** page.
+  **Expect:** a line says how much space unfinished copies take, with **Clean up**. Click it: the line goes away, the drive's free space goes up, and the drive's `homebrew` folder has no `.<name>.partial` left. Every installed game is still there.
 
 ## 10. Preview an uninstall
 

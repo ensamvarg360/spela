@@ -152,6 +152,10 @@ class ConsoleAdapter(Protocol):
     async def stop_helper(self) -> None: ...  # until the PS5 restarts, or Install helper sends it again
     async def install_console_app(self, files: dict[str, bytes]) -> None: ...  # relative path -> content
     async def remove_console_app(self) -> RemovalResult: ...  # its folder, then its tile (ok False: tile left)
+    # Hidden `.<name>.partial` copies in the drives' homebrew folders, left by installs, moves and removals that
+    # stopped partway: path -> bytes. remove_leftovers deletes them all and returns the bytes freed.
+    async def list_leftovers(self) -> dict[str, int]: ...
+    async def remove_leftovers(self) -> int: ...  # AdapterError("busy") while the helper copies a game between drives
     async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
     # Copies every save folder of `title_id` (all users) under `dest`, mirroring console paths. Reads only. Returns files copied.
     async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int: ...
@@ -170,6 +174,7 @@ class MockConsoleAdapter:
 
     def __init__(self, console: Console | None = None, online: bool = True):
         self.online = online
+        self.leftovers: dict[str, int] = {}  # hidden .partial path -> bytes
         self.drives = [
             DriveInfo("internal", "Internal SSD", "/user", "internal", 825 * GiB, 210 * GiB),
             DriveInfo("usb0", "USB Extended", "/mnt/usb0", "usb", 2000 * GiB, 1500 * GiB),
@@ -319,6 +324,16 @@ class MockConsoleAdapter:
         self._check()
         self.console_app = {}
         return RemovalResult(True, "Tile removed.")
+
+    async def list_leftovers(self) -> dict[str, int]:
+        self._check()
+        return dict(self.leftovers)
+
+    async def remove_leftovers(self) -> int:
+        self._check()
+        freed = sum(self.leftovers.values())
+        self.leftovers.clear()
+        return freed
 
     async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int:
         self._check()
@@ -719,15 +734,16 @@ class FTPConsoleAdapter:
         """Deletes one of our own `.<name>.partial` uploads, files first. Never called on anything else."""
         if not re.fullmatch(r".*/\.[^/]+\.partial(/.*)?", path):
             raise ValueError(f"refusing to delete {path}")
+        try:  # an image upload is a file; listing a file would list the file itself
+            return ftp.delete(path)
+        except ftplib.error_perm:  # a folder: refused by FTP, and by the helper unless it's empty
+            pass
         for name, (is_dir, _) in ftp.ls(path).items():
             if is_dir:
                 FTPConsoleAdapter._rm_partial(ftp, f"{path}/{name}")
             else:
                 ftp.delete(f"{path}/{name}")
-        try:
-            ftp.rmd(path)
-        except ftplib.error_perm:  # it was a file (an image upload)
-            ftp.delete(path)
+        ftp.rmd(path)
 
     def _stage(self, ftp: ftplib.FTP, src: Path, drive_id: str, progress: ProgressCallback, cancel: threading.Event) -> InstallResult:
         homebrew = next((hb for d, _, hb in self._drives(ftp) if d.external_id == drive_id), None)
@@ -932,7 +948,7 @@ class FTPConsoleAdapter:
         if f".{name}.partial" in entries:  # left over from an interrupted install
             self._rm_partial(ftp, tmp)
         # Hidden first, so ShadowMountPlus never mounts a half-deleted game. A symlink is renamed, never followed.
-        # ponytail: a connection lost mid-delete leaves the hidden .partial; reinstalling the game clears it.
+        # A connection lost mid-delete leaves the hidden .partial: Clean up on the Installed page deletes it.
         ftp.rename(path, tmp)
         files, dirs, todo = ([] if is_dir else [(tmp, size)]), [], ([tmp] if is_dir else [])
         while todo:  # list everything first, so progress knows the total
@@ -955,6 +971,30 @@ class FTPConsoleAdapter:
 
     async def remove_shadowmount_source(self, installed_game: InstalledGameInfo, progress_callback: ProgressCallback) -> RemovalResult:
         return await self._run(lambda ftp: self._remove_source(ftp, installed_game, progress_callback))
+
+    def _leftovers(self, ftp: ftplib.FTP) -> dict[str, int]:
+        found = {}
+        for _, _, homebrew in self._drives(ftp):
+            for name, (is_dir, size) in ftp.ls(homebrew).items():
+                if re.fullmatch(r"\.[^/]+\.partial", name):
+                    path = f"{homebrew}/{name}"
+                    found[path] = sum(self._sizes(ftp, path).values()) if is_dir else size
+        return found
+
+    async def list_leftovers(self) -> dict[str, int]:
+        return await self._run(self._leftovers)
+
+    def _remove_leftovers(self, ftp: ftplib.FTP) -> int:
+        copy = self._helper("/copy")  # a move between drives runs on the console, even after the PC app restarts
+        if copy and copy.get("running"):
+            raise AdapterError("busy", "The PS5 is copying a game to another drive. Clean up once that's done.")
+        found = self._leftovers(ftp)
+        for path in found:
+            self._rm_partial(ftp, path)
+        return sum(found.values())
+
+    async def remove_leftovers(self) -> int:
+        return await self._run(self._remove_leftovers)
 
     def _remove_tile(self, title_id: str) -> RemovalResult:
         req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/uninstall?id={title_id}", method="POST",

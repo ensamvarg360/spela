@@ -677,3 +677,55 @@ def test_progress_reports_the_current_speed(monkeypatch):
         db.delete(j)
         db.delete(db.get(Game, gid))
         db.commit()
+
+
+def test_leftover_partials_are_listed_and_cleaned_up(ps5, monkeypatch):
+    """Hidden .partial copies on any drive are listed and deleted; nothing else is touched, and never while a copy runs."""
+    root, port, _ = ps5
+    write(root / "data/homebrew/.Dump PPSA03333.partial/sce_sys/param.json", b"p" * 10)
+    write(root / "data/homebrew/.Dump PPSA03333.partial/eboot.bin", b"e" * 30)
+    write(root / "mnt/usb0/homebrew/.Racer PPSA04444.exfat.partial", b"x" * 7)
+    write(root / "data/homebrew/Kept PPSA05555/eboot.bin", b"k")
+    write(root / "data/homebrew/.PPSA05555-app0.gc-moving.tmp", b"t")  # ShadowMountPlus's own
+    a = adapter(port)
+    assert asyncio.run(a.list_leftovers()) == {"/data/homebrew/.Dump PPSA03333.partial": 40,
+                                               "/mnt/usb0/homebrew/.Racer PPSA04444.exfat.partial": 7}
+    monkeypatch.setattr(a, "_helper", lambda path="/info", method="GET": {"running": True} if path == "/copy" else None)
+    with pytest.raises(AdapterError, match="copying"):
+        asyncio.run(a.remove_leftovers())
+    assert len(asyncio.run(a.list_leftovers())) == 2
+    monkeypatch.setattr(a, "_helper", lambda path="/info", method="GET": {"running": False} if path == "/copy" else None)
+    assert asyncio.run(a.remove_leftovers()) == 47
+    assert asyncio.run(a.list_leftovers()) == {}
+    assert (root / "data/homebrew/Kept PPSA05555/eboot.bin").exists()
+    assert (root / "data/homebrew/.PPSA05555-app0.gc-moving.tmp").exists()
+
+
+def test_clean_up_api_waits_for_running_work(ps5, monkeypatch):
+    from app.consoles import MockConsoleAdapter
+    mock = MockConsoleAdapter()
+    mock.leftovers = {"/data/homebrew/.Game.partial": 5120}
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: mock)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        with SessionLocal() as db:
+            c = Console(name="PS5", ip_address="127.0.0.1", connection_type="mock", port=1)
+            db.add(c)
+            db.commit()
+            cid = c.id
+        url = f"/api/v1/consoles/{cid}/leftovers"
+        assert client.get(url).json() == {"bytes": 5120, "paths": ["/data/homebrew/.Game.partial"]}
+        jobs.removals["r1"] = {"console_id": cid, "status": "removing"}
+        try:
+            r = client.post(f"{url}/clean")
+        finally:
+            jobs.removals.pop("r1")
+        assert r.status_code == 409 and "removed" in r.json()["message"]
+        assert client.post(f"{url}/clean").json() == {"bytes_freed": 5120}
+        assert client.get(url).json()["bytes"] == 0
+        with SessionLocal() as db:
+            log = db.scalars(select(AuditLog).where(AuditLog.console_id == cid)).all()
+            assert [(a.action, a.result) for a in log] == [("leftovers_clean", "success")]
+            for a in log:
+                db.delete(a)
+            db.commit()
