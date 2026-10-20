@@ -186,7 +186,8 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
     ) : (
       <div className="empty card">
         <h2>Your library is empty</h2>
-        <p>Add a library folder in <a href="#/settings">Settings</a>, then run a scan.</p>
+        <p>{session.readOnly ? "Nothing has been added yet." : <>The <a href="#/setup">setup guide</a> takes you through adding your
+          games folder and your PS5, step by step. Or add a folder yourself in <a href="#/settings">Settings</a>.</>}</p>
       </div>
     ));
 

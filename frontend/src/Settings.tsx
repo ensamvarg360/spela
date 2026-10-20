@@ -33,11 +33,14 @@ function FolderPicker({ start, onPick, onClose }: { start: string; onPick: (path
   );
 }
 
-/** One kind's library folders. Kind only sorts them into lists: what's DLC is told by content, wherever it is. */
-function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: (p: Promise<unknown>) => Promise<void> }) {
+/** One kind's library folders. Kind only sorts them into lists: what's DLC is told by content, wherever it is.
+ *  `act` runs a change and reloads the roots; its errors show under this list. */
+export function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: (p: Promise<unknown>) => Promise<void> }) {
   const [path, setPath] = useState("");
   const [browsing, setBrowsing] = useState(false);
-  const addPath = (p: string) => act(api("/library/roots", { json: { path: p, kind } }).then(() => (setPath(""), setBrowsing(false))));
+  const [error, setError] = useState<unknown>("");
+  const actHere = (p: Promise<unknown>) => (setError(""), act(p).catch(setError));
+  const addPath = (p: string) => actHere(api("/library/roots", { json: { path: p, kind } }).then(() => (setPath(""), setBrowsing(false))));
   const add = (e: FormEvent) => {
     e.preventDefault();
     addPath(path);
@@ -50,7 +53,7 @@ function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: (p: Pro
         {roots.filter((r) => r.kind === kind).map((r) => (
           <li key={r.id}>
             <label className="check">
-              <input type="checkbox" checked={r.enabled} onChange={(e) => act(api(`/library/roots/${r.id}`, { method: "PATCH", json: { enabled: e.target.checked } }))} />
+              <input type="checkbox" checked={r.enabled} onChange={(e) => actHere(api(`/library/roots/${r.id}`, { method: "PATCH", json: { enabled: e.target.checked } }))} />
               <code>{r.path}</code>
             </label>
             {!r.reachable && <span className="badge incompatible">Unreachable</span>}
@@ -60,10 +63,10 @@ function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: (p: Pro
               defaultValue={r.exclude_patterns.join(", ")}
               onBlur={(e) => {
                 const pats = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
-                if (pats.join() !== r.exclude_patterns.join()) act(api(`/library/roots/${r.id}`, { method: "PATCH", json: { exclude_patterns: pats } }));
+                if (pats.join() !== r.exclude_patterns.join()) actHere(api(`/library/roots/${r.id}`, { method: "PATCH", json: { exclude_patterns: pats } }));
               }}
             />
-            <button className="link" onClick={() => confirm(`Stop scanning ${r.path} and remove what it holds from the library? Files on disk are not touched.`) && act(api(`/library/roots/${r.id}`, { method: "DELETE" }))}>Remove</button>
+            <button className="link" onClick={() => confirm(`Stop scanning ${r.path} and remove what it holds from the library? Files on disk are not touched.`) && actHere(api(`/library/roots/${r.id}`, { method: "DELETE" }))}>Remove</button>
           </li>
         ))}
       </ul>
@@ -73,6 +76,7 @@ function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: (p: Pro
         <button type="button" onClick={() => setBrowsing(true)}>Browse…</button>
       </form>
       {browsing && <FolderPicker start={path} onPick={addPath} onClose={() => setBrowsing(false)} />}
+      <Problem error={error} />
     </>
   );
 }
@@ -110,6 +114,14 @@ function ViewOnly() {
   );
 }
 
+/** After a scan that left the library without games: what Spela looks for, and what it couldn't identify. */
+export function NothingFound({ report }: { report: NonNullable<ScanStatus["report"]> }) {
+  return <Problem error="Nothing in these folders looks like a PS5 game." fix={"Spela recognizes game folders with sce_sys/param.json " +
+    "inside, .exfat, .ffpkg, .ffpfs and .pkg files, and .zip, .7z and .rar archives that hold one of them. " +
+    (report.unknown.length ? `${report.unknown.length} files couldn't be identified; they're listed under "unknown" in Settings. ` : "") +
+    "Check that the folder holds your backups, or add the one that does."} />;
+}
+
 export default function Settings() {
   const [roots, setRoots] = useState<Root[]>([]);
   const [error, setError] = useState<unknown>("");
@@ -117,7 +129,7 @@ export default function Settings() {
   const [empty, setEmpty] = useState(false); // the library has no games after the scan
   const [scan, setScan] = useScan(() => {
     setFinished(true);
-    api<Game[]>("/games").then((gs) => setEmpty(!gs.some((g) => !g.missing)), () => {});
+    api<Game[]>("/games").then((gs) => setEmpty(!gs.some((g) => g.kind === "game" && !g.missing)), () => {});
   });
 
   const load = () => api<Root[]>("/library/roots").then(setRoots, setError);
@@ -127,22 +139,16 @@ export default function Settings() {
   }, []);
 
 
-  async function act(p: Promise<unknown>) {
-    setError("");
-    try {
-      await p;
-      await load();
-    } catch (e) {
-      setError(e);
-    }
-  }
+  const act = (p: Promise<unknown>) => p.then(load);
 
-  const startScan = () => act(api("/library/scan", { method: "POST" }).then(() => (setFinished(false), setScan((s) => ({ ...s!, running: true })))));
+  const startScan = () => (setError(""), api("/library/scan", { method: "POST" })
+    .then(() => (setFinished(false), setScan((s) => ({ ...s!, running: true }))), setError));
   const counts = (r: NonNullable<ScanStatus["report"]>) =>
     `${r.added.length} added, ${r.updated.length} updated, ${r.missing.length} missing${r.errors.length ? `, ${r.errors.length} errors` : ""}`;
 
   return (
     <div className="settings">
+      <p className="muted">New here? The <a href="#/setup">setup guide</a> takes you through it step by step.</p>
       <section className="card">
         <h2>Game folders</h2>
         <p className="muted">A folder or a whole drive, e.g. <code>G:\</code>. Every subfolder is scanned too. Folders are only ever read.</p>
@@ -163,10 +169,7 @@ export default function Settings() {
           </span>
         </div>
         {finished && empty && !scan?.running && scan?.report && (
-          <Problem error="Nothing in these folders looks like a PS5 game." fix={"Spela recognizes game folders with sce_sys/param.json " +
-            "inside, .exfat, .ffpkg, .ffpfs and .pkg files, and .zip, .7z and .rar archives that hold one of them. " +
-            (scan.report.unknown.length ? `${scan.report.unknown.length} files couldn't be identified; they're listed under "unknown" below. ` : "") +
-            "Check that the folder holds your backups, or add the one that does."} />
+          <NothingFound report={scan.report} />
         )}
         {scan?.report && !scan.running && (
           <>

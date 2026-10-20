@@ -112,6 +112,27 @@ def test_audit_log():
         assert older[0]["id"] == rows[1]["id"]
 
 
+def test_setup_checklist(tmp_path):
+    """The checklist reads its steps from what's already set up, and its dismissal survives a reload."""
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.post("/api/v1/auth/login", json={"password": "password1"})  # set up in test_flow
+        for r in c.get("/api/v1/library/roots").json():
+            c.delete(f"/api/v1/library/roots/{r['id']}")
+        s = c.get("/api/v1/setup").json()
+        assert not s["folder"] and not s["dlc_folder"] and not s["dismissed"]
+        c.post("/api/v1/library/roots", json={"path": str(tmp_path)})
+        (tmp_path / "dlc").mkdir()
+        c.post("/api/v1/library/roots", json={"path": str(tmp_path / "dlc"), "kind": "dlc"})
+        s = c.get("/api/v1/setup").json()
+        assert s["folder"] and s["dlc_folder"]
+        assert c.post("/api/v1/setup", json={"dismissed": True}).json() == {"dismissed": True}
+        assert c.get("/api/v1/setup").json()["dismissed"]
+        c.post("/api/v1/setup", json={"dismissed": False})
+        assert not c.get("/api/v1/setup").json()["dismissed"]
+        for r in c.get("/api/v1/library/roots").json():
+            c.delete(f"/api/v1/library/roots/{r['id']}")
+
+
 def test_convert_folder_dump_to_exfat(tmp_path):
     import time
     from conftest import PARAM_JSON, write

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Problem, { StatusNote } from "./Problem";
+import { SetupCard } from "./Setup";
 import { api, appVersion, formatBytes, session, wakeConsole, type AuditEntry, type Console, type Drive, type Game, type InstalledGame } from "./api";
 import { ACTION_LABEL } from "./AuditLog";
 import { Jobs, STATE_BADGE, STATE_LABEL, when } from "./Installed";
@@ -116,6 +117,7 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard">
+      {!session.readOnly && <SetupCard />}
       <ul className="stats">
         <li className="card"><strong>{lib.length}</strong><span>games in your library</span><span className="muted">{formatBytes(lib.reduce((n, g) => n + g.size_bytes, 0))}</span></li>
         <li className="card"><strong>{lib.filter((g) => g.installed).length}</strong><span>installed on a console</span><span className="muted">{ready.length} more ready to install</span></li>

@@ -7,6 +7,7 @@ import Dashboard from "./Dashboard";
 import GameDetail from "./GameDetail";
 import Installed from "./Installed";
 import Settings from "./Settings";
+import Setup from "./Setup";
 import wordmark from "./wordmark.png";
 
 // ponytail: hash routing, seven routes. Swap in react-router when nested routes show up.
@@ -82,6 +83,7 @@ export default function App() {
       <main>
         {gameId ? <GameDetail id={gameId} from={from.current} /> : route === "/dashboard" ? <Dashboard /> : route === "/settings" ? (session.readOnly
           ? <p className="muted">Settings need the admin password. <button className="link" onClick={logout}>Log out</button> and log in with it.</p> : <Settings />) : route === "/installed" ? <Installed /> : route === "/cart" && !session.readOnly ? <Cart />
+          : route === "/setup" && !session.readOnly ? <Setup />
           : dlc ? <Library key="dlc" kind="dlc" view={dlcView} setView={setDlcView} /> : <Library key="game" kind="game" view={view} setView={setView} />}
       </main>
     </>
@@ -97,7 +99,9 @@ function Login({ setup, onLogin }: { setup: boolean; onLogin: (u: string) => voi
     e.preventDefault();
     if (setup && password !== confirm) return setError("The passwords don't match.");
     try {
-      onLogin((await api<{ user: string }>(setup ? "/auth/setup" : "/auth/login", { json: { password } })).user);
+      const { user } = await api<{ user: string }>(setup ? "/auth/setup" : "/auth/login", { json: { password } });
+      if (setup) location.hash = "#/setup"; // first run: straight to the checklist
+      onLogin(user);
     } catch (err) {
       setError(err instanceof ApiError ? err : "Login failed.");
     }

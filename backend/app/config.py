@@ -16,6 +16,7 @@ STATIC_DIR = Path(os.environ.get("STATIC_DIR", Path(__file__).parent / "static")
 SAVE_BACKUP_DIR = DATA_DIR / "save-backups"  # copies of save data read from consoles, one folder per title ID
 PASSWORD_FILE = DATA_DIR / "admin_password"  # delete it to reset the password
 VIEWER_PASSWORD_FILE = DATA_DIR / "viewer_password"  # optional view-only login, set in Settings; delete it to turn that off
+SETUP_DISMISSED_FILE = DATA_DIR / "setup_dismissed"  # the Dashboard's setup checklist was closed
 
 # 127.0.0.1 = this PC only; 0.0.0.0 = also phones etc. on your LAN (never the internet).
 # The tray option "Allow other devices on my network" creates LAN_FILE; the HOST variable overrides it.
