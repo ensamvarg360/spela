@@ -32,7 +32,12 @@ def _3_console_wake_key(c: Connection):
         c.exec_driver_sql("ALTER TABLE consoles ADD COLUMN wake_secret_id VARCHAR(36)")
 
 
-STEPS = [_1_games_seen_at, _2_dlc_kind, _3_console_wake_key]
+def _4_console_auto_helper(c: Connection):
+    if "auto_helper" not in _columns(c, "consoles"):
+        c.exec_driver_sql("ALTER TABLE consoles ADD COLUMN auto_helper BOOLEAN NOT NULL DEFAULT 1")
+
+
+STEPS = [_1_games_seen_at, _2_dlc_kind, _3_console_wake_key, _4_console_auto_helper]
 
 
 def upgrade(engine: Engine):

@@ -98,6 +98,7 @@ class Console(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_inventory_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    auto_helper: Mapped[bool] = mapped_column(Boolean, default=True)  # send the helper by itself; off after Remove helper
 
 
 class Secret(Base):

@@ -17,7 +17,13 @@ function Facts({ c, version, busy, act }: { c: Console; version: string; busy: b
         {helper && helper !== "missing" && !helperOk && version && ` (this app needs v${version})`}
         <button className="small" disabled={busy || c.state === "standby"} title={c.state === "standby" ? "Wake the console first." : undefined}
           onClick={() => act("helper")}>{!helper || helper === "missing" ? "Install helper" : helperOk ? "Reinstall helper" : "Update helper"}</button>
-        {!helperOk && c.connection_type !== "mock" && <span className="muted"> Sent by itself once the console's ELF loader is running.</span>}
+        {(c.auto_helper || (helper && helper !== "missing")) && (
+          <button className="small secondary" disabled={busy || (c.state !== "online" && c.state !== "degraded")}
+            title={c.state !== "online" && c.state !== "degraded" ? "The console must be on." : "Stop the helper, and stop sending it by itself."}
+            onClick={() => act("remove-helper")}>Remove helper</button>
+        )}
+        {!c.auto_helper ? <span className="muted"> Removed: not sent by itself until you click Install helper.</span>
+          : !helperOk && c.connection_type !== "mock" && <span className="muted"> Sent by itself once the console's ELF loader is running.</span>}
       </dd>
       <dt>PS5 app</dt>
       <dd>
@@ -175,11 +181,16 @@ export default function Consoles() {
   }, []);
   const done = () => (setEditing(null), load());
   async function act(c: Console, path: string) {
+    const removing = path === "remove-helper";
+    if (removing && !confirm(`Remove the helper from ${c.name}?\n\nIt stops now, and Spela stops sending it by itself, so the ` +
+      "PS5 is free for other tools. Nothing of it stays on the PS5. Installed games, the PS5 app and logos are kept.\n\n" +
+      "Spela can't read or install to this console until you click Install helper again.")) return;
     setBusy(true);
     setError(null);
     setNotice("");
     try {
-      const after = await api<Console>(`/consoles/${c.id}/${path}`, { method: "POST" });
+      const after = await api<Console>(`/consoles/${c.id}/${removing ? "helper" : path}`, { method: removing ? "DELETE" : "POST" });
+      if (removing) setNotice(`The helper is stopped on ${c.name}, and Spela won't send it again until you click Install helper.`);
       if (path === "helper") setNotice(`Helper v${after.helper_status.helper} is running on ${c.name}.`);
       if (path === "console-app")
         setNotice(`PS5 app v${after.helper_status.console_app} copied to ${c.name} and checked file by file. If it was open on the PS5, close and reopen it. ` +

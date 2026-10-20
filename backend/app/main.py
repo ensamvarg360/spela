@@ -585,6 +585,7 @@ class ConsoleOut(BaseModel):
     last_seen_at: datetime | None
     last_inventory_scan_at: datetime | None
     enabled: bool
+    auto_helper: bool = True  # false after Remove helper, until Install helper
     state: str = "unknown"  # online|standby|degraded|offline|disabled|unknown (not checked yet)
     status_message: str = ""
     status_fix: str = ""  # what the user can do about status_message
@@ -740,10 +741,33 @@ async def install_helper(console_id: str, db: Session = Depends(get_db)):
         db.add(AuditLog(action="helper_install", console_id=c.id, result="failed", details={"error": e.code}))
         db.commit()
         raise _adapter_failed(502, e)
+    c.auto_helper = True  # sent by hand: from now on it's sent by itself again
     db.add(AuditLog(action="helper_install", console_id=c.id, result="success", details={"version": version}))
     db.commit()
     inventory.record(c.id, "online")
     return _console_out(c)
+
+
+@api.delete("/consoles/{console_id}/helper", response_model=ConsoleOut)
+async def remove_helper(console_id: str, db: Session = Depends(get_db)):
+    """Stops the helper payload and stops sending it by itself, for someone moving to other tools. Nothing of it stays
+    on the PS5: it lives in memory. Games, the PS5 app and logos are left alone. Install helper turns it back on."""
+    c = db.get(Console, console_id) or _not_found()
+    if db.scalar(select(InstallJob.id).where(InstallJob.console_id == c.id, InstallJob.status.in_(jobs.ACTIVE))):
+        raise HTTPException(409, {"error": "job_active", "message": "This console has installs waiting or running.",
+                                  "fix": "Cancel them on the Installed page first."})
+    try:
+        await inventory.adapter_for(db, c).stop_helper()
+    except AdapterError as e:
+        db.add(AuditLog(action="helper_remove", console_id=c.id, result="failed", details={"error": e.code}))
+        db.commit()
+        raise _adapter_failed(502, e)
+    c.auto_helper = False
+    db.add(AuditLog(action="helper_remove", console_id=c.id, result="success", details={"name": c.name}))
+    db.commit()
+    await inventory.check(c.id)
+    db.expire_all()  # check() wrote through its own session
+    return _console_out(db.get(Console, console_id))
 
 
 class DriveOut(BaseModel):

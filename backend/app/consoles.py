@@ -149,6 +149,7 @@ class ConsoleAdapter(Protocol):
     async def move_shadowmount_source(self, game: InstalledGameInfo, drive_id: str, progress_callback: ProgressCallback,
                                       cancel: threading.Event | None = None) -> tuple[str, RemovalResult]: ...
     async def install_helper(self) -> str: ...
+    async def stop_helper(self) -> None: ...  # until the PS5 restarts, or Install helper sends it again
     async def install_console_app(self, files: dict[str, bytes]) -> None: ...  # relative path -> content
     async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
     # Copies every save folder of `title_id` (all users) under `dest`, mirroring console paths. Reads only. Returns files copied.
@@ -305,6 +306,9 @@ class MockConsoleAdapter:
     async def install_helper(self) -> str:
         self._check()
         return __version__
+
+    async def stop_helper(self) -> None:
+        self._check()
 
     async def install_console_app(self, files: dict[str, bytes]) -> None:
         self._check()
@@ -660,6 +664,21 @@ class FTPConsoleAdapter:
     async def install_helper(self) -> str:
         """Sends the bundled helper payload through the console's ELF loader. Returns the running version."""
         return await asyncio.to_thread(self._install_helper)
+
+    def _stop_helper(self):
+        if self._helper() is None:
+            return  # not running: nothing to stop
+        self._helper("/quit", "POST")
+        for _ in range(10):  # it answers, then exits
+            time.sleep(0.5)
+            if self._helper() is None:
+                return
+        raise AdapterError("helper_still_running", "The helper didn't stop.",
+                           "Restart the PS5: like any payload, the helper doesn't survive a restart.")
+
+    async def stop_helper(self) -> None:
+        """Asks the helper payload to exit. It's only in the console's memory, so nothing is left on the PS5."""
+        await asyncio.to_thread(self._stop_helper)
 
     async def list_drives(self) -> list[DriveInfo]:
         return [d for d, _, _ in await self._run(self._drives)]

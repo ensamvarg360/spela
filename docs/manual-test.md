@@ -239,6 +239,12 @@ Also check:
 
 ## 17. Helper after a restart, checked copies, moving between drives
 
+- [ ] In **Settings → Consoles**, click **Remove helper** and confirm.
+  **Expect:** "The helper is stopped…", the console turns *Degraded* with "The helper is removed.", and `curl http://<PS5 IP>:7735/info` from the PC no longer connects. The activity log shows *Helper removed*.
+- [ ] Leave it alone for two minutes, with the ELF loader still running.
+  **Expect:** the helper isn't sent again: no notification on the PS5, still *Degraded*.
+- [ ] Click **Install helper**.
+  **Expect:** *Online* again. Restart the PS5 and run the jailbreak: the helper is sent by itself again, as before.
 - [ ] Restart the PS5, run the jailbreak so the ELF loader is up, and leave the app alone.
   **Expect:** within about a minute the console shows the helper's notification, and the console turns *Online*. The activity log shows *Helper installed* with `automatic: True`.
 - [ ] Install a folder dump.

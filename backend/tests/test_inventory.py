@@ -288,3 +288,37 @@ def test_helper_is_sent_again_after_a_reboot(monkeypatch):
             db.delete(a)
         db.delete(db.get(Console, con.id))
         db.commit()
+
+
+def test_remove_helper_stops_it_and_its_resending(monkeypatch):
+    """Remove helper stops the payload and keeps Spela from sending it again, until Install helper is clicked."""
+    from app import inventory
+    from app.consoles import ConsoleStatus, MockConsoleAdapter
+
+    class Stoppable(MockConsoleAdapter):
+        running, sent = True, 0
+
+        async def connect(self):
+            if Stoppable.running:
+                return await super().connect()
+            return ConsoleStatus("degraded", "Your PS5 is on, but the helper isn't running yet.", {"helper": "missing"})
+
+        async def stop_helper(self):
+            Stoppable.running = False
+
+        async def install_helper(self):
+            Stoppable.running, Stoppable.sent = True, Stoppable.sent + 1
+            return __version__
+
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: Stoppable(c))
+    monkeypatch.setattr(inventory.time, "monotonic", lambda: 1e9)  # never "tried a moment ago"
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        login(c)
+        con = c.post("/api/v1/consoles", json={"name": "Leaving", "ip_address": "10.0.0.3", "connection_type": "helper",
+                                               "port": 7735}).json()
+        url = f"/api/v1/consoles/{con['id']}"
+        r = c.delete(f"{url}/helper").json()
+        assert not r["auto_helper"] and r["status_message"] == "The helper is removed." and "Install helper" in r["status_fix"]
+        assert c.post(f"{url}/test-connection").json()["state"] == "degraded" and Stoppable.sent == 0  # not sent again
+        assert c.post(f"{url}/helper").json()["auto_helper"] and Stoppable.sent == 1  # clicked: on again
+        c.delete(url)

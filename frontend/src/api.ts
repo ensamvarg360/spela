@@ -95,6 +95,7 @@ export interface Console {
   state: ConsoleState;
   status_message: string;
   status_fix: string; // what the user can do about status_message
+  auto_helper: boolean; // false after Remove helper, until Install helper
 }
 
 export type ConsoleState = "online" | "standby" | "degraded" | "offline" | "disabled" | "unknown";

@@ -117,6 +117,9 @@ async def check(console_id: str) -> dict:
         except AdapterError as e:  # unsupported connection type, unreadable password
             record(console_id, "degraded", e.message, e.fix)
             return status[console_id]
+        if not console.auto_helper and result.state == "degraded" and result.helper_status.get("helper") == "missing":
+            result.message, result.fix = "The helper is removed.", ("Spela won't send it again until you click "
+                                                                  "Install helper in Settings → Consoles.")
         prev = record(console_id, result.state, result.message, result.fix)
         if result.state == "online":
             console.last_seen_at, console.helper_status = now(), result.helper_status
@@ -133,7 +136,7 @@ async def _auto_helper(db: Session, console: Console, adapter: ConsoleAdapter, r
     """The helper stops when the PS5 restarts. Once the console is on again and the jailbreak's ELF loader is up,
     this sends the helper (or replaces an outdated one) without the user clicking Install helper. True when it did.
     The console is on when it's online or degraded; offline and rest mode can't run payloads."""
-    if console.connection_type not in ("helper", "ftp") or result.state not in ("online", "degraded")             or result.helper_status.get("helper") == __version__:
+    if not console.auto_helper or console.connection_type not in ("helper", "ftp") or result.state not in ("online", "degraded")             or result.helper_status.get("helper") == __version__:
         return False
     if time.monotonic() - _auto_helper_at.get(console.id, float("-inf")) < AUTO_HELPER_SECONDS:
         return False
