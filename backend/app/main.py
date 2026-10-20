@@ -1136,24 +1136,19 @@ class ChecklistIn(BaseModel):
 @api.get("/setup", dependencies=[Depends(require_admin)])
 def setup_status(db: Session = Depends(get_db)):
     """How far first-run setup has come, worked out from what's already there, so the checklist picks up where the
-    user left off. `suggest` is a game that's ready to install, for the last step."""
+    user left off."""
     roots = list(db.scalars(select(LibraryRoot).where(LibraryRoot.enabled)))
     consoles = list(db.scalars(select(Console)))
-    suggest = db.scalar(select(Game).where(Game.kind == "game", Game.compatibility_status == "ready", Game.missing.is_(False))
-                        .order_by(Game.title).limit(1))
     return {
         "dismissed": config.SETUP_DISMISSED_FILE.exists(),
         "folder": any(r.kind == "game" and os.path.isdir(r.path) for r in roots),
         "scan": bool(db.scalar(select(Game.id).where(Game.kind == "game", Game.missing.is_(False)).limit(1))),
         "console": bool(consoles),
         "helper": any(inventory.status.get(c.id, {}).get("state") == "online" for c in consoles),
-        "install": bool(db.scalar(select(InstallJob.id).where(InstallJob.status == "success").limit(1))
-                        or db.scalar(select(InstalledGame.id).limit(1))),
         "console_app": any(c.helper_status.get("console_app") == __version__ for c in consoles),
         "wake": any(c.wake_secret_id for c in consoles),
         "dlc_folder": any(r.kind == "dlc" for r in roots),
         "viewer": config.VIEWER_PASSWORD_FILE.exists(),
-        "suggest": suggest and {"id": suggest.id, "title": suggest.title},
     }
 
 

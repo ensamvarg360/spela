@@ -13,12 +13,10 @@ export interface SetupState {
   scan: boolean;
   console: boolean;
   helper: boolean;
-  install: boolean;
   console_app: boolean;
   wake: boolean;
   dlc_folder: boolean;
   viewer: boolean;
-  suggest: { id: string; title: string } | null;
 }
 
 const STEPS = [
@@ -26,7 +24,6 @@ const STEPS = [
   ["scan", "Scan it"],
   ["console", "Add your PS5"],
   ["helper", "Start the helper"],
-  ["install", "Install a game"],
 ] as const;
 
 /** The setup state, re-read every 5 s: the console steps change on their own as the PS5 comes up. */
@@ -213,18 +210,13 @@ export default function Setup() {
       ? <p>Added: {consoles.map((c) => `${c.name} (${c.ip_address})`).join(", ")}. More in <a href="#/settings">Settings → Consoles</a>.</p>
       : <AddConsole onAdded={reload} />,
     helper: consoles.length ? <HelperStep consoles={consoles} reload={reload} /> : <p className="muted">Add your PS5 first.</p>,
-    install: <>
-      <p>Open a game, click <strong>Install</strong>, and follow the copy on the <a href="#/installed">Installed</a> page.
-        ShadowMountPlus puts it on the PS5's home screen when it's done.</p>
-      {state.suggest && <p>Try <a href={`#/game/${state.suggest.id}`}>{state.suggest.title}</a>, or pick one in the <a href="#/">Library</a>.</p>}
-    </>,
   };
 
   return (
     <div className="setup">
       <header className="setup-head">
         <h1>Get started</h1>
-        <p className="muted">{done === STEPS.length ? "You're all set." : `${done} of ${STEPS.length} done. Spela remembers where you got to.`}</p>
+        <p className="muted">{done === STEPS.length ? "You're all set. Open a game in your library and click Install." : `${done} of ${STEPS.length} done. Spela remembers where you got to.`}</p>
         <meter min={0} max={STEPS.length} value={done} aria-label="Setup progress" />
       </header>
 

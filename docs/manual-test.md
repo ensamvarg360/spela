@@ -44,7 +44,7 @@ Also have ready:
 - [ ] On first run (an empty data folder: set `DATA_DIR` to a new folder), choose an admin password of at least 8 characters.
   **Expect:** you're logged in and land on **Get started**, with *Before you start* open and step 1 *Add your game folder* open below it.
 - [ ] Open **Dashboard**.
-  **Expect:** a *Finish setting up Spela* card with *0 of 5 done*. **Continue setup** goes back to the guide.
+  **Expect:** a *Finish setting up Spela* card with *0 of 4 done*. **Continue setup** goes back to the guide.
 - [ ] **Log out**, then log in with a wrong password 5 times.
   **Expect:** the 6th attempt says to wait a minute, and how to reset a forgotten password.
 - [x] After a minute, log in with the right password.
@@ -105,7 +105,7 @@ Also have ready:
 - [ ] Before running the jailbreak (restart the PS5 if the loader is already up), look at step 4.
   **Expect:** *Degraded*, "Your PS5 is on, but the helper isn't running yet.", with "Run your jailbreak…" under it.
 - [ ] Run the jailbreak's ELF loader on the PS5 and wait, without clicking anything.
-  **Expect:** within about a minute the PS5 shows the helper's notification, the console changes to *Online*, and step 4 is ticked.
+  **Expect:** within about a minute the PS5 shows the helper's notification, the console changes to *Online*, and step 4 is ticked. The guide says *4 of 4 done* with **Open your library**, and the Dashboard's setup card is gone.
 - [ ] In **Settings → Consoles**, click **Reinstall helper**.
   **Expect:** "Helper v… is running on …", and the console stays *Online*.
 - [x] Check the games already on the console.
@@ -137,8 +137,6 @@ For each of the folder dump, the disc image and the archive:
   **Expect:** refused with "Already queued" or "Already installed".
 - [ ] When it finishes, check the PS5 home screen.
   **Expect:** the game's tile appears within about a minute, with its store logo within about 3 minutes, and it launches.
-- [ ] After the first install, open **Get started** and the **Dashboard**.
-  **Expect:** the guide says *5 of 5 done* with **Open your library**, and the Dashboard's setup card is gone.
 
 Also check:
 
@@ -239,14 +237,14 @@ Also check:
 
 ## 17. Helper after a restart, checked copies, moving between drives
 
+- [ ] Restart the PS5, run the jailbreak so the ELF loader is up, and leave the app alone.
+  **Expect:** within about a minute the console shows the helper's notification, and the console turns *Online*. The activity log shows *Helper installed* with `automatic: True`.
 - [ ] In **Settings → Consoles**, click **Remove helper** and confirm.
   **Expect:** "The helper is stopped…", the console turns *Degraded* with "The helper is removed.", and `curl http://<PS5 IP>:7735/info` from the PC no longer connects. The activity log shows *Helper removed*.
 - [ ] Leave it alone for two minutes, with the ELF loader still running.
   **Expect:** the helper isn't sent again: no notification on the PS5, still *Degraded*.
 - [ ] Click **Install helper**.
   **Expect:** *Online* again. Restart the PS5 and run the jailbreak: the helper is sent by itself again, as before.
-- [ ] Restart the PS5, run the jailbreak so the ELF loader is up, and leave the app alone.
-  **Expect:** within about a minute the console shows the helper's notification, and the console turns *Online*. The activity log shows *Helper installed* with `automatic: True`.
 - [ ] Install a folder dump.
   **Expect:** its message ends with *All N files checked*.
 - [ ] On the **Installed** page, click the arrows on a folder-dump game on the internal drive and move it to a USB drive.
