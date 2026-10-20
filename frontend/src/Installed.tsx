@@ -188,7 +188,7 @@ function Art({ g }: { g: InstalledGame }) {
 
 // Reuses the library badge colours.
 export const STATE_BADGE: Record<ConsoleState, string> = {
-  online: "ready", standby: "unknown", degraded: "needs_attention", offline: "incompatible", disabled: "unknown", unknown: "unknown",
+  online: "ready", standby: "needs_attention", degraded: "needs_attention", offline: "incompatible", disabled: "unknown", unknown: "unknown",
 };
 export const STATE_LABEL: Record<ConsoleState, string> = {
   online: "Online", standby: "Rest mode", degraded: "Degraded", offline: "Offline", disabled: "Disabled", unknown: "Not checked yet",
