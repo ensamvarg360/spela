@@ -788,8 +788,8 @@ class Storefront final : public app::Concept
                                "Install it again from Spela on your PC: open Settings, find this console under Consoles, and click Install PS5 app.");
         if (!loaded_)
             return error_.empty()
-                       ? draw_notice(list, "Connecting to your PC...", client_.server().url)
-                       : draw_notice(list, "Can't reach your PC", error_);
+                       ? draw_notice(list, "Connecting to your PC...", "Through the Spela helper on this PS5.")
+                       : draw_notice(list, "Can't reach Spela", error_);
         if (games_.empty())
             return draw_notice(list, "No games on your PC yet",
                                "On the PC, follow the setup guide on Spela's Dashboard, or add your games folder in Settings and scan it.");

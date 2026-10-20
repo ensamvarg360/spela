@@ -207,15 +207,15 @@ Also check:
 
 ## 16. PS5 app
 
-- [ ] With **Allow other devices on my network** unticked in the tray, click **Install PS5 app** in **Settings → Consoles**.
-  **Expect:** "The PS5 can't reach this PC yet.", with where to tick it. Tick it.
-- [ ] Click **Install PS5 app** in **Settings → Consoles**.
-  **Expect:** *Spela* appears on the PS5 home screen.
+- [ ] With **Allow other devices on my network** unticked in the tray, and Windows calling the network *Public*, click **Install PS5 app** in **Settings → Consoles**.
+  **Expect:** *Spela* appears on the PS5 home screen. No firewall prompt, no network question.
 - [ ] Open it on the PS5.
-  **Expect:** the Spela logo at the top left, and your PC library with covers.
-- [ ] Untick **Allow other devices on my network** in the tray (the app restarts), then press Triangle in the PS5 app.
-  **Expect:** a red line under the tabs starting "Can't reach your PC". Close and reopen the PS5 app: *Can't reach your PC* in the middle of the screen, with what to check, all of it on screen. Tick the option again.
-  **Expect:** once Spela has restarted, within about 10 seconds and without touching the PS5, the library is back.
+  **Expect:** the Spela logo at the top left, and your PC library with covers, through the helper.
+- [ ] Quit Spela on the PC (tray menu), then press Triangle in the PS5 app.
+  **Expect:** a red line under the tabs starting "Spela on your PC isn't answering". Close and reopen the PS5 app: *Can't reach Spela* in the middle of the screen, with that message. Start Spela on the PC again.
+  **Expect:** within about half a minute, without touching the PS5, the library is back.
+- [ ] Restart the PS5 and open the PS5 app before running the jailbreak.
+  **Expect:** *Can't reach Spela*, "The Spela helper isn't running on this PS5…". Run the jailbreak: within about a minute the helper is sent and the library comes back.
 - [ ] Press L1 and R1.
   **Expect:** the tabs switch between **Games**, **Installed**, **DLC** and **Cart**. DLC shows only under **DLC**, never as *Installed*.
 - [ ] With two install drives set on the PC, press Cross on a game that isn't installed, pick the other drive with the D-pad, and press Cross.

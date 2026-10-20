@@ -11,6 +11,8 @@
  *   GET  /copy                 {"running", "done", "total", "error", "to"} of that copy;  POST /copy/cancel stops it
  *   POST /install?p=<.pkg in a homebrew folder>&cid=<content ID>  starts the console's package installer (install_pkg(), untested)
  *   GET  /klog?s=<seconds>     the kernel log as it's written, for up to 120 seconds: the loader's reason when an app won't start
+ *   GET  /relay  POST /relay?id=<id>&status=<status>  the PS5 app's requests, taken and answered by the PC (relay_app())
+ *   any  /api/v1/console-app/...  from this console only, without the key: the PS5 app, passed on to the PC
  * Paths are percent-encoded. Every request needs this console's key in X-Storefront-Key (authorized()); even so,
  * writes are refused outside the homebrew folders (writable()), and /logo changes only the one file and database column it names. One thread per connection: /info still answers during a long upload.
  * Build with ./build.ps1; VERSION comes from backend/app/__init__.py. */
@@ -688,17 +690,177 @@ static int ip_host(const char *h) {
   return h[n] != ':' || strspn(h + n + 1, "0123456789") == strcspn(h + n + 1, "\r\n");
 }
 
-/* Whether the request may run. The PC app sends this console's key. Web pages are refused outright: a browser marks
- * its requests with Origin or Sec-Fetch-Site, and DNS rebinding shows as a name in Host. Only a copy of the helper on
- * this console (stop_old_copy(), which may hold an older key) may ask for /quit without the key. */
-static int authorized(int c, const char *head, int quit) {
-  const char *host = header(head, "Host"), *key = header(head, "X-Storefront-Key");
-  if (header(head, "Origin") || header(head, "Sec-Fetch-Site") || (host && !ip_host(host))) return 0;
+/* ---- The PS5 app's way to the PC ------------------------------------------------------------------------------
+ * The PS5 app on this console asks us (127.0.0.1) for /api/v1/console-app/..., the PC's API for it. We hold each
+ * request in a slot until the PC, which keeps asking GET /relay, takes it, runs it on itself and sends the answer
+ * with POST /relay. The PC only ever connects out to the console, so its firewall never gets in the way. */
+#define RELAY_SLOTS 8
+#define RELAY_PATH "/api/v1/console-app/"
+#define RELAY_BODY_MAX (16 << 20)
+static struct {
+  int used, taken, done, status;
+  unsigned id;
+  char method[8], path[1024], auth[192];
+  char *body;
+  size_t len;
+} slots[RELAY_SLOTS];
+static unsigned relay_next = 1;
+static pthread_mutex_t relay_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t relay_cond = PTHREAD_COND_INITIALIZER;  /* broadcast on every change; waiters recheck */
+
+/* Waits for relay_cond until `deadline`; 0 once it has passed. Called with relay_lock held. */
+static int relay_wait(const struct timespec *deadline) {
+  return pthread_cond_timedwait(&relay_cond, &relay_lock, deadline) != ETIMEDOUT;
+}
+
+static struct timespec relay_in(int ms) {
+  struct timespec t;
+  clock_gettime(CLOCK_REALTIME, &t);
+  t.tv_sec += ms / 1000;
+  t.tv_nsec += (long)(ms % 1000) * 1000000;
+  if (t.tv_nsec >= 1000000000) t.tv_sec++, t.tv_nsec -= 1000000000;
+  return t;
+}
+
+/* Sends `body` as a plain-text answer: the PS5 app reads the status line and everything after the headers. */
+static void relay_reply(int c, int status, const char *body, size_t len) {
+  char head[160];
+  int n = snprintf(head, sizeof head, "HTTP/1.0 %d Relay\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                   "Content-Length: %zu\r\nConnection: close\r\n\r\n", status, len);
+  if (!send_all(c, head, n)) send_all(c, body, len);
+}
+
+/* A request from the PS5 app: queued for the PC, then answered with what the PC sent. The app waits 5 seconds for an
+ * answer, so a PC that doesn't take it within 3 is told about in words instead. */
+static void relay_app(int c, const char *method, const char *path, const char *head) {
+  static const char no_pc[] = "Spela on your PC isn't answering. Check that it's running and that this PS5 is added "
+                              "under Settings, Consoles.";
+  static const char busy[] = "Too many requests at once. Try again.";
+  const char *auth = header(head, "Authorization");
+  pthread_mutex_lock(&relay_lock);
+  int i = 0;
+  while (i < RELAY_SLOTS && slots[i].used) i++;
+  if (i == RELAY_SLOTS) {
+    pthread_mutex_unlock(&relay_lock);
+    relay_reply(c, 503, busy, sizeof busy - 1);
+    return;
+  }
+  unsigned id = relay_next++;
+  memset(&slots[i], 0, sizeof slots[i]);
+  slots[i].used = 1;
+  slots[i].id = id;
+  snprintf(slots[i].method, sizeof slots[i].method, "%s", method);
+  snprintf(slots[i].path, sizeof slots[i].path, "%s", path);
+  if (auth) snprintf(slots[i].auth, sizeof slots[i].auth, "%.*s", (int)strcspn(auth, "\r\n"), auth);
+  pthread_cond_broadcast(&relay_cond);
+  struct timespec pickup = relay_in(3000), answer = relay_in(4500);
+  while (!slots[i].done && relay_wait(slots[i].taken ? &answer : &pickup));
+  int status = slots[i].done ? slots[i].status : 0;
+  char *body = slots[i].body;
+  size_t len = slots[i].len;
+  slots[i].used = 0;  /* a late answer from the PC finds no slot and is dropped */
+  slots[i].body = NULL;
+  pthread_mutex_unlock(&relay_lock);
+  if (status) relay_reply(c, status, body, len);
+  else relay_reply(c, 503, no_pc, sizeof no_pc - 1);
+  free(body);
+}
+
+/* GET /relay (the PC): the oldest request nobody has taken, as JSON, waiting up to 20 seconds for one; 204 if none. */
+static void relay_take(int c) {
+  struct timespec until = relay_in(20000);
+  pthread_mutex_lock(&relay_lock);
+  for (;;) {
+    int pick = -1;
+    for (int i = 0; i < RELAY_SLOTS; i++)
+      if (slots[i].used && !slots[i].taken && (pick < 0 || slots[i].id < slots[pick].id)) pick = i;
+    if (pick >= 0) {
+      slots[pick].taken = 1;
+      pthread_cond_broadcast(&relay_cond);
+      buf_t b = {0};
+      put(&b, "{\"id\":%u,\"method\":", slots[pick].id);
+      put_str(&b, slots[pick].method);
+      put(&b, ",\"path\":");
+      put_str(&b, slots[pick].path);
+      put(&b, ",\"auth\":");
+      put_str(&b, slots[pick].auth);
+      put(&b, "}");
+      pthread_mutex_unlock(&relay_lock);
+      reply(c, "200 OK", &b);
+      free(b.s);
+      return;
+    }
+    if (!relay_wait(&until)) break;
+  }
+  pthread_mutex_unlock(&relay_lock);
+  buf_t empty = {0};
+  reply(c, "204 No Content", &empty);
+}
+
+/* POST /relay?id=<id>&status=<HTTP status> (the PC): the answer to a request it took, as the body. */
+static void relay_answer(int c, const char *query, const char *head, const char *body, size_t have) {
+  char id_s[16] = "", status_s[8] = "";
+  long long len = content_length(head);
+  if (!query || !param(query, "id", id_s, sizeof id_s) || !param(query, "status", status_s, sizeof status_s)) {
+    fail(c, "400 Bad Request", "id and status are needed");
+    return;
+  }
+  if (len < 0 || len > RELAY_BODY_MAX) {
+    fail(c, "413 Content Too Large", "the answer needs a Content-Length of at most 16 MB");
+    return;
+  }
+  char *data = malloc(len ? len : 1);
+  size_t got = have > (size_t)len ? (size_t)len : have;
+  if (data) memcpy(data, body, got);
+  while (data && got < (size_t)len) {
+    ssize_t r = recv(c, data + got, len - got, 0);
+    if (r <= 0) {
+      free(data);
+      data = NULL;
+    } else {
+      got += r;
+    }
+  }
+  if (!data) {
+    fail(c, "400 Bad Request", "the answer was cut off");
+    return;
+  }
+  unsigned id = (unsigned)strtoul(id_s, NULL, 10);
+  pthread_mutex_lock(&relay_lock);
+  int i = 0;
+  while (i < RELAY_SLOTS && !(slots[i].used && slots[i].taken && !slots[i].done && slots[i].id == id)) i++;
+  if (i < RELAY_SLOTS) {
+    slots[i].status = atoi(status_s);
+    slots[i].body = data;
+    slots[i].len = len;
+    slots[i].done = 1;
+    pthread_cond_broadcast(&relay_cond);
+  }
+  pthread_mutex_unlock(&relay_lock);
+  if (i < RELAY_SLOTS) {
+    ok(c);
+  } else {
+    free(data);
+    fail(c, "404 Not Found", "the PS5 app stopped waiting");
+  }
+}
+
+/* Whether the request came from this console itself. */
+static int from_loopback(int c) {
   struct sockaddr_in peer;
   socklen_t len = sizeof peer;
-  if (quit && !getpeername(c, (struct sockaddr *)&peer, &len) && peer.sin_family == AF_INET &&
-      peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK))
-    return 1;
+  return !getpeername(c, (struct sockaddr *)&peer, &len) && peer.sin_family == AF_INET &&
+         peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK);
+}
+
+/* Whether the request may run. The PC app sends this console's key. Web pages are refused outright: a browser marks
+ * its requests with Origin or Sec-Fetch-Site, and DNS rebinding shows as a name in Host. Only this console itself may
+ * ask without the key (`local`): for /quit (stop_old_copy(), which may hold an older key) and the PS5 app's requests,
+ * which carry the PC's pairing key for the PC to check. */
+static int authorized(int c, const char *head, int local) {
+  const char *host = header(head, "Host"), *key = header(head, "X-Storefront-Key");
+  if (header(head, "Origin") || header(head, "Sec-Fetch-Site") || (host && !ip_host(host))) return 0;
+  if (local && from_loopback(c)) return 1;
   const volatile char *want = KEY_SLOT + sizeof KEY_PREFIX - 1;
   if (!key || want[0] == '?' || strcspn(key, "\r\n \t") != KEY_LEN) return 0;  /* unpatched: the placeholder is public */
   unsigned char diff = 0;
@@ -723,8 +885,21 @@ static void handle(int c) {
   if (query) *query++ = 0;
   int get = !strcmp(method, "GET"), post = !strcmp(method, "POST"), has_path = query && param(query, "p", path, sizeof path) && path[0] == '/';
 
-  if (!authorized(c, head, post && !strcmp(target, "/quit"))) {
+  int app = !strncmp(target, RELAY_PATH, sizeof RELAY_PATH - 1);  /* the PS5 app, for the PC */
+  if (!authorized(c, head, (post && !strcmp(target, "/quit")) || app)) {
     fail(c, "401 Unauthorized", "wrong key: install the helper again from the PC app");
+  } else if (app) {
+    if (!from_loopback(c)) {  /* the PC's own API is on the PC: nobody else reaches it through us */
+      fail(c, "403 Forbidden", "only the PS5 app on this console can ask for this");
+    } else {
+      char full[1024];
+      snprintf(full, sizeof full, "%s%s%s", target, query ? "?" : "", query ? query : "");
+      relay_app(c, method, full, head);
+    }
+  } else if (get && !strcmp(target, "/relay")) {
+    relay_take(c);
+  } else if (post && !strcmp(target, "/relay")) {
+    relay_answer(c, query, head, end + 4, got - (end + 4 - head));
   } else if (get && !strcmp(target, "/info")) {
     buf_t b = {0};
     info(&b);

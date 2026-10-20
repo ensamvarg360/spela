@@ -69,7 +69,9 @@ Browse them on your PC, install them to your console over your home network, rem
    - run your jailbreak's ELF loader, and Spela sends its helper to the PS5 by itself
 
    You can leave halfway: the guide remembers where you got to, and stays on the Dashboard until you're done. When something goes wrong, it says what to check. Then open a game and click **Install**.
-3. Optional: tick **Allow other devices on my network** in the tray menu, then click **Install PS5 app** under **Settings → Consoles** to get Spela on the console's home screen.
+3. Optional: click **Install PS5 app** under **Settings → Consoles** to get Spela on the console's home screen.
+
+Nothing needs changing in Windows: the PC only ever connects out to the PS5, and the PS5 app reaches the PC through the helper, so no firewall rule or network setting is involved.
 
 Everything Spela knows is kept in `%LOCALAPPDATA%\Spela`. Your game files never are. The full walkthrough, backups, and a troubleshooting table are in the **[user guide](docs/user-guide.md)**.
 

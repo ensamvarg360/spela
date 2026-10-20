@@ -7,7 +7,7 @@ import time
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from . import __version__, config, credentials
+from . import __version__, config, credentials, relay
 from .consoles import TITLE_ID, AdapterError, ConsoleAdapter, ConsoleStatus, get_adapter
 from .database import SessionLocal
 from .models import AuditLog, Console, Drive, Game, InstalledGame, now
@@ -94,6 +94,7 @@ def forget(db: Session, console_id: str):
     db.execute(delete(InstalledGame).where(InstalledGame.console_id == console_id))
     db.execute(delete(Drive).where(Drive.console_id == console_id))
     status.pop(console_id, None)
+    relay.forget(console_id)
 
 
 def record(console_id: str, state: str, message: str = "", fix: str = "") -> dict:
@@ -124,6 +125,8 @@ async def check(console_id: str) -> dict:
         if result.state == "online":
             console.last_seen_at, console.helper_status = now(), result.helper_status
             db.commit()
+            if console.connection_type in ("helper", "ftp"):  # the helper runs: the PS5 app reaches the PC through it
+                relay.ensure(console.id, console.ip_address)
             if prev.get("state") != "online":
                 try:
                     await refresh(db, console)

@@ -3,7 +3,6 @@ import hashlib
 import hmac
 import ipaddress
 import os
-import socket
 import time
 import urllib.parse
 from contextlib import asynccontextmanager
@@ -22,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import __version__, config, credentials, inventory, jobs, logos, migrations, scanner
-from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError, discover, send_wake, wake_credential
+from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError, HelperConsoleAdapter, discover, send_wake, wake_credential
 from .database import SessionLocal, engine, get_db
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id, now
 
@@ -1308,25 +1307,15 @@ def console_removal(removal_id: str, c: Console = Depends(console_from_token)):
     return "\t".join(map(_field, (r["status"], int(r["tile_left"]), r["message"]))) + "\n"
 
 
-def _address_seen_by(ip: str) -> str:
-    """This PC's address on the network card that reaches `ip`."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.connect((ip, 9))  # UDP connect sends nothing; it only picks the route
-        return s.getsockname()[0]
-
-
 @api.post("/consoles/{console_id}/console-app", response_model=ConsoleOut)
 async def install_console_app(console_id: str, db: Session = Depends(get_db)):
-    """Puts the PS5 app on the console (or updates it), paired with this PC."""
+    """Puts the PS5 app on the console (or updates it), paired with this PC. The app asks the helper on its own
+    console, which passes its requests on to this PC (relay.py), so it needs no address of the PC."""
     c = db.get(Console, console_id) or _not_found()
-    if config.HOST == "127.0.0.1":
-        raise HTTPException(409, {"error": "lan_off", "message": "The PS5 can't reach this PC yet.",
-                                  "fix": "Right-click Spela's tray icon, tick \"Allow other devices on my network\", then try again. "
-                                         "If Windows calls your network Public, switch it to Private first."})
     if not CONSOLE_APP_DIR.is_dir():
         raise HTTPException(409, {"error": "not_bundled", "message": "This build doesn't include the PS5 app."})
     files = {p.relative_to(CONSOLE_APP_DIR).as_posix(): p.read_bytes() for p in CONSOLE_APP_DIR.rglob("*") if p.is_file()}
-    files["assets/server.txt"] = (f"url=http://{_address_seen_by(c.ip_address)}:{config.PORT}\n"
+    files["assets/server.txt"] = (f"url=http://127.0.0.1:{HelperConsoleAdapter.HELPER_PORT}\n"
                                   f"token={console_app_token(c.id)}\n").encode()
     files["assets/version.txt"] = __version__.encode()
     try:

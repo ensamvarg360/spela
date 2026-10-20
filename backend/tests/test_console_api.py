@@ -99,10 +99,17 @@ def test_install_console_app_endpoint(tmp_path, monkeypatch):
     with TestClient(app, base_url="http://127.0.0.1") as client:
         login(client)
         cid = _console(client)
-        monkeypatch.setattr(config, "HOST", "127.0.0.1")
-        assert client.post(f"/api/v1/consoles/{cid}/console-app").json()["error"] == "lan_off"
-        monkeypatch.setattr(config, "HOST", "0.0.0.0")
+        sent = {}
+        real = consoles.MockConsoleAdapter.install_console_app
+
+        async def keep(self, files):
+            sent.update(files)
+            await real(self, files)
+        monkeypatch.setattr(consoles.MockConsoleAdapter, "install_console_app", keep)
+        monkeypatch.setattr(config, "HOST", "127.0.0.1")  # other devices not allowed: the PS5 app still works
         assert client.post(f"/api/v1/consoles/{cid}/console-app").status_code == 200
+        # it asks the helper on its own console, which passes its requests on to the PC (relay.py)
+        assert sent["assets/server.txt"].decode().startswith("url=http://127.0.0.1:7735\ntoken=")
 
 
 def test_home_logo(tmp_path, monkeypatch):
@@ -267,3 +274,59 @@ def test_ftp_console_app_upload(ps5):  # noqa: F811
     status = asyncio.run(a.connect()).helper_status
     assert status["console_app"] == "9.9.9"
     assert consoles.CONSOLE_APP_TITLE_ID not in {g.title_id for g in asyncio.run(a.scan_installed_games())}
+
+
+def test_relay_answers_the_ps5_app_through_the_helper(tmp_path, monkeypatch):
+    """The PC takes a PS5 app request from the helper (GET /relay) and sends back its own API's answer (POST /relay)."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from app import relay
+
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        cid = _console(client)
+        token = console_app_token(cid)
+        answers, jobs_left = [], [{"id": 7, "method": "GET", "path": "/api/v1/console-app/library", "auth": f"Bearer {token}"}]
+
+        class Helper(BaseHTTPRequestHandler):
+            def do_GET(self):
+                assert self.headers["X-Storefront-Key"] == consoles.helper_key(cid)
+                if jobs_left:
+                    body = json.dumps(jobs_left.pop()).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_response(204)
+                    self.end_headers()
+
+            def do_POST(self):
+                answers.append((self.path, self.rfile.read(int(self.headers["Content-Length"]))))
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *a):
+                pass
+
+        helper = ThreadingHTTPServer(("127.0.0.1", 0), Helper)
+        threading.Thread(target=helper.serve_forever, daemon=True).start()
+        # the PC's API is this test client here, not a server on config.PORT
+        monkeypatch.setattr(relay, "_forward", lambda method, path, auth: (
+            (r := client.request(method, path, headers={"Authorization": auth})).status_code, r.content))
+        try:
+            port = helper.server_address[1]
+            assert relay.serve_one("127.0.0.1", consoles.helper_key(cid), port)
+            assert not relay.serve_one("127.0.0.1", consoles.helper_key(cid), port)  # nothing waiting
+        finally:
+            helper.shutdown()
+        path, body = answers[0]
+        expected = client.get("/api/v1/console-app/library", headers={"Authorization": f"Bearer {token}"}).content
+        assert path == "/relay?id=7&status=200" and body == expected
+
+
+def test_relay_reaches_only_the_ps5_app_api():
+    from app import relay
+    assert relay._forward("GET", "/api/v1/games", "")[0] == 403  # refused before anything is asked

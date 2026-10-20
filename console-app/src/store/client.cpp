@@ -122,7 +122,9 @@ std::string unpaired_message()
            "Consoles, and click Update PS5 app.";
 }
 
-const char *const kCantReach = "Can't reach your PC. Check that Spela is running there.";
+// The app asks the helper on this console (server.txt: 127.0.0.1:7735), which passes requests on to the PC.
+// No answer at all means the helper isn't running; a PC that doesn't answer is a 503 with the helper's reason.
+const char *const kCantReach = "The Spela helper isn't running on this PS5. Run your jailbreak: Spela sends it again.";
 
 } // namespace
 
@@ -272,9 +274,13 @@ void Client::fetch_library()
     else if (r.status == 0)
     {
         // First sentence first: once the list is up, a failed poll shows this cut to one line.
-        error_ = "Can't reach your PC at " + server_.url + ". Check that Spela is running there, and that "
-                 "\"Allow other devices on my network\" is ticked in its tray menu. If Windows calls the network "
-                 "Public, switch it to Private. If the PC's address changed, click Update PS5 app in Spela's Settings.";
+        error_ = "The Spela helper isn't running on this PS5. It stops whenever the PS5 restarts: run your "
+                 "jailbreak's ELF loader, and Spela on your PC sends the helper again within a minute, as long as "
+                 "it's running there.";
+    }
+    else if (r.status == 503) // the helper's own words: Spela on the PC isn't taking requests
+    {
+        error_ = r.body;
     }
     else
     {

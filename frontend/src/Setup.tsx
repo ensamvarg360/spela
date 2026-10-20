@@ -160,7 +160,7 @@ const NEEDS = [
 ];
 
 const OPTIONAL: [keyof SetupState, string, ReactNode][] = [
-  ["console_app", "PS5 app", <>Browse and install from the couch with the controller. Tick <em>Allow other devices on my network</em> in Spela's tray menu, then <em>Install PS5 app</em> in <a href="#/settings">Settings → Consoles</a>.</>],
+  ["console_app", "PS5 app", <>Browse and install from the couch with the controller: <em>Install PS5 app</em> in <a href="#/settings">Settings → Consoles</a>.</>],
   ["wake", "Wake from rest mode", <>Save the PS5's Remote Play key under <a href="#/settings">Settings → Consoles → Edit</a> to wake it from here.</>],
   ["dlc_folder", "DLC folder", <>If you keep DLC in its own folder, add it in <a href="#/settings">Settings</a>. DLC inside game folders is found anyway.</>],
   ["viewer", "View-only password", <>Let a phone or a guest browse without being able to change anything. In <a href="#/settings">Settings</a>.</>],
