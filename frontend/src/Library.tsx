@@ -331,7 +331,7 @@ function Tile({ game, tooNew, onChange, picked, onPick }: { game: Game; tooNew: 
       {/* poster-only cards: the name box (and its badge) is hidden, so these stand in for it */}
       {(game.installed || tooNew) && <span className="flags" aria-hidden>
         {game.installed && <i className="flag on-console" title="Installed on a console">
-          <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+          <svg viewBox="0 0 24 24"><path d="M3 13.5 5.5 6h13l2.5 7.5v4.5H3zM3 13.5h18M16.5 15.75h.01" /></svg>
         </i>}
         {tooNew && <i className="flag too-new" title="Doesn't run on this console's firmware">
           <svg viewBox="0 0 24 24"><path d="M12 2.5 2.5 18.5h19zM12 8.5v4.5M12 16v.01" /></svg>
