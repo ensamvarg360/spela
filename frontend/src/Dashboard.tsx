@@ -102,7 +102,7 @@ export default function Dashboard() {
     loadGames();
     loadProblems();
     loadConsoles();
-    const t = setInterval(loadConsoles, 15000); // the backend checks every 15 s
+    const t = setInterval(() => (loadConsoles(), loadProblems()), 15000); // the backend checks every 15 s
     return () => clearInterval(t);
   }, []);
 

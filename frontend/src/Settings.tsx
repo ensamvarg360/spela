@@ -3,6 +3,7 @@ import Problem from "./Problem";
 import { api, type Game, type Kind, type Root, type ScanStatus } from "./api";
 import AuditLog from "./AuditLog";
 import { useScan } from "./Library";
+import { toast, toastError } from "./Toast";
 import Consoles from "./Consoles";
 
 interface Listing { path: string; parent: string | null; dirs: string[] }
@@ -85,16 +86,15 @@ export function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: 
 function ViewOnly() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   useEffect(() => { api<{ enabled: boolean }>("/auth/viewer").then((r) => setEnabled(r.enabled), () => {}); }, []);
 
   async function save(pw: string | null) {
     try {
       setEnabled((await api<{ enabled: boolean }>("/auth/viewer", { json: { password: pw } })).enabled);
       setPassword("");
-      setMsg({ text: pw ? "Saved. Devices using an older view-only password were logged out." : "View-only access is off. Devices using it were logged out." });
+      toast(pw ? "Saved. Devices using an older view-only password were logged out." : "View-only access is off. Devices using it were logged out.");
     } catch (e) {
-      setMsg({ text: (e as Error).message, error: true });
+      toastError(e);
     }
   }
 
@@ -109,7 +109,6 @@ function ViewOnly() {
         <button type="submit">{enabled ? "Change" : "Turn on"}</button>
         {enabled && <button type="button" className="link" onClick={() => save(null)}>Turn off</button>}
       </form>
-      {msg && <p className={msg.error ? "error" : "muted"} role="status">{msg.text}</p>}
     </section>
   );
 }

@@ -39,7 +39,13 @@ export default function AuditLog() {
       (page) => (setRows((r) => (before ? [...r, ...page] : page)), setMore(page.length === 100)),
       (e) => setError(e.message),
     );
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    // New rows on top, older pages already loaded kept below them.
+    const t = setInterval(() => api<AuditEntry[]>("/maintenance/audit-logs").then(
+      (page) => setRows((r) => [...page, ...r.filter((x) => x.created_at < page[page.length - 1]?.created_at)]), () => {}), 3000);
+    return () => clearInterval(t);
+  }, []);
 
   return (
     <section className="card">

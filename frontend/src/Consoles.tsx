@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import Problem from "./Problem";
 import { api, appVersion, needsOnline, type Console } from "./api";
 import { STATE_BADGE, STATE_LABEL, when } from "./Installed";
+import { toast } from "./Toast";
 
 /** Saves the console's RP-RegistKey right where it's missing, so waking doesn't need a trip through Edit. */
 function WakeKey({ c, onSaved }: { c: Console; onSaved: () => void }) {
@@ -193,7 +194,6 @@ export default function Consoles() {
   const [editing, setEditing] = useState<string | null>(null); // console id, "new", or null
   const [error, setError] = useState<{ e: unknown; retry?: () => void } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
   const [version, setVersion] = useState("");
   useEffect(() => { appVersion.then(setVersion); }, []);
 
@@ -213,18 +213,19 @@ export default function Consoles() {
       "are deleted. If it's open on the PS5, close it first. Install PS5 app puts it back.")) return;
     setBusy(true);
     setError(null);
-    setNotice("");
     try {
       if (path === "remove-console-app") {
-        setNotice((await api<{ message: string }>(`/consoles/${c.id}/console-app`, { method: "DELETE" })).message);
+        toast((await api<{ message: string }>(`/consoles/${c.id}/console-app`, { method: "DELETE" })).message);
         await load();
         return;
       }
       const after = await api<Console>(`/consoles/${c.id}/${removing ? "helper" : path}`, { method: removing ? "DELETE" : "POST" });
-      if (removing) setNotice(`The helper is stopped on ${c.name}, and Spela won't send it again until you click Install helper.`);
-      if (path === "helper") setNotice(`Helper v${after.helper_status.helper} is running on ${c.name}.`);
+      if (path === "test-connection") toast(`${c.name}: ${STATE_LABEL[after.state]}. ${after.status_message}`, after.state !== "online");
+      if (path === "rescan") toast(`Refreshed what's installed on ${c.name}.`);
+      if (removing) toast(`The helper is stopped on ${c.name}, and Spela won't send it again until you click Install helper.`);
+      if (path === "helper") toast(`Helper v${after.helper_status.helper} is running on ${c.name}.`);
       if (path === "console-app")
-        setNotice(`PS5 app v${after.helper_status.console_app} copied to ${c.name} and checked file by file. If it was open on the PS5, close and reopen it. ` +
+        toast(`PS5 app v${after.helper_status.console_app} copied to ${c.name} and checked file by file. If it was open on the PS5, close and reopen it. ` +
           "If the PS5 says it can't start it, remove it in ShadowMount+, restart ShadowMount+ (or the PS5), then install again.");
       await load();
     } catch (e) {
@@ -270,7 +271,6 @@ export default function Consoles() {
           </div>
         </div>
       ) : <button onClick={() => setEditing("new")}>Add console</button>}
-      {notice && <p role="status">{notice}</p>}
       <Problem error={error?.e} retry={error?.retry} />
     </section>
   );

@@ -456,3 +456,11 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .add-option .edit.picker { margin: 0; padding: 0; border: 0; background: none; }
 .found { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
 .found li { display: grid; grid-template-columns: 1fr auto auto; gap: 0.6rem; align-items: center; padding: 0.5rem 0.6rem; background: var(--surface-2); border-radius: 6px; }
+
+.toasts { position: fixed; right: 1rem; bottom: 1rem; z-index: 100; display: grid; gap: 0.5rem; width: min(26rem, calc(100vw - 2rem)); }
+.toast { display: flex; gap: 0.75rem; align-items: start; justify-content: space-between; background: var(--surface-2); border: 1px solid var(--border);
+  border-left: 3px solid var(--ready); border-radius: 8px; padding: 0.7rem 0.9rem; box-shadow: 0 8px 24px rgb(0 0 0 / 0.45); animation: toast-in 0.18s ease-out; }
+.toast.bad { border-left-color: var(--bad); }
+.toast button.link { text-decoration: none; font-size: 1.1rem; line-height: 1; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(0.5rem); } }
+@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }

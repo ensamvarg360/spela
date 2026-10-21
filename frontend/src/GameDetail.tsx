@@ -3,6 +3,7 @@ import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STAT
 import { cart, useCart } from "./Cart";
 import { Cover } from "./Library";
 import { Art, MoveDialog, RemoveDialog, when } from "./Installed";
+import { toast, toastError } from "./Toast";
 
 /** A titled card on the detail page; collapsible unless `open` is omitted-and-fixed via `fixed`. */
 function Section({ title, open = true, fixed, children }: { title?: string; open?: boolean; fixed?: boolean; children: React.ReactNode }) {
@@ -29,13 +30,11 @@ function Install({ game: opened }: { game: Game }) {
   const { consoles, cid, setCid, console: target } = useConsoles();
   const [drives, setDrives] = useState<Drive[]>([]);
   const [did, setDid] = useState("");
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [installed, setInstalled] = useState<InstalledGame | null>(null);
   const carted = useCart().includes(game.id);
 
   useEffect(() => {
     setDid("");
-    setMsg(null);
     if (cid) api<Drive[]>(`/consoles/${cid}/drives`).then((ds) => setDrives(ds.filter((d) => d.is_install_target)), () => setDrives([]));
   }, [cid]);
   useEffect(() => { // already on this console? Then the button moves it to the chosen drive instead
@@ -66,9 +65,9 @@ function Install({ game: opened }: { game: Game }) {
       "Close the game on the PS5 first. To undo it, remove the game and install it again.")) return;
     try {
       await api<Job>(`/consoles/${cid}/install`, { json: { game_id: game.id, drive_id: did || null } });
-      setMsg({ text: "Queued. Follow it on the Installed page." });
+      toast(<>Queued {game.title}. <a href="#/installed">Follow it on the Installed page</a></>);
     } catch (e) {
-      setMsg({ text: (e as Error).message, error: true });
+      toastError(e);
     }
   }
 
@@ -76,9 +75,9 @@ function Install({ game: opened }: { game: Game }) {
     if (!installed || !confirm(`Move ${game.title} to the chosen drive? The console copies it, checks the copy, then deletes the original. Close the game on the PS5 first.`)) return;
     try {
       await api(`/consoles/${cid}/move`, { json: { installed_game_id: installed.id, drive_id: did } });
-      setMsg({ text: "Moving. Follow it on the Installed page." });
+      toast(<>Moving {game.title}. <a href="#/installed">Follow it on the Installed page</a></>);
     } catch (e) {
-      setMsg({ text: (e as Error).message, error: true });
+      toastError(e);
     }
   }
 
@@ -115,7 +114,6 @@ function Install({ game: opened }: { game: Game }) {
         {carted ? "In cart ✓" : "Add to cart"}
       </button>
       {carted && <a href="#/cart">Open cart</a>}
-      {msg && <span className={msg.error ? "error" : "muted"} role="status">{msg.text}{!msg.error && <> <a href="#/installed">Open</a></>}</span>}
     </div>
   );
 }
@@ -124,21 +122,16 @@ function Install({ game: opened }: { game: Game }) {
  * `consoleId`: on that console only; else on every console the game is on. */
 function HomeLogo({ url, consoleId }: { url: string; consoleId?: string }) {
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const { consoles } = useConsoles();
   const target = consoles.find((c) => (consoleId ? c.id === consoleId : c.state === "online"));
 
   async function apply() {
     setBusy(true);
-    setMsg(null);
     try {
       const results = await api<{ console: string; ok: boolean; message: string }[]>(url, { method: "POST" });
-      setMsg({
-        text: results.length === 1 ? results[0].message : results.map((r) => `${r.console}: ${r.message}`).join(" "),
-        error: results.some((r) => !r.ok),
-      });
+      toast(results.length === 1 ? results[0].message : results.map((r) => `${r.console}: ${r.message}`).join(" "), results.some((r) => !r.ok));
     } catch (e) {
-      setMsg({ text: (e as Error).message, error: true });
+      toastError(e);
     } finally {
       setBusy(false);
     }
@@ -148,7 +141,6 @@ function HomeLogo({ url, consoleId }: { url: string; consoleId?: string }) {
     <div className="toolbar">
       {/* applies on every console the game is on; ponytail: any online console enables it, the result names the ones that failed */}
       <button className="secondary" onClick={apply} {...needsOnline(target)} disabled={busy || target?.state !== "online"}>{busy ? "Setting logo…" : "Show logo on PS5 home screen"}</button>
-      {msg && <span className={msg.error ? "error" : "muted"} role="status">{msg.text}</span>}
     </div>
   );
 }
@@ -351,13 +343,13 @@ const BACK: Record<string, string> = { "/": "Library", "/dlc": "DLC", "/installe
 export default function GameDetail({ id, from }: { id: string; from: string | null }) {
   const [game, setGame] = useState<Game | null>(null);
   const [draft, setDraft] = useState<Partial<Game>>({});
-  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    api<Game>(`/games/${id}`).then(setGame, (e) => setMsg({ text: e.message, error: true }));
+    api<Game>(`/games/${id}`).then(setGame, (e) => setError(e.message));
   }, [id]);
 
-  if (!game) return msg ? <p className="error" role="alert">{msg.text}</p> : <p className="muted">Loading…</p>;
+  if (!game) return error ? <p className="error" role="alert">{error}</p> : <p className="muted">Loading…</p>;
 
   const val = <K extends keyof Game>(k: K) => (k in draft ? draft[k] : game[k]) as Game[K];
   const set = (k: keyof Game, v: unknown) => setDraft((d) => ({ ...d, [k]: v === "" ? null : v }));
@@ -366,9 +358,9 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
     try {
       setGame(await p);
       setDraft({});
-      setMsg({ text: ok });
+      toast(ok);
     } catch (e) {
-      setMsg({ text: (e as Error).message, error: true });
+      toastError(e);
     }
   }
 
@@ -498,7 +490,6 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
           </fieldset>
           {!session.readOnly && <div className="actions">
             <button type="submit" disabled={!Object.keys(draft).length}>Save</button>
-            {msg && <span className={msg.error ? "error" : "muted"} role="status">{msg.text}</span>}
           </div>}
         </form>
 

@@ -8,6 +8,7 @@ import GameDetail, { ConsoleGameDetail } from "./GameDetail";
 import Installed from "./Installed";
 import Settings from "./Settings";
 import Setup from "./Setup";
+import Toasts from "./Toast";
 import wordmark from "./wordmark.png";
 
 // ponytail: hash routing, seven routes. Swap in react-router when nested routes show up.
@@ -90,6 +91,7 @@ export default function App() {
           : route === "/setup" && !session.readOnly ? <Setup />
           : dlc ? <Library key="dlc" kind="dlc" view={dlcView} setView={setDlcView} /> : <Library key="game" kind="game" view={view} setView={setView} />}
       </main>
+      <Toasts />
     </>
   );
 }
