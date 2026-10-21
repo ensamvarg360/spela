@@ -1432,11 +1432,11 @@ async def remove_console_app(console_id: str, db: Session = Depends(get_db)):
         db.add(AuditLog(action="console_app_remove", console_id=c.id, result="failed", details={"error": e.code}))
         db.commit()
         raise _adapter_failed(502, e)
-    db.add(AuditLog(action="console_app_remove", console_id=c.id, result="success", details={"tile_left": not tile.ok}))
+    message = f"The PS5 app is removed from {c.name}. " + jobs.tile_note(tile)
+    db.add(AuditLog(action="console_app_remove", console_id=c.id, result="success",
+                    details={"tile_left": not tile.ok, "message": message}))
     db.commit()
-    return {"tile_left": not tile.ok, "message": f"The PS5 app is removed from {c.name}" + (
-        ", and its tile is gone from the home screen." if tile.ok else
-        f". Its tile is still on the home screen: delete it there (Options, then Delete). It won't come back. ({tile.message})")}
+    return {"tile_left": not tile.ok, "message": message}
 
 
 def _not_found():

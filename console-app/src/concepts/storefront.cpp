@@ -944,13 +944,13 @@ class Storefront final : public app::Concept
         const ui::Fonts &fonts = context_.fonts;
         const std::string title = done_title_.empty() ? std::string("the game") : done_title_;
         const Color edge = !done_.ok ? kBad : done_.tile_left ? kWarn : kGood;
-        const Rect box = draw_dialog(list, glass, 340, 400, edge);
+        const Rect box = draw_dialog(list, glass, 270, 540, edge); // room for 8 lines: the tile's reason comes last
         const float x = box.x + 48;
         const float width = box.w - 96;
         const float y = ui::paragraph(list, fonts.semibold, (done_.ok ? "Removed " : "Couldn't remove ") + title,
                                       x, box.y + 76, 36, width, 46, done_.ok ? kInk : kBad, 2);
         ui::paragraph(list, fonts.regular, done_.message, x, y + 12, 26, width, 38,
-                      done_.ok && !done_.tile_left ? kMuted : done_.ok ? kWarn : kBad, 6);
+                      done_.ok && !done_.tile_left ? kMuted : done_.ok ? kWarn : kBad, 8);
         end_dialog(list);
         const ui::Hint hints[] = {{ui::Button::cross, "OK"}};
         ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 1, 1824, true);

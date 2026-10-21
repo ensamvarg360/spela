@@ -5,7 +5,7 @@
  *   PUT  /file?p=<file>        writes the request body (needs Content-Length) to the file
  *   POST /mkdir?p=<dir>  /rename?p=<from>&to=<to>  /rm?p=<file or empty folder>
  *   POST /quit                 stops the helper, so a newer copy can take the port (a new copy sends it to an old one itself)
- *   POST /uninstall?id=<title ID>  removes a ShadowMountPlus tile whose game files are gone (uninstall_tile())
+ *   POST /uninstall?id=<title ID>  removes a ShadowMountPlus tile whose game files are gone, now or once the console lets it (uninstall_tile())
  *   POST /logo?id=<title ID>   PNG body: the title logo on the game's home-screen page (set_logo())
  *   POST /copy?p=<from>&to=<to>  starts copying a file or folder on the console, e.g. to another drive (copy_start())
  *   GET  /copy                 {"running", "done", "total", "error", "to"} of that copy;  POST /copy/cancel stops it
@@ -425,52 +425,131 @@ static void install_pkg(int c, const char *path, const char *query) {
   }
 }
 
+/* The string value of `key` in a flat JSON object, into `out`; 0 when it isn't there. An escape keeps just the
+ * character after the backslash: enough for an error message. */
+static int json_str(const char *json, const char *key, char *out, size_t n) {
+  char pat[64];
+  snprintf(pat, sizeof pat, "\"%s\"", key);
+  const char *p = strstr(json, pat);
+  if (!p || !n) return 0;
+  p += strlen(pat);
+  while (*p == ' ' || *p == ':') p++;
+  if (*p++ != '"') return 0;
+  size_t i = 0;
+  for (; *p && *p != '"' && i < n - 1; p++) {
+    if (*p == '\\' && p[1]) p++;
+    out[i++] = *p;
+  }
+  out[i] = 0;
+  return 1;
+}
+
+enum { TILE_GONE, TILE_REFUSED, TILE_GAME_THERE };
+
 /* Removes the home-screen tile of a ShadowMountPlus game whose files were deleted. Only such tiles: the title must
  * have ShadowMountPlus's /user/app/<id>/mount.lnk, and the source it names (mount_img.lnk for a disc image) must be
- * gone, so nothing on the network can remove a game that's still there. No tile at all counts as done. */
-static void uninstall_tile(int c, const char *query) {
-  char id[16] = "", lnk[PATH_MAX], source[PATH_MAX] = "", msg[4096];
-  if (!title_id(query, id)) {
-    fail(c, "400 Bad Request", "id must be a title ID");
-    return;
-  }
+ * gone, so nothing on the network can remove a game that's still there. No tile at all counts as gone. When both
+ * ShadowMountPlus and the console refuse, `why` (n bytes) says what each answered. */
+static int remove_tile(const char *id, char *why, size_t n) {
+  char lnk[PATH_MAX], source[PATH_MAX] = "", msg[4096], smp[512] = "";
   FILE *f = NULL;
   snprintf(lnk, sizeof lnk, "/user/app/%s/mount_img.lnk", id);
   if (!(f = fopen(lnk, "r"))) {
     snprintf(lnk, sizeof lnk, "/user/app/%s/mount.lnk", id);
     f = fopen(lnk, "r");
   }
-  if (!f) {
-    ok(c);  /* not a ShadowMountPlus title, or its tile is already gone */
-    return;
-  }
+  if (!f) return TILE_GONE;  /* not a ShadowMountPlus title, or its tile is already gone */
   if (!fgets(source, sizeof source, f)) source[0] = 0;
   fclose(f);
   source[strcspn(source, "\r\n")] = 0;
   struct stat st;
-  if (!source[0] || !lstat(source, &st)) {
-    fail(c, "409 Conflict", "the game's files are still on the console");
-    return;
-  }
+  if (!source[0] || !lstat(source, &st)) return TILE_GAME_THERE;
   int status = smp_uninstall(id, msg, sizeof msg);
-  if (status == 200) {
-    ok(c);
-    return;
-  }
+  if (status == 200) return TILE_GONE;
   /* ShadowMountPlus missing, or refusing (it may not list a game whose files are gone): the console's own uninstall */
   int r = appinstutil_uninstall(id);
-  if (!r) {
+  if (!r) return TILE_GONE;
+  if (status && !json_str(msg, "error", smp, sizeof smp)) snprintf(smp, sizeof smp, "HTTP %d", status);
+  if (status) snprintf(why, n, "ShadowMountPlus: %s; the console: 0x%08X", smp, (unsigned)r);
+  else snprintf(why, n, "the console refused (0x%08X)", (unsigned)r);
+  return TILE_REFUSED;
+}
+
+/* Tiles that couldn't be removed yet: ShadowMountPlus refuses while a game or app is open, and the PS5 app removing a
+ * game is one. retry_tiles() tries again until it works, so the tile goes once the app is closed.
+ * ponytail: in memory only, a reboot or helper update forgets them (the tile then stays until deleted by hand). */
+#define PENDING_MAX 32
+#define PENDING_SECONDS (24 * 60 * 60)
+static pthread_mutex_t pending_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+  char id[16];
+  time_t since;
+} pending[PENDING_MAX];
+static int pending_n;
+
+/* Adds `id` to the tiles to retry; 0 when the list is full. */
+static int pend_tile(const char *id) {
+  pthread_mutex_lock(&pending_lock);
+  int i = 0;
+  while (i < pending_n && strcmp(pending[i].id, id)) i++;
+  if (i == pending_n && i < PENDING_MAX) {
+    snprintf(pending[i].id, sizeof pending[i].id, "%s", id);
+    pending[i].since = time(NULL);
+    pending_n++;
+  }
+  pthread_mutex_unlock(&pending_lock);
+  return i < PENDING_MAX;
+}
+
+static void unpend_tile(const char *id) {
+  pthread_mutex_lock(&pending_lock);
+  for (int i = 0; i < pending_n; i++)
+    if (!strcmp(pending[i].id, id)) pending[i--] = pending[--pending_n];
+  pthread_mutex_unlock(&pending_lock);
+}
+
+static void *retry_tiles(void *arg) {
+  (void)arg;
+  for (;;) {
+    sleep(10);
+    char ids[PENDING_MAX][16], why[1024];
+    time_t since[PENDING_MAX];
+    pthread_mutex_lock(&pending_lock);
+    int n = pending_n;
+    for (int i = 0; i < n; i++) {
+      memcpy(ids[i], pending[i].id, sizeof ids[i]);
+      since[i] = pending[i].since;
+    }
+    pthread_mutex_unlock(&pending_lock);
+    for (int i = 0; i < n; i++)  /* the files check runs again: a game installed since keeps its tile */
+      if (remove_tile(ids[i], why, sizeof why) != TILE_REFUSED || time(NULL) - since[i] > PENDING_SECONDS)
+        unpend_tile(ids[i]);
+  }
+  return NULL;
+}
+
+/* POST /uninstall: 200 when the tile is gone, 202 {"error", "pending": true} when it goes once the console lets it. */
+static void uninstall_tile(int c, const char *query) {
+  char id[16] = "", why[1024] = "";
+  if (!title_id(query, id)) {
+    fail(c, "400 Bad Request", "id must be a title ID");
+    return;
+  }
+  int r = remove_tile(id, why, sizeof why);
+  if (r == TILE_GONE) {
+    unpend_tile(id);
     ok(c);
-  } else if (status) {
-    buf_t b = {0};  /* pass on ShadowMountPlus's answer: {"status", "error", "error_reason"} */
-    put(&b, "%s", msg);
-    char line[32];
-    snprintf(line, sizeof line, "%d ShadowMountPlus", status);
-    reply(c, line, &b);
-    free(b.s);
+  } else if (r == TILE_GAME_THERE) {
+    fail(c, "409 Conflict", "the game's files are still on the console");
+  } else if (!pend_tile(id)) {
+    fail(c, "500 Internal Server Error", why);
   } else {
-    snprintf(msg, sizeof msg, "the console refused (0x%08X)", (unsigned)r);
-    fail(c, "500 Internal Server Error", msg);
+    buf_t b = {0};
+    put(&b, "{\"error\":");
+    put_str(&b, why);
+    put(&b, ",\"pending\":true}");
+    reply(c, "202 Accepted", &b);
+    free(b.s);
   }
 }
 
@@ -1010,6 +1089,8 @@ int main(void) {
   }
   listen(srv, 16);
   notify("Spela helper " VERSION " is running.");
+  pthread_t retry;
+  if (!pthread_create(&retry, NULL, retry_tiles, NULL)) pthread_detach(retry);
 
   struct timeval timeout = {30, 0};  /* a client that stops sending gives up its thread */
   for (;;) {

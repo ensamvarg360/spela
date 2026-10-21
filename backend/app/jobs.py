@@ -38,6 +38,19 @@ def _notify(title: str, message: str):
             notify(title, message)
         except Exception:  # a notification must never fail the job
             log.exception("notification")
+
+
+def tile_note(tile: RemovalResult, done: str = "Its tile is gone from the home screen too.",
+              then: str = "It won't come back.") -> str:
+    """What happened to a home-screen tile, the console's reason early so the PS5 app's short dialog still shows it."""
+    if tile.ok:
+        return done
+    if tile.pending:
+        return (f"The PS5 won't remove its tile yet ({tile.message}). It goes by itself once no game or app is open, "
+                f"Spela included. {then}")
+    return f"Its tile is still on the home screen ({tile.message}): delete it there (Options, then Delete). {then}"
+
+
 # Highest firmware where fake packages launch (Kstuff Lite 1.11 + ArkSama's 11.60 fix, Oct 2026).
 # Raise a row when a payload release confirms more; 12.x-13.60 install but PS5 packages don't launch yet.
 PKG_MAX_FIRMWARE = {"ps4_pkg": "11.60", "ps5_pkg": "11.60"}
@@ -481,9 +494,7 @@ async def _remove(removal_id: str):
                 pass  # the files are gone; the next inventory read drops the game
             freed = f"Freed {result.bytes_freed / 1e9:.1f} GB. " if result.bytes_freed else ""
             r["status"], r["tile_left"] = "success", not tile.ok
-            r["message"] = (f"Removed. {freed}Its tile is gone from the home screen too." if tile.ok else
-                            f"Removed. {freed}Its tile is still on the PS5 home screen: delete it there (Options, then "
-                            f"Delete). It won't come back. ({tile.message})")
+            r["message"] = f"Removed. {freed}{tile_note(tile)}"
         except AdapterError as e:
             r["status"], r["message"] = "failed", e.message
         except Exception as e:  # a bug must fail the removal, not leave it "removing"
@@ -574,9 +585,8 @@ async def _move(move_id: str):
             except AdapterError:
                 pass  # the move is done; the next inventory read shows it
             m["status"], m["tile_left"] = "success", not tile.ok
-            m["message"] = (f"Moved to {m['drive_label']}." if tile.ok else
-                            f"Moved to {m['drive_label']}, but its old tile is still on the PS5 home screen: delete it there "
-                            f"(Options, then Delete), and ShadowMountPlus adds the game again from its new drive. ({tile.message})")
+            m["message"] = f"Moved to {m['drive_label']}." + ("" if tile.ok else " " + tile_note(
+                tile, then="ShadowMountPlus then adds the game again from its new drive."))
         except AdapterError as e:
             m["status"], m["message"] = ("canceled" if e.code == "canceled" else "failed"), e.message
         except Exception as e:  # a bug must fail the move, not leave it "moving"
@@ -673,9 +683,8 @@ async def _move_to_pc(move_id: str):
             except AdapterError:
                 pass  # the move is done; the next inventory read shows it
             m["status"], m["tile_left"], m["progress"] = "success", not tile.ok, 1.0
-            m["message"] = (f"Moved to {dest} ({size / 1e9:.1f} GB) and added to the library." if tile.ok else
-                            f"Moved to {dest} and added to the library, but its tile is still on the PS5 home screen: delete it "
-                            f"there (Options, then Delete). ({tile.message})")
+            m["message"] = f"Moved to {dest} ({size / 1e9:.1f} GB) and added to the library." + (
+                "" if tile.ok else " " + tile_note(tile))
         except AdapterError as e:
             m["status"], m["message"] = ("canceled" if e.code == "canceled" else "failed"), e.message
         except OSError as e:

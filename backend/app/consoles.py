@@ -125,6 +125,7 @@ class RemovalResult:
     message: str = ""
     removed_paths: list[str] = field(default_factory=list)
     bytes_freed: int = 0
+    pending: bool = False  # a tile not removed yet: the helper retries until the console lets it
 
 
 class ConsoleAdapter(Protocol):
@@ -1016,7 +1017,9 @@ class FTPConsoleAdapter:
         req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/uninstall?id={title_id}", method="POST",
                                      headers={HELPER_KEY_HEADER: self.key})
         try:
-            with urllib.request.urlopen(req, timeout=30):
+            with urllib.request.urlopen(req, timeout=30) as r:
+                if r.status == 202:  # refused for now (a game or app is open); the helper keeps trying
+                    return RemovalResult(False, json.loads(r.read())["error"], pending=True)
                 return RemovalResult(True, "Tile removed.")
         except urllib.error.HTTPError as e:
             try:

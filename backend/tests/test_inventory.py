@@ -113,6 +113,31 @@ class FakeHelper(BaseHTTPRequestHandler):
         pass
 
 
+def test_remove_tile_answers():
+    """The helper's answers to /uninstall: tile gone, refused for now (it retries), refused, or too old a helper."""
+    class Tile(FakeHelper):
+        answer = 200, {"ok": True}
+
+        def do_POST(self):
+            self._send(type(self).answer[1], type(self).answer[0])
+
+    helper = ThreadingHTTPServer(("127.0.0.1", 0), Tile)
+    threading.Thread(target=helper.serve_forever, daemon=True).start()
+    a = adapter(21)
+    a.HELPER_PORT = helper.server_address[1]
+    why = "ShadowMountPlus: a game is active or awaiting exit; the console: 0x80990088"
+    try:
+        for answer, want in [((200, {"ok": True}), (True, False, "Tile removed.")),
+                             ((202, {"error": why, "pending": True}), (False, True, why)),
+                             ((500, {"error": why}), (False, False, why)),
+                             ((404, {"error": "not_found"}), (False, False, "The helper is too old to do it."))]:
+            Tile.answer = answer
+            t = a._remove_tile("PPSA04444")
+            assert (t.ok, t.pending, t.message) == want
+    finally:
+        helper.shutdown()
+
+
 def test_ftp_adapter_helper(ps5):
     _, port = ps5
     helper = ThreadingHTTPServer(("127.0.0.1", 0), FakeHelper)

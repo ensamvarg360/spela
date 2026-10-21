@@ -558,6 +558,13 @@ def test_uninstall_tile_left(ps5, monkeypatch):
         assert client.get(f"/api/v1/console-app/removals/{p['id']}").status_code == 401
 
 
+def test_tile_note_pending():
+    """A tile the console won't remove yet goes by itself later: no "delete it there", and the reason comes first."""
+    why = "ShadowMountPlus: a game is active or awaiting exit"
+    note = jobs.tile_note(RemovalResult(False, why, pending=True))
+    assert "delete it there" not in note and note.index(why) < note.index("goes by itself")
+
+
 def test_orphaned_tile(ps5, monkeypatch):
     """A ShadowMountPlus tile whose files are gone shows as orphaned, and removing it only removes the tile."""
     root, port, lib = ps5
