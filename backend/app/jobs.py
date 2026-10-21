@@ -350,6 +350,7 @@ def in_progress() -> list[str]:
     busy += [f"Removing {r['title']}" for r in removals.values() if r["status"] == "removing"]
     busy += [f"Moving {m['title']} to another drive" for m in moves.values() if m["status"] == "moving"]
     busy += [f"Backing up the saves of {b['title_id']}" for b in save_backups.values() if b["status"] == "copying"]
+    busy += [f"Restoring the saves of {r['title_id']}" for r in save_restores.values() if r["status"] == "copying"]
     return busy
 
 
@@ -727,11 +728,15 @@ def list_save_backups(title_id: str) -> list[dict]:
     return out
 
 
-def start_save_backup(db: Session, console: Console, title_id: str) -> dict:
+def _saves_busy(console: Console):
     if inventory.status.get(console.id, {}).get("state") != "online":
         raise ValueError("The console isn't online.")
-    if any(b["status"] == "copying" and b["console_id"] == console.id for b in save_backups.values()):
-        raise ValueError("A backup from this console is already running.")
+    if any(j["status"] == "copying" and j["console_id"] == console.id for j in [*save_backups.values(), *save_restores.values()]):
+        raise ValueError("Saves are already being copied to or from this console.")
+
+
+def start_save_backup(db: Session, console: Console, title_id: str) -> dict:
+    _saves_busy(console)
     backup_id = _id()
     b = save_backups[backup_id] = {"id": backup_id, "console_id": console.id, "title_id": title_id, "status": "copying",
                                    "progress": 0.0, "bytes_done": 0, "bytes_total": 0, "files": 0,
@@ -768,6 +773,58 @@ async def _save_backup(backup_id: str):
         db.add(AuditLog(action="save_backup", console_id=b["console_id"], title_id=b["title_id"], target_path=str(dest),
                         result="success" if b["status"] == "success" else "failed",
                         details={"files": b["files"], "bytes": b["bytes_total"], "message": b["message"]}))
+        db.commit()
+
+
+# ---------------------------------------------------------------- save data restores (a backup back to the console)
+
+save_restores: dict[str, dict] = {}  # restore id -> status: copying|confirm|success|failed, progress, message, backup
+
+
+def start_save_restore(db: Session, console: Console, title_id: str, backup: str, overwrite: bool) -> dict:
+    """`overwrite`: the user confirmed replacing the saves on the console; without it a restore that would replace
+    any ends as "confirm" with nothing changed."""
+    _saves_busy(console)
+    if backup not in {s["name"] for s in list_save_backups(title_id)}:
+        raise ValueError("That backup isn't on this PC any more.")
+    restore_id = _id()
+    r = save_restores[restore_id] = {"id": restore_id, "console_id": console.id, "title_id": title_id, "backup": backup,
+                                     "overwrite": overwrite, "status": "copying", "progress": 0.0, "bytes_done": 0,
+                                     "bytes_total": 0, "files": 0, "message": "Looking for save data on the console."}
+    _spawn(_save_restore(restore_id))
+    return r
+
+
+async def _save_restore(restore_id: str):
+    r = save_restores[restore_id]
+    src = config.SAVE_BACKUP_DIR / r["title_id"] / r["backup"]
+
+    def progress(done: int, total: int):  # called from the adapter's thread; plain assignments
+        r["bytes_done"], r["bytes_total"], r["progress"] = done, total, done / total if total else 1.0
+        r["message"] = "Copying save data to the console."
+
+    with SessionLocal() as db:
+        console = db.get(Console, r["console_id"])
+        kept = backup_folder(r["title_id"], console) if console and r["overwrite"] else None
+        try:
+            if not console:
+                raise AdapterError("not_found", "The console was deleted.")
+            r["files"] = await inventory.adapter_for(db, console).restore_saves(src, r["title_id"], progress, kept)
+            r["status"] = "success"
+            r["message"] = f"Restored {r['files']} file(s) to {console.name}." + (
+                f" The saves it replaced are backed up as {kept.name}." if kept and kept.exists() else "")
+        except AdapterError as e:
+            r["status"], r["message"] = "confirm" if e.code == "saves_exist" else "failed", e.message
+        except OSError as e:
+            r["status"], r["message"] = "failed", f"Couldn't read the backup: {e.strerror or e}"
+        except Exception as e:  # a bug must fail the restore, not leave it "copying"
+            log.exception("save restore %s", restore_id)
+            r["status"], r["message"] = "failed", f"Unexpected error: {e}"
+        if r["status"] == "confirm":
+            return  # nothing was changed; the user decides
+        db.add(AuditLog(action="save_restore", console_id=r["console_id"], title_id=r["title_id"], target_path=str(src),
+                        result=r["status"], details={"files": r["files"], "bytes": r["bytes_total"], "message": r["message"],
+                                                     "replaced_saves_backup": str(kept) if kept and kept.exists() else None}))
         db.commit()
 
 

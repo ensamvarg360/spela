@@ -22,6 +22,7 @@ export const ACTION_LABEL: Record<string, string> = {
   viewer_password: "View-only password changed",
   wake: "Woken from rest mode",
   save_backup: "Saves backed up",
+  save_restore: "Saves restored",
 };
 
 // Internal ids, meaningless to the reader.

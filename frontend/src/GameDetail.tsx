@@ -283,16 +283,17 @@ function InstallHistory({ game }: { game: Game }) {
   );
 }
 
-type SaveBackup = { id: string; status: "copying" | "success" | "failed"; progress: number; bytes_done: number; bytes_total: number; message: string };
+type SaveJob = { id: string; status: "copying" | "confirm" | "success" | "failed"; progress: number; bytes_done: number; bytes_total: number; message: string; backup?: string };
 type SavedBackup = { name: string; path: string; files: number; bytes: number };
 
-/** Copies the game's save data from a console to this PC. The console is only read; restoring is by hand. */
+/** Copies the game's save data from a console to this PC, and back. Replacing saves on the console asks first. */
 function SaveBackups({ tid, consoleId }: { tid: string; consoleId?: string }) {
   const { consoles, cid: picked, setCid, console: chosen } = useConsoles();
   const cid = consoleId ?? picked;
   const target = consoleId ? consoles.find((c) => c.id === consoleId) : chosen;
   const [list, setList] = useState<SavedBackup[]>([]);
-  const [b, setB] = useState<SaveBackup | null>(null);
+  const [b, setB] = useState<SaveJob | null>(null);
+  const [r, setR] = useState<SaveJob | null>(null);
   const [error, setError] = useState("");
   const load = () => tid && api<SavedBackup[]>(`/save-backups?title_id=${tid}`).then(setList, () => {});
   useEffect(() => {
@@ -300,30 +301,47 @@ function SaveBackups({ tid, consoleId }: { tid: string; consoleId?: string }) {
   }, [tid]);
   useEffect(() => {
     if (b?.status !== "copying") return;
-    const t = setInterval(() => api<SaveBackup>(`/save-backups/${b.id}`).then((nb) => { setB(nb); if (nb.status !== "copying") load(); }, () => {}), 1000);
+    const t = setInterval(() => api<SaveJob>(`/save-backups/${b.id}`).then((nb) => { setB(nb); if (nb.status !== "copying") load(); }, () => {}), 1000);
     return () => clearInterval(t);
   }, [b?.id, b?.status]);
+  const restore = (backup: string, overwrite = false) => (setError(""),
+    api<SaveJob>(`/consoles/${cid}/save-restores`, { json: { title_id: tid, backup, overwrite } }).then(setR, (e) => setError(e.message)));
+  useEffect(() => {
+    if (r?.status !== "copying") return;
+    const t = setInterval(() => api<SaveJob>(`/save-restores/${r.id}`).then((nr) => {
+      setR(nr);
+      if (nr.status === "confirm" && confirm(`${nr.message}\n\nReplace them with the backup "${nr.backup}"? Spela first backs up ` +
+        "the saves on the console to this PC. Close the game on the PS5 first.")) restore(nr.backup!, true);
+      else if (nr.status !== "copying") load();
+    }, () => {}), 1000);
+    return () => clearInterval(t);
+  }, [r?.id, r?.status]);
 
   if (!consoles.length) return null;
-  const start = () => (setError(""), api<SaveBackup>(`/consoles/${cid}/save-backups`, { json: { title_id: tid } }).then(setB, (e) => setError(e.message)));
+  const start = () => (setError(""), api<SaveJob>(`/consoles/${cid}/save-backups`, { json: { title_id: tid } }).then(setB, (e) => setError(e.message)));
+  const busy = b?.status === "copying" || r?.status === "copying";
 
   return (
     <Section title="Save data" open={false}>
-      <p className="muted">Copies this game's saves from the console to this PC, for every user. They stay encrypted and only work on the
-        same console and account; to restore, copy the folder back with an FTP payload.</p>
+      <p className="muted">Copies this game's saves from the console to this PC, for every user, and back. They stay encrypted and only
+        work on the same console and account. Restoring over saves already on the console asks first.</p>
       <div className="toolbar">
         {consoles.length > 1 && !consoleId && (
           <select aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
             {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         )}
-        <button className="secondary" {...needsOnline(target)} disabled={b?.status === "copying" || !!needsOnline(target).disabled} onClick={start}>{b?.status === "copying" ? "Backing up…" : "Back up saves"}</button>
+        <button className="secondary" {...needsOnline(target)} disabled={busy || !!needsOnline(target).disabled} onClick={start}>{b?.status === "copying" ? "Backing up…" : "Back up saves"}</button>
         {b?.status === "copying" && <progress max={1} value={b.progress} aria-label="Backing up" />}
+        {r?.status === "copying" && <progress max={1} value={r.progress} aria-label="Restoring" />}
         {b && <span className={b.status === "failed" ? "error" : "muted"} role="status">{b.message}</span>}
+        {r && <span className={r.status === "failed" ? "error" : "muted"} role="status">{r.message}</span>}
         {error && <span className="error" role="alert">{error}</span>}
       </div>
       {list.length > 0 && <ul>{list.map((s) => (
-        <li key={s.name}><strong>{s.name}</strong> · {s.files} file(s), {formatBytes(s.bytes)} <code>{s.path}</code></li>
+        <li key={s.name}><strong>{s.name}</strong> · {s.files} file(s), {formatBytes(s.bytes)} <code>{s.path}</code>{" "}
+          <button className="secondary" {...needsOnline(target)} disabled={busy || !!needsOnline(target).disabled}
+            onClick={() => restore(s.name)}>{r?.status === "copying" && r.backup === s.name ? "Restoring…" : "Restore"}</button></li>
       ))}</ul>}
     </Section>
   );

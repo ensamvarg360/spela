@@ -1011,6 +1011,26 @@ def get_save_backup(backup_id: str):
     return jobs.save_backups.get(backup_id) or _not_found()
 
 
+class SaveRestoreIn(SaveBackupIn):
+    backup: str  # a folder name from GET /save-backups
+    overwrite: bool = False  # the user confirmed replacing the saves on the console
+
+
+@api.post("/consoles/{console_id}/save-restores", status_code=202)
+async def restore_saves(console_id: str, body: SaveRestoreIn, db: Session = Depends(get_db)):
+    """Writes a save backup back to the console (jobs.start_save_restore). Ends as "confirm", with nothing changed, when it
+    would replace saves on the console and `overwrite` isn't set."""
+    try:
+        return jobs.start_save_restore(db, db.get(Console, console_id) or _not_found(), body.title_id, body.backup, body.overwrite)
+    except ValueError as e:
+        raise HTTPException(409, {"error": "cannot_restore", "message": str(e)})
+
+
+@api.get("/save-restores/{restore_id}")
+def get_save_restore(restore_id: str):
+    return jobs.save_restores.get(restore_id) or _not_found()
+
+
 @api.get("/save-backups", dependencies=[Depends(require_admin)])
 def list_save_backups(title_id: str):
     """The backups of one title on this PC, newest first. Admin only: it shows folders of this PC."""

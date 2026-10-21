@@ -263,6 +263,12 @@ Also check:
 
 - [ ] On a game's page, click **Back up saves** for a game with save data.
   **Expect:** a backup listed with one or more files, under `save-backups/<title ID>` in the data folder, mirroring `/user/home/<user>/savedata_prospero/<title ID>`. Note the folders it found here if they differ.
+- [ ] Open that game, then click **Restore** next to the backup.
+  **Expect:** *… is open on the console. Close it, then restore.* Nothing changes. (If it restores anyway, note what `/mnt/sandbox` holds while the game runs.)
+- [ ] Close the game, play on a little and save, close it, then click **Restore**.
+  **Expect:** a question whether to replace the saves on the console. **Cancel** changes nothing. **OK** lists a new backup (the newer save), then *Restored … file(s)*. The game loads the older save, with no "corrupted" message.
+- [ ] Delete the game's saved data on the PS5 (Settings → Saved data), then click **Restore**.
+  **Expect:** no question; it's restored, and the game loads it. If the save doesn't show up in the game or in Settings, note that: the console may keep a save index the files alone don't update.
 
 ---
 

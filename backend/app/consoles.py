@@ -161,6 +161,10 @@ class ConsoleAdapter(Protocol):
     async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
     # Copies every save folder of `title_id` (all users) under `dest`, mirroring console paths. Reads only. Returns files copied.
     async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int: ...
+    # Writes a backup_saves folder back to the same console paths. A save already there raises AdapterError("saves_exist")
+    # unless `backup_to` is given: then it's backed up there first and replaced. Returns files written.
+    async def restore_saves(self, source: Path, title_id: str, progress_callback: ProgressCallback,
+                            backup_to: Path | None = None) -> int: ...
     # Copies a ShadowMountPlus source (folder or image) to `dest` on this PC. Reads only. Returns bytes copied.
     async def copy_to_pc(self, source_path: str, dest: Path, progress_callback: ProgressCallback,
                          cancel: threading.Event | None = None) -> int: ...
@@ -348,6 +352,15 @@ class MockConsoleAdapter:
         progress_callback(9, 9)
         return 1
 
+    async def restore_saves(self, source: Path, title_id: str, progress_callback: ProgressCallback,
+                            backup_to: Path | None = None) -> int:
+        self._check()  # the mock console always has a save, as backup_saves shows
+        if not backup_to:
+            raise AdapterError("saves_exist", f"The console already has save data for {title_id}.")
+        await self.backup_saves(title_id, backup_to, lambda d, t: None)
+        progress_callback(9, 9)
+        return sum(1 for f in source.rglob("*") if f.is_file())
+
     async def copy_to_pc(self, source_path: str, dest: Path, progress_callback: ProgressCallback,
                          cancel: threading.Event | None = None) -> int:
         self._check()
@@ -480,6 +493,7 @@ CONSOLE_APP_PATH = f"/data/homebrew/{CONSOLE_APP_TITLE_ID}"
 CONSOLE_APP_LOGO = CONSOLE_APP_DIR.parent / "logo.png"  # the wordmark, for its home-screen page (not copied with it)
 HOME_DB = "/system_data/priv/mms/app.db"  # the home screen's database: titles, concept IDs, tile images
 SAVE_HOME = "/user/home"  # one folder per user, holding their save data (FTPConsoleAdapter._backup_saves)
+SANDBOX = "/mnt/sandbox"  # a running app's sandbox is mounted at <title ID>_000 here
 
 
 class _FTP(ftplib.FTP):
@@ -777,13 +791,7 @@ class FTPConsoleAdapter:
         if f".{src.name}.partial" in existing:  # left over from an interrupted install
             self._rm_partial(ftp, tmp)
 
-        files = [(src, tmp)] if src.is_file() else []
-        dirs = [] if src.is_file() else [tmp]
-        for root, subdirs, names in os.walk(src):
-            rel = Path(root).relative_to(src).as_posix()
-            base = tmp if rel == "." else f"{tmp}/{rel}"
-            dirs += [f"{base}/{d}" for d in sorted(subdirs)]
-            files += [(Path(root) / n, f"{base}/{n}") for n in sorted(names)]
+        dirs, files = self._walk(src, tmp)
         total, done = sum(f.stat().st_size for f, _ in files), 0
 
         def chunk(block: bytes):
@@ -811,6 +819,19 @@ class FTPConsoleAdapter:
         m = TITLE_ID.search(src.name)
         return InstallResult(True, "Installed.", InstalledGameInfo(
             m[0] if m else "", src.name, None, "shadowmountplus", drive_id, dest, dest, total), len(files))
+
+    @staticmethod
+    def _walk(src: Path, dest: str) -> tuple[list[str], list[tuple[Path, str]]]:
+        """(folders to create, (local file, console path)) to copy `src` to `dest`; `dest` itself is among the folders."""
+        if src.is_file():
+            return [], [(src, dest)]
+        dirs, files = [dest], []
+        for root, subdirs, names in os.walk(src):
+            rel = Path(root).relative_to(src).as_posix()
+            base = dest if rel == "." else f"{dest}/{rel}"
+            dirs += [f"{base}/{d}" for d in sorted(subdirs)]
+            files += [(Path(root) / n, f"{base}/{n}") for n in sorted(names)]
+        return dirs, files
 
     @staticmethod
     def _sizes(ftp: ftplib.FTP, folder: str) -> dict[str, int]:
@@ -921,12 +942,8 @@ class FTPConsoleAdapter:
         homebrew, name = self._game_entry(ftp, game, "change")
         if not ftp.ls(homebrew).get(name, (False,))[0]:
             raise AdapterError("not_a_folder", f"{game.source_path} is a disc image; only a game folder can take DLC files.")
-        dirs, files = [], []
-        for root, subdirs, names in os.walk(src):
-            rel = Path(root).relative_to(src).as_posix()
-            base = game.source_path if rel == "." else f"{game.source_path}/{rel}"
-            dirs += [f"{base}/{d}" for d in sorted(subdirs)]
-            files += [(Path(root) / n, f"{base}/{n}") for n in sorted(names)]
+        dirs, files = self._walk(src, game.source_path)
+        dirs = dirs[1:]  # the game's folder is there already
         total, done = sum(f.stat().st_size for f, _ in files), 0
 
         def chunk(block: bytes):
@@ -1126,15 +1143,22 @@ class FTPConsoleAdapter:
                                       cancel: threading.Event | None = None) -> tuple[str, RemovalResult]:
         return await asyncio.to_thread(self._move, game, drive_id, progress_callback, cancel or threading.Event())
 
-    def _backup_saves(self, ftp, title_id: str, dest: Path, progress: ProgressCallback) -> int:
+    @staticmethod
+    def _save_entries(ftp, title_id: str) -> dict[str, tuple[bool, int]]:
         """Save data lives per user in /user/home/<user id>/: PS5 games' in savedata_prospero/<title ID>, PS4 games' in
-        savedata/<title ID>, with metadata folders beside them. Any folder there holding a <title ID> entry is copied."""
-        files = []  # (console path, size)
+        savedata/<title ID>, with metadata folders beside them. {console path: (is_dir, size)} of each <title ID> entry."""
+        found = {}
         for user, (is_dir, _) in ftp.ls(SAVE_HOME).items():
             for kind, (sub, _) in (ftp.ls(f"{SAVE_HOME}/{user}") if is_dir else {}).items():
                 if entry := (ftp.ls(f"{SAVE_HOME}/{user}/{kind}") if sub else {}).get(title_id):
-                    path = f"{SAVE_HOME}/{user}/{kind}/{title_id}"
-                    files += [(path + rel, size) for rel, size in self._sizes(ftp, path).items()] if entry[0] else [(path, entry[1])]
+                    found[f"{SAVE_HOME}/{user}/{kind}/{title_id}"] = entry
+        return found
+
+    def _backup_saves(self, ftp, title_id: str, dest: Path, progress: ProgressCallback) -> int:
+        """Copies every save entry of the title (_save_entries), keeping its console path under `dest`."""
+        files = []  # (console path, size)
+        for path, (is_dir, size) in self._save_entries(ftp, title_id).items():
+            files += [(path + rel, sz) for rel, sz in self._sizes(ftp, path).items()] if is_dir else [(path, size)]
         if not files:
             raise AdapterError("no_saves", f"The console has no save data for {title_id}.")
         total, done = sum(size for _, size in files), 0
@@ -1157,6 +1181,91 @@ class FTPConsoleAdapter:
         if not TITLE_ID.fullmatch(title_id):
             raise AdapterError("bad_title_id", f"{title_id} isn't a title ID.")
         return await self._run(lambda ftp: self._backup_saves(ftp, title_id, dest, progress_callback))
+
+    def _restore_saves(self, ftp, src: Path, title_id: str, progress: ProgressCallback, backup_to: Path | None) -> int:
+        """Each save entry of the backup goes back to its console path: uploaded under a hidden `.partial` name, sizes
+        checked as after an install, and only then swapped with the save it replaces (renamed to `.<entry>.old.partial`
+        and deleted). A save on the console is replaced only with `backup_to`, after it has been backed up there."""
+        entries = sorted(src.glob(f"user/home/*/*/{title_id}"))
+        if not entries:
+            raise AdapterError("empty_backup", "This backup holds no save data.")
+        # ponytail: the sandbox mount is from community docs, not yet checked on a real console
+        if any(n.startswith(f"{title_id}_") and ftp.ls(f"{SANDBOX}/{n}") for n in ftp.ls(SANDBOX)):
+            raise AdapterError("game_running", f"{title_id} is open on the console. Close it, then restore.")
+        targets = [f"/{p.relative_to(src).as_posix()}" for p in entries]
+        for t in targets:
+            user, kind = t.split("/")[3:5]
+            if not ftp.ls(SAVE_HOME).get(user, (False,))[0]:
+                raise AdapterError("user_missing", f"User {user} from this backup isn't on this console. Saves only work "
+                                                   f"for the console and account they came from.")
+            if not ftp.ls(f"{SAVE_HOME}/{user}").get(kind, (False,))[0]:
+                raise AdapterError("no_save_folder", f"{SAVE_HOME}/{user}/{kind} isn't on the console yet. Start any game "
+                                                     f"with that user once, then restore.")
+        replaced = [t for t in targets if t in self._save_entries(ftp, title_id)]
+        if replaced and not backup_to:
+            raise AdapterError("saves_exist", f"The console already has save data for {title_id} "
+                                              f"({len(replaced)} of the {len(targets)} folder(s) in this backup).")
+        if replaced:
+            try:
+                self._backup_saves(ftp, title_id, backup_to, lambda d, t: None)
+            except BaseException:
+                shutil.rmtree(backup_to, True)  # a half backup must not pass for a whole one
+                raise
+
+        plan = []  # (local entry, console path, hidden upload name, folders, files)
+        for p, t in zip(entries, targets):
+            folder, _, name = t.rpartition("/")
+            tmp = f"{folder}/.{name}.partial"
+            if f".{name}.partial" in ftp.ls(folder):  # left over from an interrupted restore
+                self._rm_partial(ftp, tmp)
+            plan.append((p, t, tmp, *self._walk(p, tmp)))
+        total, done = sum(f.stat().st_size for *_, files in plan for f, _ in files), 0
+        progress(0, total)
+
+        def chunk(block: bytes):
+            nonlocal done
+            done += len(block)
+            progress(done, total)
+
+        for p, t, tmp, dirs, files in plan:
+            for d in dirs:
+                ftp.mkd(d)
+            for local, remote in files:
+                with open(local, "rb") as f:
+                    ftp.storbinary(f"STOR {remote}", f, self.BLOCK, chunk)
+            folder, _, name = tmp.rpartition("/")
+            want = {remote[len(tmp):]: local.stat().st_size for local, remote in files}
+            got = self._sizes(ftp, tmp) if p.is_dir() else {"": ftp.ls(folder).get(name, (False, -1))[1]}
+            if got != want:
+                for _, _, partial, _, _ in plan:
+                    parent, _, hidden = partial.rpartition("/")
+                    if hidden in ftp.ls(parent):
+                        self._rm_partial(ftp, partial)
+                raise AdapterError("verify_failed", f"{t} didn't copy completely, so nothing was replaced. Restore it again.")
+        for _, t, tmp, _, _ in plan:
+            folder, _, name = t.rpartition("/")
+            old = f"{folder}/.{name}.old.partial"
+            # left over from a restore cut off mid-swap; the save it held was backed up to this PC before that swap
+            if f".{name}.old.partial" in ftp.ls(folder):
+                self._rm_partial(ftp, old)
+            had = name in ftp.ls(folder)
+            if had:
+                ftp.rename(t, old)
+            try:
+                ftp.rename(tmp, t)
+            except ftplib.error_perm:
+                if had:
+                    ftp.rename(old, t)  # put the console's save back
+                raise
+            if had:
+                self._rm_partial(ftp, old)
+        return sum(len(files) for *_, files in plan)
+
+    async def restore_saves(self, source: Path, title_id: str, progress_callback: ProgressCallback,
+                            backup_to: Path | None = None) -> int:
+        if not TITLE_ID.fullmatch(title_id):
+            raise AdapterError("bad_title_id", f"{title_id} isn't a title ID.")
+        return await self._run(lambda ftp: self._restore_saves(ftp, source, title_id, progress_callback, backup_to))
 
     def _copy_to_pc(self, ftp, source: str, dest: Path, progress: ProgressCallback, cancel: threading.Event) -> int:
         parent, _, name = source.rpartition("/")

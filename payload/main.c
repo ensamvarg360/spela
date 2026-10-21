@@ -14,7 +14,7 @@
  *   GET  /relay  POST /relay?id=<id>&status=<status>  the PS5 app's requests, taken and answered by the PC (relay_app())
  *   any  /api/v1/console-app/...  from this console only, without the key: the PS5 app, passed on to the PC
  * Paths are percent-encoded. Every request needs this console's key in X-Storefront-Key (authorized()); even so,
- * writes are refused outside the homebrew folders (writable()), and /logo changes only the one file and database column it names. One thread per connection: /info still answers during a long upload.
+ * writes are refused outside the homebrew folders (writable()) and one title's save data (save_path(), for a restore), and /logo changes only the one file and database column it names. One thread per connection: /info still answers during a long upload.
  * Build with ./build.ps1; VERSION comes from backend/app/__init__.py. */
 #include <dirent.h>
 #include <dlfcn.h>
@@ -220,15 +220,32 @@ static int param(const char *q, const char *key, char *out, size_t n) {
   return 0;
 }
 
+static int dotdot(const char *p) {
+  for (const char *s = p; (s = strstr(s, "/..")); s += 3)
+    if (!s[3] || s[3] == '/') return 1;
+  return 0;
+}
+
 /* Only inside /data/homebrew, /mnt/usbN/homebrew or /mnt/extN/homebrew (or that folder itself), and no "..". */
 static int writable(const char *p) {
   const char *rest = NULL;
   if (!strncmp(p, "/data/", 6)) rest = p + 5;
   else if ((!strncmp(p, "/mnt/usb", 8) || !strncmp(p, "/mnt/ext", 8)) && p[8] >= '0' && p[8] <= '9') rest = p + 9;
   if (!rest || strncmp(rest, "/homebrew", 9) || (rest[9] && rest[9] != '/')) return 0;
-  for (const char *s = p; (s = strstr(s, "/..")); s += 3)
-    if (!s[3] || s[3] == '/') return 0;
-  return 1;
+  return !dotdot(p);
+}
+
+/* One title's save data, for a restore: /user/home/<user>/<save folder>/<entry naming a title ID, such as PPSA01234
+ * or .PPSA01234.partial> or anything inside that entry, and no "..". The user and save folders themselves never. */
+static int save_path(const char *p) {
+  if (strncmp(p, "/user/home/", 11) || dotdot(p)) return 0;
+  const char *kind = strchr(p + 11, '/'), *entry = kind ? strchr(kind + 1, '/') : NULL;
+  if (!kind || kind == p + 11 || !entry || entry == kind + 1 || !entry[1]) return 0;
+  const char *end = strchr(entry + 1, '/');
+  if (!end) end = entry + strlen(entry);
+  for (const char *s = entry + 1; s + 9 <= end; s++)  /* [A-Z]{4}[0-9]{5} */
+    if (strspn(s, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") >= 4 && strspn(s + 4, "0123456789") >= 5) return 1;
+  return 0;
 }
 
 static void list(int c, const char *path) {
@@ -968,6 +985,9 @@ static void handle(int c) {
   if (query) *query++ = 0;
   int get = !strcmp(method, "GET"), post = !strcmp(method, "POST"), has_path = query && param(query, "p", path, sizeof path) && path[0] == '/';
 
+  /* save data takes plain file writes only (save_path()), never /copy or /install */
+  int put_file = !strcmp(method, "PUT") && !strcmp(target, "/file"), save_op = 0;
+  int post_file = post && (!strcmp(target, "/mkdir") || !strcmp(target, "/rename") || !strcmp(target, "/rm"));
   int app = !strncmp(target, RELAY_PATH, sizeof RELAY_PATH - 1);  /* the PS5 app, for the PC */
   if (!authorized(c, head, (post && !strcmp(target, "/quit")) || app)) {
     fail(c, "401 Unauthorized", "wrong key: install the helper again from the PC app");
@@ -1012,8 +1032,8 @@ static void handle(int c) {
     list(c, path);
   } else if (get && !strcmp(target, "/file")) {
     download(c, path);
-  } else if (!writable(path)) {
-    fail(c, "403 Forbidden", "only the homebrew folders can be changed");
+  } else if (!writable(path) && !(save_op = save_path(path) && (put_file || post_file))) {
+    fail(c, "403 Forbidden", "only the homebrew folders and save data can be changed");
   } else if (post && !strcmp(target, "/copy")) {
     copy_start(c, path, query);
   } else if (post && !strcmp(target, "/install")) {
@@ -1024,7 +1044,8 @@ static void handle(int c) {
     if (mkdir(path, 0777)) fail(c, errno == EEXIST ? "409 Conflict" : "500 Internal Server Error", strerror(errno));
     else ok(c);
   } else if (post && !strcmp(target, "/rename")) {
-    if (!param(query, "to", to, sizeof to) || !writable(to)) fail(c, "403 Forbidden", "only the homebrew folders can be changed");
+    if (!param(query, "to", to, sizeof to) || !(save_op ? save_path(to) : writable(to)))
+      fail(c, "403 Forbidden", "only the homebrew folders and save data can be changed");
     else if (rename(path, to)) fail(c, "500 Internal Server Error", strerror(errno));
     else ok(c);
   } else if (post && !strcmp(target, "/rm")) {

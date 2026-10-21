@@ -5,6 +5,7 @@ import subprocess
 import threading
 import zipfile
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -728,6 +729,44 @@ def test_save_backup_job(ps5, monkeypatch, tmp_path):
         b = asyncio.run(backup("PPSA07777"))
         assert b["status"] == "failed" and "no save data" in b["message"]
         assert jobs.list_save_backups("PPSA07777") == []  # nothing half-made left behind
+
+
+def test_save_restore_job(ps5, monkeypatch, tmp_path):
+    """No save on the console: written straight away. A save there: "confirm" and nothing changed, then with overwrite it's
+    backed up to this PC first and replaced."""
+    root, port, lib = ps5
+    save = "user/home/1a2b3c4d/savedata_prospero/PPSA03333"
+    write(root / "user/home/1a2b3c4d/savedata_prospero/.keep")
+    write(tmp_path / f"saves/PPSA03333/backup/{save}/sdimg_SAVEDATA00", b"backup save")
+    write(tmp_path / f"saves/PPSA03333/backup/{save}/sce_sys/param.sfo", b"sfo")
+    monkeypatch.setattr(config, "SAVE_BACKUP_DIR", tmp_path / "saves")
+    with SessionLocal() as db:
+        c, _ = _setup(db, port, lib)
+
+        async def restore(overwrite=False):
+            r = jobs.start_save_restore(db, c, "PPSA03333", "backup", overwrite)
+            while r["status"] == "copying":
+                await asyncio.sleep(0.01)
+            return r
+        r = asyncio.run(restore())
+        assert r["status"] == "success" and r["files"] == 2, r["message"]
+        assert (root / save / "sdimg_SAVEDATA00").read_bytes() == b"backup save"
+
+        write(root / save / "sdimg_SAVEDATA00", b"newer save on the console")
+        r = asyncio.run(restore())
+        assert r["status"] == "confirm" and "already has save data" in r["message"]
+        assert (root / save / "sdimg_SAVEDATA00").read_bytes() == b"newer save on the console"
+
+        r = asyncio.run(restore(overwrite=True))
+        assert r["status"] == "success", r["message"]
+        assert (root / save / "sdimg_SAVEDATA00").read_bytes() == b"backup save"
+        assert sorted(p.name for p in (root / save).parent.iterdir()) == [".keep", "PPSA03333"]  # no .partial left
+        kept = next(b for b in jobs.list_save_backups("PPSA03333") if b["name"] != "backup")
+        assert (Path(kept["path"]) / save / "sdimg_SAVEDATA00").read_bytes() == b"newer save on the console"
+
+        write(root / "mnt/sandbox/PPSA03333_000/app0/eboot.bin", b"e")
+        r = asyncio.run(restore(overwrite=True))
+        assert r["status"] == "failed" and "is open on the console" in r["message"]
 
 
 def test_progress_reports_the_current_speed(monkeypatch):

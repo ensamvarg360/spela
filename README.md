@@ -31,7 +31,7 @@ Browse them on your PC, install them to your console over your home network, rem
 - **Moves games between drives** on the console itself, without sending anything over the network.
 - **Fixes the home screen.** Installed games get their proper logo on the PS5 home screen, which a jailbroken console can't fetch itself.
 - **Handles DLC.** Installs DLC unlockers into a game's folder; keeps DLC in its own list.
-- **Backs up save data** from the console to your PC, and converts folder dumps to `.exfat` images in plain Python (no OSFMount, WSL or admin rights).
+- **Backs up and restores save data** between the console and your PC (asking before it replaces a save), and converts folder dumps to `.exfat` images in plain Python (no OSFMount, WSL or admin rights).
 - **Wakes the console** from rest mode, and re-sends its helper by itself after the console restarts.
 - **Has a PS5 app.** Games, Installed, DLC and a cart on the TV, with Cross to install and Square to stop or remove.
 - **Stays private.** Runs in the tray, answers only to your PC by default, and can give a phone or a guest a view-only password.
@@ -102,7 +102,7 @@ The **helper** is a small C payload (see [payload/main.c](payload/main.c)) that 
 Spela touches a game console, so it's built to be careful:
 
 - **LAN only.** It listens on `127.0.0.1` unless you opt in to your home network, refuses requests addressed to a host name (so a malicious website can't reach it by DNS rebinding), and must never be exposed to the internet.
-- **The helper only writes where it should.** Changes are limited to the `homebrew` folders on the console's drives, plus the one logo file and database column of a game the console already has. Everything else on the console is read-only to it.
+- **The helper only writes where it should.** Changes are limited to the `homebrew` folders on the console's drives, a game's own save folders when you restore a backup, and the one logo file and database column of a game the console already has. Everything else on the console is read-only to it.
 - **Only your PC can talk to it.** Each helper copy carries a key made for that console and PC; requests without it are refused, and so are requests from web pages. An unpaired helper refuses everything.
 - **Verified copies and explicit removals.** Installs are checked file by file before they appear. Removals show the exact path first, need a typed confirmation, and are written to an audit log. Your PC copy and your save data are never deleted.
 - **Passwords done properly.** The admin password is stored as a salted PBKDF2 hash, logins are rate-limited, and console passwords are encrypted at rest.
@@ -113,7 +113,7 @@ Found a security problem? Please read [SECURITY.md](SECURITY.md) first.
 
 - **`.pkg`** installs are untested and limited to firmware 11.60 and lower: the helper starts the console's own package installer, and fake packages don't launch on newer firmware yet.
 - It doesn't build FPKGs, and only converts folder dumps to `.exfat`.
-- It doesn't restore save data (backing up only), because restoring would mean letting the helper write outside `homebrew`.
+- It only restores saves it backed up itself, to the console and account they came from. Saves from anywhere else are encrypted for another console and won't work.
 - It's built for **one user at home**, not for hosting a library for other people.
 
 ## Build it yourself
