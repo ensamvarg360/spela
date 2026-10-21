@@ -115,6 +115,9 @@ label.check { flex-direction: row; align-items: center; gap: 0.4rem; color: var(
 label.sort { flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
 label.sort select { padding: 0.3rem 0.5rem; font-size: 0.85rem; }
 .tile-size { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); }
+.tile-size button { all: unset; display: flex; cursor: pointer; }
+.tile-size button:hover { color: var(--text); }
+.tile-size button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
 .tile-size svg { width: 0.85rem; height: 0.85rem; fill: currentColor; flex: none; }
 .tile-size input { -webkit-appearance: none; appearance: none; width: 100px; height: 1rem; margin: 0; padding: 0; border: none; background: none; cursor: pointer; }
 .tile-size input::-webkit-slider-runnable-track { height: 3px; border-radius: 3px; background: var(--border); }

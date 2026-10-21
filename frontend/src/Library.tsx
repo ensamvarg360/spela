@@ -139,7 +139,7 @@ function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Se
 }
 
 // card width in px from the size slider; below TILE_TEXT the text is too small to read, so only posters show
-const TILE_MIN = 80, TILE_MAX = 190, TILE_TEXT = 140;
+const TILE_MIN = 80, TILE_MAX = 190, TILE_TEXT = 140, TILE_STEP = 10;
 
 /** The grid of games, or of DLC: DLC shares its game's title ID, so its tiles show the game's art. */
 export default function Library({ kind, view, setView }: { kind: Kind; view: View; setView: (v: View) => void }) {
@@ -149,7 +149,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
   const [filtersOpen, setFiltersOpen] = useState(false); // phones only: the sidebar sits behind a button
   const [picked, setPicked] = useState<Set<string> | null>(null); // null = not selecting; tiles open their game
   const [tile, setTile] = useState(() => { try { return Number(localStorage.getItem("tileSize")) || TILE_MAX; } catch { return TILE_MAX; } });
-  const resize = (px: number) => { setTile(px); try { localStorage.setItem("tileSize", String(px)); } catch { /* not remembered */ } };
+  const resize = (px: number) => { px = Math.min(TILE_MAX, Math.max(TILE_MIN, px)); setTile(px); try { localStorage.setItem("tileSize", String(px)); } catch { /* not remembered */ } };
   const { cid, console: target } = useConsoles();
   const [tooNew, setTooNew] = useState<Set<string>>(new Set()); // packages the console's firmware can't run
   useEffect(() => {
@@ -264,10 +264,14 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
             </select>
           </label>
           <span className="tile-size">
-            <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h4v4H1zM6 1h4v4H6zM11 1h4v4h-4zM1 6h4v4H1zM6 6h4v4H6zM11 6h4v4h-4zM1 11h4v4H1zM6 11h4v4H6zM11 11h4v4h-4z" /></svg>
-            <input type="range" min={TILE_MIN} max={TILE_MAX} value={tile} aria-label="Card size"
+            <button type="button" aria-label="Smaller cards" onClick={() => resize(tile - TILE_STEP)}>
+              <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h4v4H1zM6 1h4v4H6zM11 1h4v4h-4zM1 6h4v4H1zM6 6h4v4H6zM11 6h4v4h-4zM1 11h4v4H1zM6 11h4v4H6zM11 11h4v4h-4z" /></svg>
+            </button>
+            <input type="range" min={TILE_MIN} max={TILE_MAX} step={TILE_STEP} value={tile} aria-label="Card size"
               onChange={(e) => resize(Number(e.target.value))} />
-            <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h6v6H1zM9 1h6v6H9zM1 9h6v6H1zM9 9h6v6H9z" /></svg>
+            <button type="button" aria-label="Larger cards" onClick={() => resize(tile + TILE_STEP)}>
+              <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h6v6H1zM9 1h6v6H9zM1 9h6v6H1zM9 9h6v6H9z" /></svg>
+            </button>
           </span>
         </div>
         {picked && <InstallBar kind={kind} picked={picked} shown={shown} setPicked={setPicked} />}
