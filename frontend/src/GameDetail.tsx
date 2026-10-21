@@ -308,13 +308,16 @@ function SaveBackups({ tid, consoleId }: { tid: string; consoleId?: string }) {
     api<SaveJob>(`/consoles/${cid}/save-restores`, { json: { title_id: tid, backup, overwrite } }).then(setR, (e) => setError(e.message)));
   useEffect(() => {
     if (r?.status !== "copying") return;
+    let done = false;  // confirm() blocks: without this, a tick queued behind it would ask again after Cancel
     const t = setInterval(() => api<SaveJob>(`/save-restores/${r.id}`).then((nr) => {
+      if (done) return;
+      if (nr.status !== "copying") (done = true), clearInterval(t);
       setR(nr);
       if (nr.status === "confirm" && confirm(`${nr.message}\n\nReplace them with the backup "${nr.backup}"? Spela first backs up ` +
         "the saves on the console to this PC. Close the game on the PS5 first.")) restore(nr.backup!, true);
       else if (nr.status !== "copying") load();
     }, () => {}), 1000);
-    return () => clearInterval(t);
+    return () => ((done = true), clearInterval(t));
   }, [r?.id, r?.status]);
 
   if (!consoles.length) return null;
