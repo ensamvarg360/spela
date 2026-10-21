@@ -141,15 +141,19 @@ export default function Dashboard() {
           <ul className="problems">
             {missing.length > 0 && <li><span className="badge incompatible">Missing</span> {missing.length} {missing.length === 1 ? "game's files are" : "games' files are"} gone from disk: {missing.slice(0, 3).map((g) => g.title).join(", ")}{missing.length > 3 && "…"}. Remove {missing.length === 1 ? "it" : "them"} from the catalog, or plug the drive back in and scan.</li>}
             {attention.length > 0 && <li><span className="badge needs_attention">Check</span> {attention.length} {attention.length === 1 ? "game needs" : "games need"} a title ID checked before installing: {attention.slice(0, 3).flatMap((g, i) => [i ? ", " : "", <a key={g.id} href={`#/game/${g.id}`}>{g.title}</a>])}{attention.length > 3 && "…"}</li>}
-            {problems.map((p) => (
+            {problems.map((p) => {
+              const g = p.title_id ? games.find((g) => g.title_id === p.title_id && g.kind === "game") ?? games.find((g) => g.title_id === p.title_id) : undefined;
+              return (
               <li key={p.id}>
                 <span className="badge incompatible">{p.result}</span> {ACTION_LABEL[p.action] ?? p.action}
+                {g && <> · <a href={`#/game/${g.id}`}>{g.title}</a></>}
                 {p.title_id && <> · <code>{p.title_id}</code></>}
                 {p.console_name && <> · {p.console_name}</>}
                 {" · "}<span className="muted">{new Date(p.created_at).toLocaleString()}</span>
                 {typeof (p.details.message ?? p.details.reason ?? p.details.error) === "string" && <div className="muted">{String(p.details.message ?? p.details.reason ?? p.details.error)}</div>}
               </li>
-            ))}
+              );
+            })}
           </ul>
           {problems.length > 0 && <p className="muted">From the last 7 days. The full list is in <a href="#/settings">Settings → Activity log</a>.</p>}
         </section>
