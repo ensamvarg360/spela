@@ -340,6 +340,10 @@ def test_outdated_console_app_is_updated_by_itself(monkeypatch):
         async def install_console_app(self, files):
             WithApp.copied.append(files["assets/version.txt"].decode())
 
+        async def set_home_logo(self, title_id, png):
+            WithApp.logos.append(title_id)
+        logos: list = []
+
     monkeypatch.setattr(inventory, "adapter_for", lambda db, c: WithApp(c))
     monkeypatch.setattr(inventory, "refresh", lambda db, c: asyncio.sleep(0))
     monkeypatch.setattr(inventory.relay, "ensure", lambda *a: None)
@@ -350,8 +354,14 @@ def test_outdated_console_app_is_updated_by_itself(monkeypatch):
         db.commit()
     asyncio.run(inventory.check(con.id))
     assert WithApp.copied == [__version__]
+    assert WithApp.logos == ["PPSA99787"]
     with SessionLocal() as db:
         assert db.get(Console, con.id).helper_status["console_app"] == __version__
+    WithApp.app = __version__
+    monkeypatch.setitem(inventory._auto_app_at, con.id, 0.0)
+    asyncio.run(inventory.check(con.id))
+    assert WithApp.logos == ["PPSA99787"]  # already there
+    inventory.app_logo_set.discard(con.id)
     WithApp.app = "missing"  # removed, or never installed
     monkeypatch.setitem(inventory._auto_app_at, con.id, 0.0)
     asyncio.run(inventory.check(con.id))

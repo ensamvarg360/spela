@@ -476,6 +476,7 @@ def helper_elf(key: str) -> bytes:
 CONSOLE_APP_TITLE_ID = "PPSA99787"
 CONSOLE_APP_DIR = Path(__file__).parent / "console_app" / CONSOLE_APP_TITLE_ID
 CONSOLE_APP_PATH = f"/data/homebrew/{CONSOLE_APP_TITLE_ID}"
+CONSOLE_APP_LOGO = CONSOLE_APP_DIR.parent / "logo.png"  # the wordmark, for its home-screen page (not copied with it)
 HOME_DB = "/system_data/priv/mms/app.db"  # the home screen's database: titles, concept IDs, tile images
 SAVE_HOME = "/user/home"  # one folder per user, holding their save data (FTPConsoleAdapter._backup_saves)
 

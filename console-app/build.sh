@@ -37,10 +37,10 @@ done
 grep -q '^    action_bit(Action::page_prev) | action_bit(Action::page_next) | action_bit(Action::touch);' src/app/shell.cpp
 sed -i 's#^    action_bit(Action::page_prev) | action_bit(Action::page_next) | action_bit(Action::touch);#    action_bit(Action::touch);#' src/app/shell.cpp
 
-# Leave out what we don't use: music, the second sound set, the kit's home-screen art.
+# Leave out what we don't use: music, the second sound set, the kit's home-screen art (ours is copied next).
 rm -rf assets/audio/music assets/audio/sfx/paper
 rm -f sce_sys/pic0.dds sce_sys/pic1.dds sce_sys/snd0.at9 sce_sys/*-source.png
-cp /repo/console-app/sce_sys/icon0.png sce_sys/icon0.png
+cp /repo/console-app/sce_sys/icon0.png /repo/console-app/sce_sys/pic0.dds sce_sys/ # pic0: behind the tile when selected (make_background.py)
 TITLE_ID=$TITLE_ID APP_NAME="Spela" make init >/dev/null
 # make init derives the content ID from the name. Consoles that have the app registered keep the ID it had then
 # (PS5LOCALSTOREFRO), and a changed one can leave it unable to start (CE-107750-0), so keep it.

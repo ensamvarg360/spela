@@ -1388,6 +1388,7 @@ async def install_console_app(console_id: str, db: Session = Depends(get_db)):
         raise _adapter_failed(502, e)
     db.add(AuditLog(action="console_app_install", console_id=c.id, result="success", details={"version": __version__}))
     db.commit()
+    inventory.app_logo_set.discard(c.id)  # a new tile needs the logo again; the monitor puts it there
     inventory.record(c.id, "online")
     return _console_out(c)
 

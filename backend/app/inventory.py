@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from . import __version__, config, credentials, relay
-from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError, ConsoleAdapter, ConsoleStatus, HelperConsoleAdapter, get_adapter
+from .consoles import CONSOLE_APP_DIR, CONSOLE_APP_LOGO, CONSOLE_APP_TITLE_ID, TITLE_ID, AdapterError, ConsoleAdapter, ConsoleStatus, HelperConsoleAdapter, get_adapter
 from .database import SessionLocal
 from .models import AuditLog, Console, Drive, Game, InstalledGame, now
 
@@ -18,6 +18,7 @@ status: dict[str, dict] = {}  # console id -> {state, message, checked_at, failu
 AUTO_HELPER_SECONDS = 60  # between tries to send the helper (or an update of the PS5 app) to a console
 _auto_helper_at: dict[str, float] = {}
 _auto_app_at: dict[str, float] = {}
+app_logo_set: set[str] = set()  # consoles whose PS5 app tile has the wordmark as its logo
 
 
 def adapter_for(db: Session, console: Console) -> ConsoleAdapter:
@@ -174,22 +175,29 @@ async def _auto_helper(db: Session, console: Console, adapter: ConsoleAdapter, r
 
 
 async def _auto_console_app(db: Session, console: Console, adapter: ConsoleAdapter, result: ConsoleStatus):
-    """Brings an installed PS5 app up to this version, as _auto_helper does for the helper. Never installs it on a
-    console without it, so Remove PS5 app keeps it removed."""
+    """Brings an installed PS5 app up to this version, as _auto_helper does for the helper, then puts the wordmark
+    on its home-screen page (once per run of this PC app: the home screen keeps it). Never installs it on a console
+    without it, so Remove PS5 app keeps it removed."""
     app = result.helper_status.get("console_app")
-    if console.connection_type not in ("helper", "ftp") or result.state != "online"             or app in (None, "missing", __version__) or not CONSOLE_APP_DIR.is_dir():
+    if console.connection_type not in ("helper", "ftp") or result.state != "online"             or app in (None, "missing") or (app == __version__ and console.id in app_logo_set) or not CONSOLE_APP_DIR.is_dir():
         return
     if time.monotonic() - _auto_app_at.get(console.id, float("-inf")) < AUTO_HELPER_SECONDS:
         return
     _auto_app_at[console.id] = time.monotonic()
+    if app != __version__:
+        try:
+            await adapter.install_console_app(console_app_files(console))
+        except AdapterError:  # tried again in a minute; Update PS5 app in Settings shows why
+            return
+        result.helper_status["console_app"] = __version__
+        db.add(AuditLog(action="console_app_install", console_id=console.id, result="success",
+                        details={"version": __version__, "from": app, "automatic": True}))
+        db.commit()
     try:
-        await adapter.install_console_app(console_app_files(console))
-    except AdapterError:  # tried again in a minute; Update PS5 app in Settings shows why
-        return
-    result.helper_status["console_app"] = __version__
-    db.add(AuditLog(action="console_app_install", console_id=console.id, result="success",
-                    details={"version": __version__, "from": app, "automatic": True}))
-    db.commit()
+        await adapter.set_home_logo(CONSOLE_APP_TITLE_ID, CONSOLE_APP_LOGO.read_bytes())
+        app_logo_set.add(console.id)
+    except AdapterError:  # its tile isn't on the home screen yet, or the helper is too old: tried again in a minute
+        pass
 
 
 async def monitor():
