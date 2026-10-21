@@ -374,7 +374,7 @@ def evaluate(game: Game, duplicate_ids: set[str], game_ids: set[str] = frozenset
     elif game.metadata_confidence in ("low", "unknown"):
         reasons.append(f"Title ID comes from the {game.metadata_source}, not package metadata; verify it.")
     elif game.title_id in duplicate_ids:
-        reasons.append("Duplicate title ID in library.")
+        reasons.append("Another copy in your library has the same title ID; a console holds only one.")
     return ("needs_attention", " ".join(reasons)) if reasons else ("ready", "")
 
 

@@ -291,6 +291,27 @@ def test_job_runs_to_success_then_blocks_reinstall(ps5, monkeypatch):
         assert told == [("Dump PPSA03333: installed", "Installed on USB drive 0. All 3 files checked.")]
 
 
+def test_second_copy_of_a_title_is_never_installed(ps5):
+    root, port, lib = ps5
+    with SessionLocal() as db:
+        c, (v1, v2) = _setup(db, port, lib, (lib / "Dump PPSA03333", "folder_dump"), (lib / "Racer PPSA04444.exfat", "image"))
+        v1.title_id, v2.title_id = "PPSA03333", "PPSA03333"
+        db.commit()
+        first = jobs.queue(db, c, v1)
+        with pytest.raises(ValueError, match="Another copy of PPSA03333"):
+            jobs.queue(db, c, v2)
+
+        v2.title_id = "PPSA04444"  # queued as another title, then corrected to the same one
+        second = jobs.queue(db, c, v2)
+        v2.title_id = "PPSA03333"
+        db.commit()
+        asyncio.run(jobs.run(first.id))
+        asyncio.run(jobs.run(second.id))
+        db.expire_all()
+        assert (first.status, second.status, second.error_detail["error"]) == ("success", "failed", "already_installed")
+        assert not (root / "mnt/usb0/homebrew/Racer PPSA04444.exfat").exists()
+
+
 def test_dlc_unlocker_is_copied_into_the_game_folder(ps5):
     root, port, lib = ps5
     write(lib / "Dump PPSA03333/fakelib/libSceAppContent.sprx", b"original")

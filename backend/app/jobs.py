@@ -62,6 +62,10 @@ def pkg_blocker(console: Console, game: Game) -> str:
     return ""
 
 
+def _installed(db: Session, console: Console, title_id: str) -> bool:
+    return bool(db.scalar(select(InstalledGame.id).where(InstalledGame.console_id == console.id, InstalledGame.title_id == title_id)))
+
+
 def unlocker_target(db: Session, console: Console, title_id: str | None) -> tuple[InstalledGame | None, str]:
     """The installed game folder a DLC unlocker for `title_id` is copied into, or (None, why not)."""
     if not title_id:
@@ -89,12 +93,15 @@ def blocker(db: Session, console: Console, game: Game) -> str | None:
         return game.compatibility_reason
     if game.format == "unlocker" and not (target := unlocker_target(db, console, game.title_id))[0]:
         return target[1]
-    if game.kind == "game" and game.title_id and db.scalar(select(InstalledGame.id).where(
-            InstalledGame.console_id == console.id, InstalledGame.title_id == game.title_id)):
+    if game.kind == "game" and game.title_id and _installed(db, console, game.title_id):
         return "Already installed on this console."
-    if db.scalar(select(InstallJob.id).where(InstallJob.console_id == console.id, InstallJob.game_id == game.id,
-                                             InstallJob.status.in_(ACTIVE))):
+    active = select(InstallJob.id).join(Game, Game.id == InstallJob.game_id).where(
+        InstallJob.console_id == console.id, InstallJob.status.in_(ACTIVE))
+    if db.scalar(active.where(InstallJob.game_id == game.id)):
         return "Already queued."
+    # Two copies of one title (another version, a differently named folder) would both mount as the same game.
+    if game.kind == "game" and game.title_id and db.scalar(active.where(Game.kind == "game", Game.title_id == game.title_id)):
+        return f"Another copy of {game.title_id} is already queued for this console."
     return None
 
 
@@ -194,6 +201,9 @@ async def run(job_id: str):
                 raise AdapterError("source_missing", f"Can't read {game.source_path}.")
             if inventory.status.get(console.id, {}).get("state") != "online":
                 raise AdapterError("console_offline", "The console isn't online.")
+            # checked again here: a copy queued earlier may have installed since, or the title ID was edited
+            if game.kind == "game" and game.title_id and _installed(db, console, game.title_id):
+                raise AdapterError("already_installed", f"{game.title_id} is already installed on this console.")
             adapter = inventory.adapter_for(db, console)
             source, needed = game.source_path, game.size_bytes
             pkg = game.format in PKG_FORMATS
@@ -312,8 +322,7 @@ def _check_contents(db: Session, console: Console, game: Game, item: scanner.Ite
     if tid and item.metadata_confidence == "high" and game.metadata_source != "manual":
         game.title_id, game.metadata_source, game.metadata_confidence = tid, item.metadata_source, "high"
         game.version = item.version or game.version
-    if game.kind == "game" and tid and db.scalar(select(InstalledGame.id).where(InstalledGame.console_id == console.id,
-                                                                                InstalledGame.title_id == tid)):
+    if game.kind == "game" and tid and _installed(db, console, tid):
         raise AdapterError("already_installed", f"{tid} is already installed on this console.")
 
 
