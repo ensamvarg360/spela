@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import secrets
+import socket
 import shutil
 import sys
 import threading
@@ -45,7 +46,9 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).warning("First run: to set the admin password from another device, enter the "
                                             "setup code %s%s", SETUP_CODE, f" (not needed in the first {SETUP_WINDOW // 60}"
                                             " minutes after this start)" if config.DOCKER else "")
-    tasks = [asyncio.create_task(jobs.worker())]
+    if config.DOCKER:
+        logging.getLogger(__name__).warning("%s", _open_hint())
+    tasks =[asyncio.create_task(jobs.worker())]
     if config.SCAN_INTERVAL_MINUTES > 0:
         tasks.append(asyncio.create_task(_scheduled_scans()))
     if config.CONSOLE_CHECK_SECONDS > 0:
@@ -53,6 +56,25 @@ async def lifespan(app: FastAPI):
     yield
     for task in tasks:
         task.cancel()
+
+
+def _open_hint() -> str:
+    """Where to open Spela from another device, for the container's log: the first thing to try after installing."""
+    ip = ""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("8.8.8.8", 9))  # sends nothing: picks the network card with the default route
+            ip = s.getsockname()[0]
+        except OSError:
+            pass
+    # ponytail: 172.16-31.x is taken to be Docker's own bridge network; a home network in that range gets the generic hint
+    if not ip or ip.startswith("172.") and 16 <= int(ip.split(".")[1]) <= 31:
+        where = f"http://<your NAS's IP address>:{config.PORT}"
+    else:
+        where = f"http://{ip}:{config.PORT}"
+    return (f"Spela is running. Open {where} on a phone or computer on the same network. Page doesn't load? On Docker "
+            f"Desktop use the bridge network (ports: [\"{config.PORT}:{config.PORT}\"]), and allow port {config.PORT} "
+            "in the NAS's firewall.")
 
 
 async def _scheduled_scans():
