@@ -1,9 +1,11 @@
 # The Docker image of each release, from the same tagged commit as the Windows zip (release.ps1 -Publish pushes the tag):
 # ghcr.io/ensamvarg360/spela:<version> and :latest, for amd64 and arm64.
+# Pushes to the docker branch publish :edge, to try an unreleased build on a NAS the way users install it.
 name: Docker
 on:
   push:
     tags: ["v*"]
+    branches: [docker]
 
 jobs:
   image:
@@ -26,7 +28,8 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=edge,branch=docker
       - uses: docker/build-push-action@v6
         with:
           context: .
