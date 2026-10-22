@@ -35,6 +35,29 @@ def test_setup_window(monkeypatch):
             config.PASSWORD_FILE.write_bytes(saved)
 
 
+def test_other_sites_cant_post():
+    """Another app on the same NAS (same IP, other port) counts as the same site for the cookie, so it's refused here."""
+    with TestClient(app, base_url="http://192.168.1.5:8787") as c:
+        other = {"Origin": "http://192.168.1.5:9000", "Sec-Fetch-Site": "same-site"}
+        assert c.post("/api/v1/auth/logout", headers=other).json()["error"] == "cross_site"
+        assert c.post("/api/v1/auth/logout", headers={"Origin": "http://192.168.1.5:9000"}).status_code == 403
+        assert c.post("/api/v1/auth/logout", headers={"Origin": "http://192.168.1.5:8787",
+                                                      "Sec-Fetch-Site": "same-origin"}).status_code == 200
+        assert c.post("/api/v1/auth/logout").status_code == 200  # no browser headers: the PS5 app, the relay
+        assert c.get("/api/v1/health", headers=other).status_code == 200  # reads are fine
+
+
+def test_login_attempt_counts_before_the_hash(monkeypatch):
+    """Tries sent at once must each see the earlier ones, so the attempt is counted before the slow password check."""
+    seen = []
+    monkeypatch.setattr(main, "_require_setup_done", lambda: None)
+    monkeypatch.setattr(main, "_check_password", lambda pw, role="admin": seen.append(len(main._failures["10.0.0.9"])))
+    monkeypatch.setattr(main, "_failures", {})
+    with TestClient(app, base_url="http://127.0.0.1", client=("10.0.0.9", 50000)) as c:
+        codes = [c.post("/api/v1/auth/login", json={"password": "x"}).status_code for _ in range(6)]
+    assert seen[0] == 1 and codes == [401] * 5 + [429]
+
+
 def test_flow(library):
     with TestClient(app, base_url="http://127.0.0.1") as c:
         assert c.get("/api/v1/auth/me").json()["error"] == "setup_required"

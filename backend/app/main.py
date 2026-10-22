@@ -114,6 +114,19 @@ async def check_host(request: Request, call_next):
 
 
 @app.middleware("http")
+async def same_origin_writes(request: Request, call_next):
+    """Changes come only from Spela's own pages. The session cookie is SameSite, but a browser counts every port of one
+    IP address as the same site, so another app on a NAS could otherwise post a form here with the user's login.
+    Requests without these headers (the PS5 app, the relay, scripts) aren't from a web page and pass."""
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        site, origin = request.headers.get("sec-fetch-site"), request.headers.get("origin")
+        if (site and site not in ("same-origin", "none")
+                or origin and urllib.parse.urlsplit(origin).netloc != request.headers.get("host")):
+            return JSONResponse({"error": "cross_site", "message": "Only Spela's own page can change things here."}, 403)
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def revalidate_html(request: Request, call_next):
     """index.html must not be served from browser cache, or a rebuilt app keeps loading the old bundle.
     Hashed assets under /assets are fine to cache."""
@@ -262,11 +275,11 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(429, {"error": "rate_limited", "message": "Too many attempts. Wait a minute.",
                                   "fix": f"Forgot it? Delete admin_password in {config.DATA_DIR} and {config.RESTART} "
                                          "to choose a new one."})
+    _failures[ip] = recent + [time.time()]  # counted before the slow hash, or tries sent at once all get past the limit
     role = next((r for r in PASSWORD_FILES if _check_password(body.password, r)), None)
     db.add(AuditLog(action="login", result="success" if role else "failed", details={"ip": ip, **({"role": role} if role else {})}))
     db.commit()
     if not role:
-        _failures[ip] = recent + [time.time()]
         raise HTTPException(401, {"error": "invalid_credentials", "message": "Wrong password."})
     _failures.pop(ip, None)
     _log_in(request, role)
@@ -1501,7 +1514,8 @@ def console_install(game_id: str, drive: str | None = None, c: Console = Depends
 def console_favorite(game_id: str, on: bool, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
     """Marks a game a favorite, or not, with its other copies: the PS5 shows them as one card."""
     g = _game(db, game_id)
-    copies = db.scalars(select(Game).where(Game.kind == "game", Game.title_id == g.title_id))         if g.kind == "game" and g.title_id else [g]
+    copies = (db.scalars(select(Game).where(Game.kind == "game", Game.title_id == g.title_id))
+              if g.kind == "game" and g.title_id else [g])
     for copy in copies:
         copy.favorite = on
     db.commit()
