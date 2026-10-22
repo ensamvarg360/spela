@@ -120,6 +120,13 @@ def record(console_id: str, state: str, message: str = "", fix: str = "") -> dic
     prev = status.get(console_id, {})
     failures = 0 if state == "online" else prev.get("failures", 0) + 1
     status[console_id] = {"state": state, "message": message, "fix": fix, "checked_at": now(), "failures": failures}
+    if state == "online" and prev.get("state") != "online":  # back on, often after a restart, which drops the logos
+        from . import jobs, logos  # they import this module
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return prev  # not in the app's event loop (tests)
+        jobs._spawn(logos.restore(console_id))
     return prev
 
 
@@ -148,12 +155,10 @@ async def check(console_id: str) -> dict:
             if console.connection_type in ("helper", "ftp"):  # the helper runs: the PS5 app reaches the PC through it
                 relay.ensure(console.id, console.ip_address)
             if prev.get("state") != "online":
-                from . import jobs, logos  # they import this module
                 try:
                     await refresh(db, console)
                 except AdapterError as e:
                     record(console_id, "degraded", e.message, e.fix)
-                jobs._spawn(logos.restore(console.id))  # a restart of the PS5 drops the logos
         return status[console_id]
 
 
