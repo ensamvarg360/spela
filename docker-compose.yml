@@ -1,0 +1,17 @@
+# Spela on a NAS: `docker compose up -d`, then open http://<the NAS's IP>:8787.
+# The first password needs the setup code from the log: `docker logs spela`.
+services:
+  spela:
+    image: ghcr.io/ensamvarg360/spela:latest
+    container_name: spela
+    restart: unless-stopped
+    # host: Spela finds PS5s on your network by itself. With a bridge network (ports: ["8787:8787"] instead)
+    # everything works, but you type each PS5's IP address in yourself.
+    network_mode: host
+    environment:
+      TZ: Etc/UTC
+      # ALLOWED_HOSTS: tower.local  # names you open Spela by, besides its IP address (comma-separated)
+      # PORT: 8787
+    volumes:
+      - ./data:/data  # settings, covers, save backups; archives are extracted in data/staging
+      - /path/to/games:/games  # your game folders; add them in Spela as /games/...
