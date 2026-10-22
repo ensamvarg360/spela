@@ -1157,37 +1157,6 @@ def game_history(game_id: str, db: Session = Depends(get_db)):
     return {"installed": installed, "events": sorted(events, key=lambda e: e["at"], reverse=True)[:50]}
 
 
-@api.post("/games/{game_id}/home-logo")
-async def set_home_logo(game_id: str, db: Session = Depends(get_db)):
-    """Puts the game's title logo from PlayStation Store on its home-screen page, on each console it's installed on."""
-    g = _game(db, game_id)
-    console_ids = set(db.scalars(select(InstalledGame.console_id).where(InstalledGame.title_id == g.title_id))) if g.title_id else set()
-    if not console_ids:
-        raise HTTPException(409, {"error": "not_installed", "message": "Install the game on a console first."})
-    return await _apply_logo(db, console_ids, g.title_id)
-
-
-@api.post("/consoles/{console_id}/home-logo/{title_id}")
-async def set_console_home_logo(console_id: str, title_id: str, db: Session = Depends(get_db)):
-    """The same for a game on one console, also one that isn't in the library."""
-    db.get(Console, console_id) or _not_found()
-    return await _apply_logo(db, {console_id}, title_id)
-
-
-async def _apply_logo(db: Session, console_ids: set[str], title_id: str) -> list[dict]:
-    results = []
-    for c in db.scalars(select(Console).where(Console.id.in_(console_ids)).order_by(Console.name)):
-        ok, message = True, "Logo set."
-        try:
-            await logos.apply(db, c, title_id)
-        except AdapterError as e:
-            ok, message = False, e.message
-        results.append({"console": c.name, "ok": ok, "message": message})
-        logos.audit(db, c, title_id, ok, message)
-    db.commit()
-    return results
-
-
 @api.post("/games/{game_id}/convert", status_code=202)
 async def convert_game(game_id: str, db: Session = Depends(get_db)):
     """Starts writing the folder dump into an .exfat disc image next to it (jobs.start_convert). The folder is kept."""

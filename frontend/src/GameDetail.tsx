@@ -122,40 +122,6 @@ function Install({ game: opened }: { game: Game }) {
   );
 }
 
-/** Replaces the plain-text name on the game's PS5 home-screen page with its logo from PlayStation Store.
- * `consoleId`: on that console only; else on every console the game is on. */
-function HomeLogo({ url, consoleId }: { url: string; consoleId?: string }) {
-  const [busy, setBusy] = useState(false);
-  const { consoles } = useConsoles();
-  const target = consoles.find((c) => (consoleId ? c.id === consoleId : c.state === "online"));
-
-  async function apply() {
-    setBusy(true);
-    try {
-      const results = await api<{ console: string; ok: boolean; message: string }[]>(url, { method: "POST" });
-      toast(results.length === 1 ? results[0].message : results.map((r) => `${r.console}: ${r.message}`).join(" "), results.some((r) => !r.ok));
-    } catch (e) {
-      toastError(e);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <li className="sp-listrow">
-      <div className="sp-listrow__main">
-        <div className="sp-listrow__title">Home-screen logo</div>
-        <div className="sp-listrow__meta"><span>Shows the game's logo from PlayStation Store on its PS5 home-screen page, instead of its name in plain text.</span></div>
-      </div>
-      <div className="sp-listrow__aside">
-        {/* applies on every console the game is on; ponytail: any online console enables it, the result names the ones that failed */}
-        <button type="button" className="sp-btn sp-btn--sm" onClick={apply} {...needsOnline(target)} disabled={busy || target?.state !== "online"}>
-          {busy ? <><Spinner />Setting logo…</> : "Show logo"}</button>
-      </div>
-    </li>
-  );
-}
-
 type StoreImages = { store: string; name: string | null; sources: { label: string; images: { type: string | null; url: string }[] }[] }[];
 
 /** Lists every image PlayStation Store has for the game, by store and edition, to see which ones exist. */
@@ -499,9 +465,9 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
 
         {!session.readOnly && <Install game={game} />}
         {!session.readOnly && <Tools>{[
-          game.installed && <HomeLogo key="logo" url={`/games/${game.id}/home-logo`} />,
           game.format === "folder_dump" && <Convert key="convert" game={game} />,
         ]}</Tools>}
+        {!session.readOnly && game.title_id && game.kind === "game" && <SaveBackups tid={game.title_id} />}
 
         <InstallHistory game={game} />
 
@@ -517,7 +483,6 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
             </dl>
           </Collapsible>
           {game.title_id && <StoreImageBrowser url={`/games/${game.id}/store-images`} />}
-          {!session.readOnly && game.title_id && game.kind === "game" && <SaveBackups tid={game.title_id} />}
 
           <fieldset className="sp-stack sp-fieldset" disabled={session.readOnly}>
             <Collapsible title="Metadata" meta="Title, IDs, genre and description" open={unsure && !game.title_id}>
@@ -623,7 +588,7 @@ export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: st
           desc={<><span className="sp-code">{g.title_id}</span> · {c?.name ?? "…"}</>}
           actions={g.game_id && <a className="sp-btn" href={`#/game/${g.game_id}`}>Open in your PC library</a>} />
         {!g.game_id && <Notice title="Not in your PC library" text="Move it to this PC to keep a copy there." />}
-        {!session.readOnly && <Tools>{[<HomeLogo key="logo" url={`/consoles/${consoleId}/home-logo/${g.title_id}`} consoleId={consoleId} />]}</Tools>}
+        {!session.readOnly && <SaveBackups tid={g.title_id} consoleId={consoleId} />}
         {copies.map((r) => {
           const smp = r.install_route === "shadowmountplus" && !r.removing && !r.moving && !session.readOnly;
           const drive = drives.find((d) => d.id === r.drive_id)?.label ?? "Unknown drive";
@@ -649,10 +614,7 @@ export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: st
             </Panel>
           );
         })}
-        <div className="sp-stack">
-          <StoreImageBrowser url={`/titles/${g.title_id}/store-images`} />
-          {!session.readOnly && <SaveBackups tid={g.title_id} consoleId={consoleId} />}
-        </div>
+        <StoreImageBrowser url={`/titles/${g.title_id}/store-images`} />
       </div>
       {dialog?.kind === "move" && <MoveDialog consoleId={consoleId} game={dialog.game} drives={drives} onClose={() => { setDialog(null); load(); }} />}
       {dialog?.kind === "remove" && <RemoveDialog consoleId={consoleId} game={dialog.game} onClose={() => { setDialog(null); load(); }} />}
