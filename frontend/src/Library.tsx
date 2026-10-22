@@ -208,8 +208,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
     <Notice tone="info" title="Scanning your folders" text={`New ${noun} show up here when it's done.`} />
   );
   const head = (desc?: string) => (
-    <PageHead title={kind === "dlc" ? "DLC" : "Library"} desc={desc}
-      actions={!picked && !session.readOnly && games.length > 0 && <button type="button" className="sp-btn" onClick={() => setPicked(new Set())}>Select</button>} />
+    <PageHead title={kind === "dlc" ? "DLC" : "Library"} desc={desc} />
   );
   if (!games.length)
     return <>
@@ -288,6 +287,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
                 <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h6v6H1zM9 1h6v6H9zM1 9h6v6H1zM9 9h6v6H9z" /></svg>
               </button>
             </span>
+            {!picked && !session.readOnly && <button type="button" className="sp-btn" onClick={() => setPicked(new Set())}>Select</button>}
           </div>
           {picked && <InstallBar kind={kind} picked={picked} shown={shown} setPicked={setPicked} />}
           {shown.length ? (() => {
