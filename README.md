@@ -62,7 +62,7 @@ Browse them on your PC, install them to your console over your home network, rem
 
 ## Get started
 
-1. Download **`Spela-<version>.exe`** from the [latest release](https://github.com/ensamvarg360/spela/releases/latest) and double-click it. There's nothing to install. Windows may show a SmartScreen warning because the app isn't code-signed; the release has a `SHA256SUMS.txt` to check your download against.
+1. Download **`Spela-<version>.zip`** from the [latest release](https://github.com/ensamvarg360/spela/releases/latest), extract it (right-click, **Extract All**) and double-click **Spela.exe** in the Spela folder. There's nothing to install. Windows may show a SmartScreen warning because the app isn't code-signed; the release has a `SHA256SUMS.txt` to check your download against.
 2. Choose an admin password. The **setup guide** opens and takes you through the rest, one step at a time:
    - add your game folder (or a whole drive such as `G:\`) and scan it
    - add your PS5: Spela can find it on your network, or you type its IP address
@@ -121,7 +121,7 @@ Found a security problem? Please read [SECURITY.md](SECURITY.md) first.
 You need Python 3.12+ and Node 22; Docker Desktop only if you change the helper or the PS5 app.
 
 ```powershell
-./build.ps1                       # dist\Spela-<version>.exe
+./build.ps1                       # dist\Spela-<version>.zip (and the unzipped dist\Spela-<version>\Spela\Spela.exe)
 ```
 
 ```sh

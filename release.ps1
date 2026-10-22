@@ -1,12 +1,12 @@
 #Requires -Version 7.3
-# Builds a release into dist\release\v<version>\: the .exe (it bundles the helper and the PS5 app), SHA256SUMS.txt
+# Builds a release into dist\release\v<version>\: the .zip (it bundles the helper and the PS5 app), SHA256SUMS.txt
 # and RELEASE_NOTES.md (collected from the `Changelog:` trailers of the commits since the last tag).
 #   ./release.ps1                          build the current version; nothing is committed, tagged or pushed
 #   ./release.ps1 -Bump patch              raise the version first (patch|minor|major) and rebuild the helper (needs Docker);
 #                                          the bump stays uncommitted in your working tree until -Publish
 #   ./release.ps1 -Bump patch -Publish     also commit the bump, tag v<version>, push, and create the GitHub release (needs gh)
 #   ./release.ps1 -Publish -Draft          create the release as a draft, to look it over on GitHub before it goes live
-# The helper and PS5 app committed under backend\app are bundled in the .exe (rebuild them with payload\build.ps1 and console-app\build.ps1).
+# The helper and PS5 app committed under backend\app are bundled in the app (rebuild them with payload\build.ps1 and console-app\build.ps1).
 # They aren't separate downloads: both only work once Spela has paired them with a console, which only the app can do.
 param(
     [ValidateSet("patch", "minor", "major")][string]$Bump,
@@ -69,9 +69,9 @@ if ($missing) { Write-Warning ("Commits without a Changelog: trailer (left out o
 $out = "$root\dist\release\$tag"
 Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $out | Out-Null
-$exe = "Spela-$version.exe"
-Copy-Item "$root\dist\$exe" "$out\$exe"
-$assets = @($exe)
+$zip = "Spela-$version.zip"
+Copy-Item "$root\dist\$zip" "$out\$zip"
+$assets = @($zip)
 $sums = foreach ($a in $assets) { "{0} *{1}" -f (Get-FileHash "$out\$a" -Algorithm SHA256).Hash.ToLower(), $a }
 ($sums -join "`n") + "`n" | Set-Content "$out\SHA256SUMS.txt" -NoNewline
 
@@ -84,8 +84,8 @@ $notes.Add("### Downloads")
 $notes.Add("")
 $notes.Add("| File | What it is |")
 $notes.Add("|---|---|")
-$notes.Add("| ``$exe`` | **The app for Windows.** This is what most people want: download it and double-click. |")
-$notes.Add("| ``SHA256SUMS.txt`` | Checksums. In PowerShell: ``Get-FileHash $exe`` and compare. |")
+$notes.Add("| ``$zip`` | **The app for Windows.** This is what most people want: unzip it and double-click ``Spela.exe`` in the Spela folder. |")
+$notes.Add("| ``SHA256SUMS.txt`` | Checksums. In PowerShell: ``Get-FileHash $zip`` and compare. |")
 $notes.Add("")
 $notes.Add("**Spela provides no game files.** It only works with backups you made yourself of games you own.")
 $notes.Add("")

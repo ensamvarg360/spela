@@ -8,7 +8,7 @@ Full spec: [project.md](../project.md). **Status:** Phases 1–5 done, Phase 6 (
 
 ## Run (Windows)
 
-Double-click **Spela-<version>.exe**. It opens in its own window (Windows' built-in WebView2, not your browser) and runs in the background with an icon in the system tray. Closing the window keeps it running in the tray.
+Extract **Spela-<version>.zip** and double-click **Spela.exe** in the Spela folder (keep the `_internal` folder next to it). It opens in its own window (Windows' built-in WebView2, not your browser) and runs in the background with an icon in the system tray. Closing the window keeps it running in the tray.
 Right-click the tray icon to **Open** it, **Open data folder**, **Restart** or **Quit**. If an install, conversion, removal, move or save backup is still running (or an install is queued), **Quit** and **Restart** list it and ask: *Yes* waits until all of it is done, *No* stops now, *Cancel* keeps Spela running. While it waits, the tray menu has **Don't quit after all**. Shutting down Windows doesn't ask. Starting the .exe again while it's running brings its window back. The address http://127.0.0.1:8787 still works in a browser too.
 The first time, choose an admin password. The **setup guide** (*Get started*) opens next and takes you through adding your game folder, scanning it, adding the PS5 and starting the helper. It works out from what's already set up which steps are done, so you can leave and come back. Until every step is done, a card on the **Dashboard** shows how far you've got; **Hide** removes it, and **Settings** links to the guide again. Without the guide: go to **Settings**, click **Browse…**, pick a folder or a whole drive (for example `G:\`), and click **Scan now**.
 A folder is scanned with all its subfolders. System folders such as `$RECYCLE.BIN` and `System Volume Information` are skipped.
@@ -35,7 +35,7 @@ Installed games are matched to your library by title ID, and marked *Update in l
 The helper only changes files inside the `homebrew` folders (`/data/homebrew`, `/mnt/usbN/homebrew`, `/mnt/extN/homebrew`), plus one exception for [home-screen logos](#home-screen-logos); anything else on the console is read-only to it. It answers only to the PC that installed it: each copy the app sends carries a key for that console, and every request must include it. Web pages are refused too, so a website you visit can't control the console through your browser. If you move the app to another PC or lose its data folder, click **Install helper** again.
 **FTP (fallback)** still works: pick it with the port of an FTP payload (often 2121 or 1337). File access then goes over FTP, and the helper still reports firmware and drive space.
 The helper's version always equals the app's version. If they differ, the button changes to **Update helper**, and clicking it replaces the running copy.
-**Remove helper** (next to it) stops the helper and stops Spela from sending it by itself, so the console is free for other tools; the activity log records it. The helper lives only in the console's memory, so nothing of it is left on the PS5. Installed games, the PS5 app and home-screen logos are kept. Spela can't read or install to that console until you click **Install helper** again, which also turns the automatic sending back on. To stop using Spela altogether: click **Remove helper** for each console, then quit Spela from the tray menu and delete the `.exe` and the data folder. Before that, click **Remove PS5 app** (under **Settings → Consoles**, while the helper still runs): it deletes `/data/homebrew/PPSA99787` and the *Spela* tile. If the tile stays (an older ShadowMountPlus that refuses), delete it on the PS5 (Options, then Delete); it won't come back, since its files are gone.
+**Remove helper** (next to it) stops the helper and stops Spela from sending it by itself, so the console is free for other tools; the activity log records it. The helper lives only in the console's memory, so nothing of it is left on the PS5. Installed games, the PS5 app and home-screen logos are kept. Spela can't read or install to that console until you click **Install helper** again, which also turns the automatic sending back on. To stop using Spela altogether: click **Remove helper** for each console, then quit Spela from the tray menu and delete the Spela folder and the data folder. Before that, click **Remove PS5 app** (under **Settings → Consoles**, while the helper still runs): it deletes `/data/homebrew/PPSA99787` and the *Spela* tile. If the tile stays (an older ShadowMountPlus that refuses), delete it on the PS5 (Options, then Delete); it won't come back, since its files are gone.
 
 Removing the console under **Settings → Consoles** also revokes the PS5 app's key, so it can't reach the PC.
 
@@ -100,7 +100,7 @@ The app is built from [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5
 When a newer release is out, the top bar shows **v… available**, linking to its download page. The app asks GitHub's release list at most every 6 hours and sends nothing about you or your library.
 
 The version number lives in one place: `__version__` in [backend/app/__init__.py](../backend/app/__init__.py). The Python package, `/api/v1/health`, the page header and the helper payload all read it.
-To release a new version, first run the [manual test on a real PS5](manual-test.md), then `./release.ps1 -Bump patch -Publish` (or `minor` / `major`); see [Releasing](../CONTRIBUTING.md#releasing). A plain `./build.ps1` builds only the `.exe`, and `./build.ps1 -Bump patch` also raises the version and rebuilds the committed helper (`backend/app/payload/spela.elf`, needs Docker Desktop). A test fails if the bundled helper's version doesn't match the app's version.
+To release a new version, first run the [manual test on a real PS5](manual-test.md), then `./release.ps1 -Bump patch -Publish` (or `minor` / `major`); see [Releasing](../CONTRIBUTING.md#releasing). A plain `./build.ps1` builds only the app, and `./build.ps1 -Bump patch` also raises the version and rebuilds the committed helper (`backend/app/payload/spela.elf`, needs Docker Desktop). A test fails if the bundled helper's version doesn't match the app's version.
 
 ## Backup and restore
 
@@ -135,9 +135,9 @@ Keep `secret_key` together with `app.db`. Without it, saved console passwords ca
 | Saved console password "can't be decrypted" | `secret_key` or `CREDENTIALS_ENCRYPTION_KEY` changed. Enter the password again. |
 | Covers or games missing after moving to a new PC | See [Backup and restore](#backup-and-restore): drive letters must match, or re-add the library folders. |
 
-## Build the .exe
+## Build the app
 
-Needs Python 3.12+ and Node 22. Run `./build.ps1`; the result is `dist\Spela-<version>.exe`.
+Needs Python 3.12+ and Node 22. Run `./build.ps1`; the result is `dist\Spela-<version>.zip`, and unzipped in `dist\Spela-<version>\Spela\`.
 
 ## Develop
 
@@ -176,7 +176,7 @@ If a root or subfolder can't be read, the scan reports an error and leaves exist
 
 ## Deviations from project.md (deliberate, for now)
 
-- **Native Windows app, not Docker.** A container can't see the PC's drives without Docker Desktop mount setup, so it ships as one `.exe` (PyInstaller) that serves the web UI locally. The code is plain Python and still runs on Linux (`python launcher.py`).
+- **Native Windows app, not Docker.** A container can't see the PC's drives without Docker Desktop mount setup, so it ships as a zipped folder with `Spela.exe` (PyInstaller; a folder rather than one `.exe`, which Defender scans for seconds and which unpacks itself on every launch) that serves the web UI locally. The code is plain Python and still runs on Linux (`python launcher.py`).
 - **Admin password set on first run** (from this PC only) and stored as a PBKDF2 hash, instead of an environment variable.
 - **SQLite.** No Postgres, Redis or ARQ yet: a scan is the only background task. Models are portable; set `DATABASE_URL` (and add `psycopg`) to switch to Postgres.
 - **Numbered migrations, not Alembic.** `backend/app/migrations.py` upgrades an older database at startup, tracked in SQLite's `user_version`. Adding a model column means appending a step there. A data folder from a newer version is refused rather than opened by an older one.

@@ -51,11 +51,11 @@ For the maintainer. Needs Windows, PowerShell 7.3+, Python 3.12, Node 22, [GitHu
    ./release.ps1 -Bump patch          # or minor / major
    ```
 
-   This raises the version, rebuilds the helper, builds the `.exe`, runs the tests and writes `dist\release\v<version>\`:
+   This raises the version, rebuilds the helper, builds the `.zip`, runs the tests and writes `dist\release\v<version>\`:
 
    | File | What it is |
    |---|---|
-   | `Spela-<version>.exe` | The Windows app. It bundles the helper and the PS5 app. |
+   | `Spela-<version>.zip` | The Windows app: a Spela folder with `Spela.exe`. It bundles the helper and the PS5 app. |
    | `SHA256SUMS.txt` | Its checksum |
    | `RELEASE_NOTES.md` | Built from the `Changelog:` trailers; not uploaded as a file |
 

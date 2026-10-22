@@ -1,4 +1,5 @@
-# Builds "dist\Spela-<version>.exe": one file, no Python or Node needed to run it.
+# Builds "dist\Spela-<version>.zip" (a Spela folder with Spela.exe), no Python or Node needed to run it.
+# A folder, not one .exe: Defender scans a 48 MB one-file exe for ~6 s before it starts, and it unpacks on every launch.
 # -Bump patch|minor|major first raises the version in backend\app\__init__.py and rebuilds the helper payload (needs Docker).
 param([ValidateSet("patch", "minor", "major")][string]$Bump)
 $ErrorActionPreference = "Stop"
@@ -28,11 +29,13 @@ draw.text((img.width / 2, img.height - 22), 'v$version', fill=(200, 196, 230), a
 img.save(r'$PSScriptRoot\build\splash.png')
 "@
 Push-Location "$PSScriptRoot\backend"
-# --splash shows while the one-file .exe unpacks, before any Python runs; launcher.py closes it
-& "$venv\Scripts\python" -m PyInstaller --noconfirm --onefile --windowed --name "Spela-$version" --icon "$PSScriptRoot\backend\app\assets\spela.ico" `
+# --splash shows before any Python runs; launcher.py closes it
+$out = "$PSScriptRoot\dist\Spela-$version"
+& "$venv\Scripts\python" -m PyInstaller --noconfirm --onedir --windowed --name "Spela" --icon "$PSScriptRoot\backend\app\assets\spela.ico" `
     --splash "$PSScriptRoot\build\splash.png" `
-    --distpath "$PSScriptRoot\dist" --workpath "$PSScriptRoot\build" --specpath "$PSScriptRoot\build" `
+    --distpath $out --workpath "$PSScriptRoot\build" --specpath "$PSScriptRoot\build" `
     --add-data "$PSScriptRoot\frontend\dist;app/static" --add-data "$PSScriptRoot\backend\app\payload;app/payload" `
     --add-data "$PSScriptRoot\backend\app\console_app;app/console_app" `
     --add-data "$PSScriptRoot\backend\app\assets;app/assets" --collect-submodules uvicorn --collect-submodules pystray launcher.py
 Pop-Location
+Compress-Archive -Force "$out\Spela" "$out.zip"  # unzips to a Spela folder

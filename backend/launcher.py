@@ -145,7 +145,7 @@ def main():
     def restart(icon):
         stop()  # free the port before the new instance checks it
         cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, __file__]
-        # A one-file .exe must not reuse this instance's unpacked files, which are deleted when it exits.
+        # The new instance must not inherit the PyInstaller bootloader's settings of this one (splash, paths).
         subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
         icon.stop()
         window.destroy()
