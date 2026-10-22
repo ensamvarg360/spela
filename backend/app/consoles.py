@@ -519,6 +519,16 @@ SAVE_HOME = "/user/home"  # one folder per user, holding their save data (FTPCon
 SANDBOX = "/mnt/sandbox"  # a running app's sandbox is mounted at <title ID>_000 here
 
 
+def local_path(base: Path, rel: str) -> Path:
+    """Where `rel`, a console path made of names the console listed, lands under `base` on this PC. Refused when it
+    would leave `base`: something answering at the console's address could list "..", "..\\x" or "C:x"."""
+    p = base.joinpath(*filter(None, rel.split("/")))
+    if not p.resolve().is_relative_to(base.resolve()):
+        raise AdapterError("unsafe_name", f"The console listed {rel!r}, which would land outside {base} on this PC, "
+                                          "so the copy was stopped.")
+    return p
+
+
 class _FTP(ftplib.FTP):
     """ftplib plus the two reads the adapter needs; HelperFS offers the same methods over the helper payload."""
 
@@ -1207,7 +1217,7 @@ class FTPConsoleAdapter:
         total, done = sum(size for _, size in files), 0
         progress(0, total)
         for path, size in files:
-            local = dest / path.lstrip("/")
+            local = local_path(dest, path)
             local.parent.mkdir(parents=True, exist_ok=True)
             with open(local, "wb") as f:
                 def write(block: bytes):
@@ -1336,7 +1346,7 @@ class FTPConsoleAdapter:
             (tmp / ".partial").touch()  # the library scan skips a folder dump holding this marker
         progress(0, total)
         for rel, size in files.items():
-            local = Path(f"{tmp}{rel}")
+            local = local_path(tmp, rel)
             local.parent.mkdir(parents=True, exist_ok=True)
             with open(local, "wb") as f:
                 def write(block: bytes):

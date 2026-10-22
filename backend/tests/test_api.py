@@ -1,7 +1,9 @@
+import io
 import os
 import time
 
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app import config
 from app.database import SessionLocal
@@ -99,12 +101,17 @@ def test_flow(library):
         assert (g["metadata_source"], g["compatibility_status"]) == ("manual", "ready")
 
         r = c.post(f"/api/v1/games/{dump['id']}/cover", files={"file": ("c.png", b"newpng", "image/png")})
-        assert r.status_code == 200 and c.get(f"/api/v1/games/{dump['id']}/cover").content == b"newpng"
+        assert r.status_code == 415  # says PNG, isn't one
+        out = io.BytesIO()
+        Image.new("RGB", (2, 3)).save(out, "PNG")
+        newpng = out.getvalue()
+        r = c.post(f"/api/v1/games/{dump['id']}/cover", files={"file": ("c.png", newpng, "image/png")})
+        assert r.status_code == 200 and c.get(f"/api/v1/games/{dump['id']}/cover").content == newpng
         with SessionLocal() as db:  # data folder copied to another PC: the stored path is stale, the file moved along
             g = db.get(Game, dump["id"])
             g.cover_path = os.path.join("C:\\Users\\someone-else\\old", os.path.basename(g.cover_path))
             db.commit()
-        assert c.get(f"/api/v1/games/{dump['id']}/cover").content == b"newpng"
+        assert c.get(f"/api/v1/games/{dump['id']}/cover").content == newpng
         assert c.post(f"/api/v1/games/{dump['id']}/cover", files={"file": ("x.sh", b"#!", "text/x-sh")}).status_code == 415
 
         # Removing the root drops its catalog records too.

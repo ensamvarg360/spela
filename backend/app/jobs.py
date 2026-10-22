@@ -212,6 +212,8 @@ def _progress(job_id: str, started: float):
 async def run(job_id: str):
     with SessionLocal() as db:
         job = db.get(InstallJob, job_id)
+        if job.status != "queued":  # canceled between the worker picking it and now
+            return
         console, game = db.get(Console, job.console_id), db.get(Game, job.game_id)
         stop = _cancel.setdefault(job.id, threading.Event())
         try:
@@ -376,12 +378,15 @@ async def worker():
     recover()
     while True:
         # ponytail: one job at a time across all consoles (spec default is one per console); fine for one PS5.
-        with SessionLocal() as db:
-            job_id = db.scalar(select(InstallJob.id).where(InstallJob.status == "queued").order_by(InstallJob.created_at))
-        if job_id:
-            await run(job_id)
-        else:
-            await asyncio.sleep(1)
+        try:
+            with SessionLocal() as db:
+                job_id = db.scalar(select(InstallJob.id).where(InstallJob.status == "queued").order_by(InstallJob.created_at))
+            if job_id:
+                await run(job_id)
+                continue
+        except Exception:  # e.g. "database is locked": the worker must outlive it, or nothing installs until a restart
+            log.exception("install worker")
+        await asyncio.sleep(1)
 
 
 # ---------------------------------------------------------------- removal (project.md §13)

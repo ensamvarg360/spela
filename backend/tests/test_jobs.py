@@ -1,6 +1,7 @@
 """Install engine: FTP and helper staging into ShadowMountPlus folders and the job runner, against a real local FTP server."""
 import asyncio
 import ftplib
+import os
 import shutil
 import subprocess
 import threading
@@ -377,6 +378,9 @@ def test_job_failures(ps5, monkeypatch):
         job = jobs.queue(db, c, image)
         assert jobs.cancel(db, job) and job.status == "canceled"
         assert not jobs.cancel(db, job)
+        asyncio.run(jobs.run(job.id))  # the worker picked it just before the cancel: it stays canceled
+        db.expire_all()
+        assert job.status == "canceled"
 
         job = jobs.queue(db, c, image)
         job.status = "transferring"  # the app stopped mid-copy
@@ -708,6 +712,18 @@ def test_copy_to_pc_cancel_leaves_nothing(ps5, tmp_path):
     with pytest.raises(AdapterError) as e:
         asyncio.run(adapter(port).copy_to_pc("/data/homebrew/Big PPSA03333.exfat", pc / "Big PPSA03333.exfat", progress, stop))
     assert e.value.code == "canceled" and list(pc.iterdir()) == []
+
+
+def test_console_names_cant_leave_the_pc_folder(tmp_path):
+    """Copies to this PC are built from names the console lists; one that climbs out is refused, never written."""
+    assert consoles.local_path(tmp_path, "/user/home/1/x") == tmp_path / "user/home/1/x"
+    assert consoles.local_path(tmp_path, "") == tmp_path
+    for bad in ("/../escaped", "/a/../../escaped", "/..\\escaped", "/Z:escaped", "/C:\\escaped"):
+        if os.name != "nt" and ("\\" in bad or ":" in bad):
+            continue  # only Windows reads these as separators and drives
+        with pytest.raises(AdapterError) as e:
+            consoles.local_path(tmp_path, bad)
+        assert e.value.code == "unsafe_name"
 
 
 def test_save_backup_job(ps5, monkeypatch, tmp_path):

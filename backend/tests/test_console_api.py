@@ -324,13 +324,22 @@ def test_console_library_genres(tmp_path, monkeypatch):
             db.commit()
         auth = {"Authorization": f"Bearer {console_app_token(cid)}"}
 
-        def genres():
-            rows = client.get("/api/v1/console-app/library", headers=auth).text.splitlines()
-            return {r.split("\t")[0]: r.split("\t")[17] for r in rows}
+        def rows():
+            return {r.split("\t")[0]: r.split("\t") for r in client.get("/api/v1/console-app/library", headers=auth).text.splitlines()}
         asked = lambda: sum("PPSA07771" in url for url in looked_up)  # noqa: E731
-        first = genres()  # not looked up yet; the lookup runs after this answer
-        assert first[store.id] == "" and first[sidecar.id] == "Puzzle" and asked() == 1
-        assert genres()[store.id] == "Action|Role Playing Games" and asked() == 1  # kept, not asked again
+        first = rows()  # not looked up yet; the lookup runs after this answer
+        assert first[store.id][17] == "" and first[sidecar.id][17] == "Puzzle" and asked() >= 1
+        assert first[store.id][7] == "0"  # no poster on this PC yet: the PS5 doesn't ask for a cover
+        n = asked()
+        assert rows()[store.id][17] == "Action|Role Playing Games" and asked() == n  # kept, not asked again
+
+        # A poster that's on this PC counts as a cover, and is served without asking the store
+        out = io.BytesIO()
+        Image.new("RGB", (480, 720)).save(out, "JPEG")
+        (tmp_path / "store" / "PPSA07771.jpg").write_bytes(out.getvalue())
+        assert rows()[store.id][7] == "1"
+        assert len(client.get(f"/api/v1/console-app/covers/{store.id}", headers=auth).content) == 256 * 320 * 4
+        assert asked() == n
 
 
 def test_ftp_console_app_upload(ps5):  # noqa: F811

@@ -81,7 +81,10 @@ async def _scheduled_scans():
     # ponytail: interval rescans only; watchdog events are unreliable on SMB/NFS mounts anyway.
     while True:
         await asyncio.sleep(config.SCAN_INTERVAL_MINUTES * 60)
-        await asyncio.to_thread(scanner.run_scan_locked, SessionLocal)
+        try:
+            await asyncio.to_thread(scanner.run_scan_locked, SessionLocal)
+        except Exception:  # one failed scan must not end the rescans
+            logging.getLogger(__name__).exception("scheduled scan")
 
 
 APP_ID = "ps5-local-storefront"
@@ -590,6 +593,12 @@ async def upload_cover(game_id: str, file: UploadFile, db: Session = Depends(get
     data = await file.read(10 * 1024 * 1024 + 1)
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(413, {"error": "too_large", "message": "Cover must be under 10 MB."})
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.verify()
+    except Exception:  # Pillow raises many kinds for a broken or disguised file
+        raise HTTPException(415, {"error": "unsupported_media", "message": "That file isn't a readable image.",
+                                  "fix": "Use a JPEG, PNG or WebP picture."})
     for old in config.COVERS_DIR.glob(f"{g.id}.*"):
         old.unlink()
     dest = config.COVERS_DIR / f"{g.id}{ext}"
@@ -1377,17 +1386,26 @@ def _field(v) -> str:
 _store_warming = threading.Lock()
 
 
-def _warm_store(title_ids: list[str]):
-    """Looks up the store pages of games the PC hasn't shown yet, so their genres reach the PS5 on its next poll."""
+def _warm_store(games: list[tuple[str, str | None]]):
+    """Looks up the store pages and posters of games the PC hasn't shown yet, so their genres and covers reach the PS5
+    on a later poll. (title ID, content ID) each. Fetched while the PS5 waited, a poster would outlast the few seconds
+    the helper holds a request."""
     if not _store_warming.acquire(blocking=False):
         return  # a lookup from an earlier poll is still going
     try:
-        for title_id in title_ids:
+        for title_id, content_id in games:
             logos.concept(title_id)
             if not (logos.STORE_DIR / f"{title_id}.json").is_file():
                 break  # offline: try again on a later poll
+            logos.poster(title_id, content_id)
     finally:
         _store_warming.release()
+
+
+def _poster(title_id: str | None) -> Path | None:
+    """The game's poster when it's already on this PC (logos.poster keeps it), without asking the store."""
+    path = logos.STORE_DIR / f"{title_id}.jpg"
+    return path if title_id and path.is_file() else None
 
 
 @functools.lru_cache(maxsize=4096)
@@ -1406,7 +1424,8 @@ def _genres(g: Game) -> list[str]:
 
 @console_api.get("/library", response_class=PlainTextResponse)
 def console_library(background: BackgroundTasks, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
-    """id, title, title ID, version, size, state, progress (0-1 while installing or removing), has cover (1/0), kind, format,
+    """id, title, title ID, version, size, state, progress (0-1 while installing or removing), has cover (1/0; a store
+    poster counts once it's on this PC, so the PS5 asks for it then), kind, format,
     then while installing or removing: bytes done, bytes total, bytes/s, seconds left, the step it's on (empty when unknown),
     then favorite (1/0), when it was added to the library (Unix seconds) and its genres (joined by |; empty when unknown).
     state: installable | installed | update | queued | installing | removing | blocked:<reason>
@@ -1433,12 +1452,14 @@ def console_library(background: BackgroundTasks, c: Console = Depends(console_fr
             state = f"blocked:{reason}" if reason else "installable"
         lines.append("\t".join(map(_field, (g.id, g.title, g.title_id, g.version, g.size_bytes, state,
                                              f"{progress:.3f}" if progress is not None else "",
-                                             int(bool(g.cover_path or g.title_id)), g.kind, g.format, *detail,
+                                             int(bool(g.cover_path or _poster(g.title_id))), g.kind, g.format, *detail,
                                              int(g.favorite), int(g.created_at.timestamp()),
                                              "|".join(x.replace("|", " ") for x in _genres(g))))))
-    unknown = {g.title_id for g in games if g.title_id and not (logos.STORE_DIR / f"{g.title_id}.json").is_file()}
+    unknown = {(g.title_id, g.content_id) for g in games if g.title_id and not (
+        (logos.STORE_DIR / f"{g.title_id}.json").is_file()
+        and (g.cover_path or _poster(g.title_id) or (logos.STORE_DIR / f"{g.title_id}.none").is_file()))}
     if unknown:
-        background.add_task(_warm_store, sorted(unknown))
+        background.add_task(_warm_store, sorted(unknown, key=lambda t: t[0]))
     return "".join(f"{line}\n" for line in lines)
 
 
@@ -1452,15 +1473,14 @@ def console_drives(c: Console = Depends(console_from_token), db: Session = Depen
 @console_api.get("/covers/{game_id}")
 def console_cover(game_id: str, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
     """The cover as raw RGBA pixels, COVER_SIZE, cropped to fill. The console has no image decoder. Without a cover
-    of its own the game gets its PlayStation Store poster, like the PC app's tiles."""
+    of its own the game gets its PlayStation Store poster, like the PC app's tiles, once _warm_store has it."""
     # ponytail: resized on every request; cache the bytes in COVERS_DIR if the grid ever loads slowly.
     g = _game(db, game_id)
     try:
         path = _cover_file(g)
     except HTTPException:
-        if not (g.title_id and (poster := logos.poster(g.title_id, g.content_id))):
+        if not (path := _poster(g.title_id)):
             raise
-        path = poster
     with Image.open(path) as im:
         data = ImageOps.fit(im.convert("RGBA"), COVER_SIZE).tobytes()
     return Response(data, media_type="application/octet-stream")
