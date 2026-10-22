@@ -1,5 +1,7 @@
-# Spela on a NAS: `docker compose up -d`, then open http://<the NAS's IP>:8787.
-# The first password needs the setup code from the log: `docker logs spela`.
+# Spela on a NAS. ZimaOS/CasaOS: App Store → + → Install a customized app → Import, paste this file, then pick your
+# games folder in the form. Anywhere else: change the two host paths below, `docker compose up -d`, and open
+# http://<the NAS's IP>:8787. The first password needs the setup code from the log: `docker logs spela`.
+name: spela
 services:
   spela:
     image: ghcr.io/ensamvarg360/spela:latest
@@ -11,7 +13,39 @@ services:
     environment:
       TZ: Etc/UTC
       # ALLOWED_HOSTS: tower.local  # names you open Spela by, besides its IP address (comma-separated)
-      # PORT: 8787
     volumes:
-      - ./data:/data  # settings, covers, save backups; archives are extracted in data/staging
-      - /path/to/games:/games  # your game folders; add them in Spela as /games/...
+      - type: bind
+        source: /DATA/AppData/spela
+        target: /data
+      - type: bind
+        source: /DATA/Media/Games
+        target: /games
+    x-casaos:
+      envs:
+        - container: TZ
+          description:
+            en_us: Time zone, like Europe/Stockholm
+      volumes:
+        - container: /data
+          description:
+            en_us: Spela's settings, covers and save backups. Archives are unpacked here too, so it needs room for a whole game.
+        - container: /games
+          description:
+            en_us: Your PS5 game folders. In Spela, add them as /games/...
+
+x-casaos:
+  architectures: [amd64, arm64]
+  main: spela
+  author: ensamvarg360
+  developer: ensamvarg360
+  category: Gaming
+  icon: https://raw.githubusercontent.com/ensamvarg360/spela/master/images/spela_P_gradient_icon.png
+  title:
+    en_us: Spela
+  tagline:
+    en_us: Install PS5 games from your NAS
+  description:
+    en_us: Browse your PS5 game library and install games on your console over the network.
+  index: /
+  port_map: "8787"
+  scheme: http
