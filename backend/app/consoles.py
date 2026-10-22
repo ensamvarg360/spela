@@ -44,6 +44,13 @@ WAKE_UP = "Press the PS button on the controller, or click Wake if you've saved 
 INSTALL_HELPER = "Click Install helper in Settings → Consoles, or run your jailbreak: Spela sends it by itself within a minute."
 UPDATE_HELPER = "Click Update helper in Settings → Consoles, or wait: Spela replaces it by itself within a minute."
 OTHER_PC = "Another Spela (on another computer, or in Docker) runs this PS5's helper."
+
+
+def other_pc(owner: str) -> str:
+    """OTHER_PC, naming the other Spela when its helper says (helpers before the owner label don't)."""
+    return f"Another Spela ({owner}) is already connected to this PS5 and runs its helper." if owner else OTHER_PC
+
+
 OTHER_PC_FIX = ("Use that one, or click Install helper in Settings → Consoles to move the helper here. "
                 "Spela doesn't take it over by itself, or the two would keep replacing each other's.")
 
@@ -408,6 +415,7 @@ FTP_DRIVES = [
 IMAGE_EXTS = (".exfat", ".ffpkg", ".ffpfs", ".ffpfsc")
 HELPER_ELF = Path(__file__).parent / "payload" / "spela.elf"  # built from payload/ by payload/build.ps1
 HELPER_KEY_SLOT = b"storefront-helper-key:" + b"?" * 64  # KEY_SLOT in payload/main.c
+HELPER_OWNER_SLOT = b"storefront-helper-owner:" + b"?" * 48  # OWNER_SLOT in payload/main.c
 HELPER_KEY_HEADER = "X-Storefront-Key"
 
 
@@ -493,11 +501,14 @@ def helper_key(console_id: str | None) -> str:
 
 
 def helper_elf(key: str) -> bytes:
-    """The bundled helper with `key` written into it, so it answers only to this PC."""
+    """The bundled helper with `key` written into it, so it answers only to this PC, and this install's name, so
+    another Spela can tell whose it is."""
     elf = HELPER_ELF.read_bytes()
-    if elf.count(HELPER_KEY_SLOT) != 1:
+    if elf.count(HELPER_KEY_SLOT) != 1 or elf.count(HELPER_OWNER_SLOT) != 1:
         raise AdapterError("helper_broken", "The bundled helper has no place for its key. Rebuild it with payload/build.ps1.")
-    return elf.replace(HELPER_KEY_SLOT, HELPER_KEY_SLOT[:-64] + key.encode())
+    owner = config.INSTANCE_NAME.encode()[:47].decode(errors="ignore").encode()  # whole characters, and a NUL to end it
+    return (elf.replace(HELPER_KEY_SLOT, HELPER_KEY_SLOT[:-64] + key.encode())
+            .replace(HELPER_OWNER_SLOT, HELPER_OWNER_SLOT[:-48] + owner.ljust(48, b"\0")))
 # The PS5 app (console-app/, built by console-app/build.ps1). ShadowMountPlus shows it as a home-screen title.
 CONSOLE_APP_TITLE_ID = "PPSA99787"
 CONSOLE_APP_DIR = Path(__file__).parent / "console_app" / CONSOLE_APP_TITLE_ID
@@ -601,17 +612,24 @@ class FTPConsoleAdapter:
         except (OSError, ValueError):
             return None
 
-    def _no_helper(self) -> str:
-        """Why _helper() got nothing: "other_pc" when a helper runs but holds another Spela's key (another PC, or
-        Docker on a NAS), else "missing". Sending ours would push theirs out, and theirs would push ours back."""
+    def _no_helper(self) -> dict:
+        """Why _helper() got nothing: {"helper": "other_pc", "helper_owner": its name} when a helper runs but holds
+        another Spela's key (another PC, or Docker on a NAS), else {"helper": "missing"}. Sending ours would push
+        theirs out, and theirs would push ours back."""
         req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/info", headers={HELPER_KEY_HEADER: self.key})
         try:
             urllib.request.urlopen(req, timeout=3).close()
         except urllib.error.HTTPError as e:
-            return "other_pc" if e.code == 401 else "missing"
+            if e.code != 401:
+                return {"helper": "missing"}
+            try:
+                owner = str(json.loads(e.read()).get("owner") or "")
+            except (OSError, ValueError, AttributeError):
+                owner = ""  # a helper from before the owner label
+            return {"helper": "other_pc", "helper_owner": owner}
         except OSError:
             pass
-        return "missing"
+        return {"helper": "missing"}
 
     def _drives(self, ftp: ftplib.FTP) -> list[tuple[DriveInfo, str, str]]:
         info = self._helper()
@@ -691,7 +709,8 @@ class FTPConsoleAdapter:
     async def _helper_status(self) -> tuple[dict, dict | None]:
         banner, app = await self._run(lambda f: (f.getwelcome(), f.get(f"{CONSOLE_APP_PATH}/assets/version.txt")))
         info = await asyncio.to_thread(self._helper)
-        return {"ftp": "ok", "banner": banner, "helper": info["version"] if info else await asyncio.to_thread(self._no_helper),
+        return {"ftp": "ok", "banner": banner,
+                **({"helper": info["version"]} if info else await asyncio.to_thread(self._no_helper)),
                 "console_app": app.decode(errors="replace").strip() if app else "missing"}, info
 
     def _ddp(self) -> bytes:
@@ -1539,11 +1558,11 @@ class HelperConsoleAdapter(FTPConsoleAdapter):
         except AdapterError as e:
             error = e
         info = await asyncio.to_thread(self._helper)
-        helper = {"helper": info["version"] if info else await asyncio.to_thread(self._no_helper)}
+        helper = {"helper": info["version"]} if info else await asyncio.to_thread(self._no_helper)
         if info:  # running, but outdated
             return ConsoleStatus("degraded", error.message, helper, error.fix)
         if helper["helper"] == "other_pc":
-            return ConsoleStatus("degraded", OTHER_PC, helper, OTHER_PC_FIX)
+            return ConsoleStatus("degraded", other_pc(helper["helper_owner"]), helper, OTHER_PC_FIX)
         ddp = await asyncio.to_thread(self._ddp)
         if b" 620 " in ddp:  # payloads don't run in rest mode
             return ConsoleStatus("standby", "The console is in rest mode.", helper, WAKE_UP)

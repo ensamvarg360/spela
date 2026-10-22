@@ -28,9 +28,9 @@ function WakeKey({ c, onSaved }: { c: Console; onSaved: () => void }) {
 }
 
 /** "v0.7.3" and whether it matches this app, or that it isn't there. */
-function Version({ v, want, missing }: { v: string | undefined; want: string; missing: string }) {
+function Version({ v, want, missing, owner }: { v: string | undefined; want: string; missing: string; owner?: string }) {
   if (!v || v === "missing") return <span className="sp-muted">{missing}</span>;
-  if (v === "other_pc") return <span className="sp-muted">Run by another Spela</span>;
+  if (v === "other_pc") return <span className="sp-muted">Run by another Spela{owner && <> ({owner})</>}</span>;
   return <>
     <span className="sp-num">v{v}</span>
     {want && (v === want ? <Badge tone="success">Up to date</Badge> : <Badge tone="warning">Needs v{want}</Badge>)}
@@ -45,13 +45,13 @@ function Facts({ c, version, busy, act, onSaved }: { c: Console; version: string
   const hasApp = !!consoleApp && consoleApp !== "missing";
   const consoleAppOk = !!version && consoleApp === version;
   const on = c.state === "online" || c.state === "degraded";
-  const connections = Object.entries(c.helper_status).filter(([k]) => !["banner", "helper", "console_app"].includes(k));
+  const connections = Object.entries(c.helper_status).filter(([k]) => !["banner", "helper", "helper_owner", "console_app"].includes(k));
   return (
     <dl className="sp-kv">
       <dt>Firmware</dt><dd>{c.firmware ? <span className="sp-num">{c.firmware}</span> : <span className="sp-muted">Unknown</span>}</dd>
       <dt>Helper payload</dt>
       <dd>
-        <Version v={helper} want={version} missing="Not running" />
+        <Version v={helper} want={version} missing="Not running" owner={c.helper_status.helper_owner} />
         <button type="button" className="sp-btn sp-btn--sm" disabled={busy || c.state === "standby"} title={c.state === "standby" ? "Wake the console first." : undefined}
           onClick={() => act("helper")}>{!hasHelper ? "Install helper" : helperOk ? "Reinstall helper" : "Update helper"}</button>
         {(c.auto_helper || hasHelper) && (

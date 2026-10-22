@@ -1,5 +1,5 @@
 /* Spela helper: a small HTTP server the PC app loads through the console's ELF loader.
- *   GET  /info                 {"version", "firmware", "model", "mounts": [{"mount", "total", "free"}]}
+ *   GET  /info                 {"version", "owner", "firmware", "model", "mounts": [{"mount", "total", "free"}]}
  *   GET  /ls?p=<dir>           [{"name", "dir", "size"}]; 404 when the folder is missing
  *   GET  /file?p=<file>        the file's bytes
  *   PUT  /file?p=<file>        writes the request body (needs Content-Length) to the file
@@ -77,6 +77,19 @@ __attribute__((used)) static const char VERSION_MARKER[] = "storefront-helper-ve
 #define KEY_LEN 64
 __attribute__((used)) static volatile const char KEY_SLOT[] =
     KEY_PREFIX "????????????????????????????????????????????????????????????????";
+
+/* Which Spela sent this copy, e.g. "Docker · nas": written over the ?s like the key, ended by a NUL. Told to anyone
+ * who asks, even without the key, so another Spela can say who's already connected. Empty when unpatched. */
+#define OWNER_PREFIX "storefront-helper-owner:"
+#define OWNER_LEN 48
+__attribute__((used)) static volatile const char OWNER_SLOT[] =
+    OWNER_PREFIX "????????????????????????????????????????????????";
+static char owner[OWNER_LEN];
+
+static void read_owner(void) {
+  const volatile char *s = OWNER_SLOT + sizeof OWNER_PREFIX - 1;
+  for (int i = 0; s[0] != '?' && i < OWNER_LEN - 1 && s[i]; i++) owner[i] = s[i];
+}
 
 typedef struct {
   char *s;
@@ -175,6 +188,8 @@ static void info(buf_t *b) {
 
   put(b, "{\"version\":");
   put_str(b, VERSION);
+  put(b, ",\"owner\":");
+  put_str(b, owner);
   put(b, ",\"firmware\":");
   put_str(b, fw);
   put(b, ",\"model\":");
@@ -990,7 +1005,12 @@ static void handle(int c) {
   int post_file = post && (!strcmp(target, "/mkdir") || !strcmp(target, "/rename") || !strcmp(target, "/rm"));
   int app = !strncmp(target, RELAY_PATH, sizeof RELAY_PATH - 1);  /* the PS5 app, for the PC */
   if (!authorized(c, head, (post && !strcmp(target, "/quit")) || app)) {
-    fail(c, "401 Unauthorized", "wrong key: install the helper again from the PC app");
+    buf_t b = {0};
+    put(&b, "{\"error\":\"wrong key: install the helper again from the PC app\",\"owner\":");
+    put_str(&b, owner);
+    put(&b, "}");
+    reply(c, "401 Unauthorized", &b);
+    free(b.s);
   } else if (app) {
     if (!from_loopback(c)) {  /* the PC's own API is on the PC: nobody else reaches it through us */
       fail(c, "403 Forbidden", "only the PS5 app on this console can ask for this");
@@ -1092,6 +1112,7 @@ int main(void) {
   /* the kernel keeps 19 characters; Payload Manager lists processes whose name ends in .elf */
   syscall(SYS_thr_set_name, -1, "spela.elf");
   signal(SIGPIPE, SIG_IGN);
+  read_owner();
   int srv = socket(AF_INET, SOCK_STREAM, 0), one = 1;
   setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
   struct sockaddr_in addr;
@@ -1109,7 +1130,9 @@ int main(void) {
     sleep(1);
   }
   listen(srv, 16);
-  notify("Spela helper " VERSION " is running.");
+  char msg[128];
+  snprintf(msg, sizeof msg, owner[0] ? "Spela helper " VERSION " is running for %s." : "Spela helper " VERSION " is running.", owner);
+  notify(msg);
   pthread_t retry;
   if (!pthread_create(&retry, NULL, retry_tiles, NULL)) pthread_detach(retry);
 

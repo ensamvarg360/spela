@@ -83,7 +83,7 @@ function Connection() {
   const helper = c.helper_status.helper; // "missing", a version, or absent before the first check
   const [tone, label]: [Tone, string] = !online ? ["", "Unknown"]
     : !helper || helper === "missing" ? ["danger", "Not running"]
-    : helper === "other_pc" ? ["warning", "Run by another Spela"]
+    : helper === "other_pc" ? ["warning", c.helper_status.helper_owner ? `Run by ${c.helper_status.helper_owner}` : "Run by another Spela"]
     : version && helper !== version ? ["warning", `v${helper}, needs v${version}`]
     : ["success", `v${helper}`];
   const dot = (t: Tone) => (t ? `sp-dot sp-dot--${t}` : "sp-dot");

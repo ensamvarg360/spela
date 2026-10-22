@@ -1,5 +1,6 @@
 import os
 import secrets
+import socket
 from pathlib import Path
 
 _appdata = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share")
@@ -28,6 +29,9 @@ PORT = int(os.environ.get("PORT", "8787"))
 ALLOWED_HOSTS = {h.strip().lower() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()}
 DOCKER = bool(os.environ.get("SPELA_DOCKER"))  # set in the Docker image: messages talk about the container, not a tray icon
 RESTART = "restart the container" if DOCKER else "restart Spela from its tray icon"
+# Written into the helper this install sends, so another Spela that finds it can say whose it is. In Docker the
+# hostname is the container's ID unless compose sets `hostname:`, hence SPELA_NAME.
+INSTANCE_NAME = os.environ.get("SPELA_NAME") or f"{'Docker' if DOCKER else 'PC'} · {socket.gethostname()}"
 
 
 def _secret_key() -> str:

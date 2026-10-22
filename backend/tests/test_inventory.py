@@ -16,7 +16,7 @@ from pyftpdlib.servers import FTPServer
 from sqlalchemy import select
 from test_console_profiles import login
 
-from app import __version__
+from app import __version__, config
 from app.consoles import HELPER_ELF, HELPER_KEY_HEADER, HELPER_KEY_SLOT, AdapterError, FTPConsoleAdapter, helper_elf
 from app.database import SessionLocal
 from app.main import app
@@ -138,6 +138,28 @@ def test_remove_tile_answers():
         helper.shutdown()
 
 
+def test_other_spelas_helper_is_named():
+    """A helper holding another Spela's key answers 401 with that Spela's name; older helpers send none."""
+    class Theirs(FakeHelper):
+        body = {"error": "wrong key", "owner": "Docker · nas"}
+
+        def parse_request(self):
+            BaseHTTPRequestHandler.parse_request(self)
+            self._send(type(self).body, 401)
+            return False
+
+    helper = ThreadingHTTPServer(("127.0.0.1", 0), Theirs)
+    threading.Thread(target=helper.serve_forever, daemon=True).start()
+    a = adapter(21)
+    a.HELPER_PORT = helper.server_address[1]
+    try:
+        assert a._no_helper() == {"helper": "other_pc", "helper_owner": "Docker · nas"}
+        Theirs.body = {"error": "wrong key"}
+        assert a._no_helper() == {"helper": "other_pc", "helper_owner": ""}
+    finally:
+        helper.shutdown()
+
+
 def test_ftp_adapter_helper(ps5):
     _, port = ps5
     helper = ThreadingHTTPServer(("127.0.0.1", 0), FakeHelper)
@@ -162,6 +184,7 @@ def test_ftp_adapter_helper(ps5):
         assert asyncio.run(a.install_helper()) == __version__
         assert received == [helper_elf(a.key)] and FakeHelper.quits == 1  # old copy told to quit first
         assert b"storefront-helper-key:" + a.key.encode() in received[0] and HELPER_KEY_SLOT not in received[0]
+        assert b"storefront-helper-owner:" + config.INSTANCE_NAME.encode() + b"\0" in received[0]
         assert asyncio.run(a.connect()).helper_status["helper"] == __version__
 
         # loader not running: a clear error. Helper gone: drives listed, space and firmware unknown.
