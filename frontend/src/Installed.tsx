@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import Problem, { StatusNote } from "./Problem";
 import { api, appVersion, formatBytes, JOB_ACTIVE, needsOnline, session, wakeConsole, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal, type Root } from "./api";
-import { Badge, Bar, Empty, Field, Icon, Meter, Notice, PageHead, Panel, Path, Search, Spinner, Time, utc, type Tone } from "./ui";
+import { Badge, Bar, Collapsible, Empty, Field, Icon, Meter, Notice, PageHead, Panel, Path, Search, Spinner, Time, utc, type Tone } from "./ui";
 
 const JOB_LABEL: Record<JobStatus, [string, Tone]> = {
   queued: ["Waiting", "info"], preflight: ["Checking", "info"], extracting: ["Extracting", "info"], transferring: ["Copying", "info"],
@@ -385,8 +385,9 @@ export default function Installed() {
       {error && <Problem error={error} />}
 
       {drives.length > 0 && (
-        <Panel title="Storage" desc="Turn off a drive to keep Spela from installing there." flush>
-          <ul className="sp-list">
+        <Collapsible title="Storage" meta={`${drives.length} ${drives.length === 1 ? "drive" : "drives"} · ${formatBytes(drives.reduce((n, d) => n + d.free_bytes, 0))} free`}>
+          <p className="sp-muted">Turn off a drive to keep Spela from installing there.</p>
+          <ul className="sp-list sp-boxed">
             {drives.map((d) => (
               <li key={d.id} className="sp-listrow">
                 <div className="sp-listrow__lead">
@@ -414,7 +415,7 @@ export default function Installed() {
               </li>
             ))}
           </ul>
-        </Panel>
+        </Collapsible>
       )}
 
       <Jobs consoleId={c.id} onDone={() => loadInventory(c.id)} />
