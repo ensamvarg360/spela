@@ -8,7 +8,7 @@ import GameDetail, { ConsoleGameDetail } from "./GameDetail";
 import Installed from "./Installed";
 import Settings from "./Settings";
 import Setup from "./Setup";
-import Toasts, { Bell } from "./Toast";
+import Toasts, { Bell, toast } from "./Toast";
 import { Field, Icon, Notice, Panel } from "./ui";
 import wordmark from "./wordmark.png";
 
@@ -32,7 +32,7 @@ export default function App() {
   const [version, setVersion] = useState("");
   const [view, setView] = useState<View>(NO_VIEW); // here, so filters survive opening a game and coming back
   const [dlcView, setDlcView] = useState<View>(NO_VIEW);
-  const [newer, setNewer] = useState<{ version: string; url: string } | null>(null);
+  const [newer, setNewer] = useState<Newer | null>(null);
   useEffect(() => { appVersion.then(setVersion); }, []);
 
   useEffect(() => {
@@ -41,7 +41,10 @@ export default function App() {
       setUser(null);
     });
   }, []);
-  useEffect(() => { if (user) api<{ latest: { version: string; url: string } | null }>("/update").then((r) => setNewer(r.latest), () => {}); }, [user]);
+  useEffect(() => {
+    if (user) api<{ latest: Newer | null; installable: boolean }>("/update")
+      .then((r) => setNewer(r.latest && { ...r.latest, installable: r.installable }), () => {});
+  }, [user]);
 
   if (user === undefined) return null;
   if (!user) return <Login setup={needsSetup} onLogin={setUser} />;
@@ -69,7 +72,7 @@ export default function App() {
           <a className="sp-topnav__link" href="#/installed" aria-current={route === "/installed" || !!onConsole ? "page" : undefined}>Installed</a>
         </div>
         <div className="sp-topnav__end">
-          {newer && !session.readOnly && <a className="sp-badge sp-badge--info" href={newer.url} target="_blank" rel="noreferrer" title="Download the new version from GitHub">v{newer.version} available</a>}
+          {newer && !session.readOnly && <UpdateBadge newer={newer} />}
           {session.readOnly && <span className="sp-badge" title="Logged in with the view-only password: you can look, not change anything.">View only</span>}
           <Bell />
           {!session.readOnly && (
@@ -96,6 +99,39 @@ export default function App() {
       </main>
       <Toasts />
     </>
+  );
+}
+
+type Newer = { version: string; url: string; installable?: boolean };
+
+/** The newer version on GitHub: installed in place when Spela can do that itself, else a link to download it. */
+function UpdateBadge({ newer }: { newer: Newer }) {
+  const [busy, setBusy] = useState("");
+  const link = <a className="sp-badge sp-badge--info" href={newer.url} target="_blank" rel="noreferrer" title="Download the new version from GitHub">v{newer.version} available</a>;
+  if (!newer.installable) return link;
+
+  async function install() {
+    if (!confirm(`Update Spela to v${newer.version}?\n\nIt downloads the update, then restarts. Your library and settings are kept.`)) return;
+    setBusy("Downloading…");
+    try {
+      await api("/update/install", { method: "POST" });
+    } catch (e) {
+      setBusy("");
+      return toast(e instanceof ApiError ? `${e.message} ${e.fix}` : "Couldn't update.", true, ["What's new", newer.url]);
+    }
+    setBusy("Restarting…");
+    // In Spela's own window the window restarts too; a browser elsewhere waits for the new version and reloads.
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const v = await fetch("/api/v1/health").then((r) => r.json()).then((h) => h.version, () => "");
+      if (v === newer.version) break;
+    }
+    location.reload(); // after a minute anyway: the old version is back if the swap failed, and still offers the update
+  }
+  return (
+    <button className="sp-badge sp-badge--info" onClick={install} disabled={!!busy} title={`Install v${newer.version} and restart Spela`}>
+      {busy || `Update to v${newer.version}`}
+    </button>
   );
 }
 

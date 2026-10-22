@@ -1,12 +1,17 @@
 import asyncio
 import hashlib
 import hmac
+import io
 import ipaddress
 import json
 import os
+import shutil
+import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -263,7 +268,10 @@ def latest_release() -> dict | None:
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 data = json.loads(r.read(1_000_000))
-            _release = {"version": data["tag_name"].lstrip("v"), "url": data["html_url"]}
+            assets = {a["name"]: a["browser_download_url"] for a in data.get("assets", [])}
+            version = data["tag_name"].lstrip("v")
+            _release = {"version": version, "url": data["html_url"],
+                        "zip": assets.get(f"Spela-{version}.zip"), "sums": assets.get("SHA256SUMS.txt")}
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             _release = None  # offline or rate-limited: say nothing until the next check
     return _release
@@ -274,10 +282,61 @@ def notifications():
     return list(jobs.recent)  # installs, moves and conversions that ended, newest first
 
 
+# Set by launcher.py in the Windows app: takes the unzipped new Spela folder, quits, swaps it in and starts it.
+apply_update = None
+
+
+def _newer_release() -> dict | None:
+    r = latest_release()
+    return r if r and inventory._ver(r["version"]) > inventory._ver(__version__) else None
+
+
 @api.get("/update")
 def update():
-    r = latest_release()
-    return {"version": __version__, "latest": r if r and inventory._ver(r["version"]) > inventory._ver(__version__) else None}
+    r = _newer_release()
+    return {"version": __version__, "latest": r, "installable": bool(apply_update and r and r["zip"] and r["sums"])}
+
+
+def _download(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": f"Spela/{__version__}"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read()
+
+
+def _stage_update(release: dict, dest: Path) -> Path:
+    """Downloads the release's zip, checks it against its SHA256SUMS.txt and unzips it into dest. Returns the new
+    Spela folder in it."""
+    data = _download(release["zip"])
+    name = release["zip"].rsplit("/", 1)[1]
+    if f"{hashlib.sha256(data).hexdigest()} *{name}" not in _download(release["sums"]).decode().splitlines():
+        raise ValueError("the download doesn't match its checksum")
+    shutil.rmtree(dest, ignore_errors=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        z.extractall(dest)  # extractall drops absolute paths and ".." from member names
+    if not (dest / "Spela" / "Spela.exe").is_file():
+        raise ValueError("the download has no Spela.exe")
+    return dest / "Spela"
+
+
+@api.post("/update/install", dependencies=[Depends(require_admin)])
+def install_update():
+    r = _newer_release()
+    if not (apply_update and r and r["zip"] and r["sums"]):
+        raise HTTPException(409, {"error": "no_update", "message": "There's no update Spela can install by itself.",
+                                  "fix": "Download it from GitHub instead."})
+    if jobs.in_progress():
+        raise HTTPException(409, {"error": "busy", "message": "Spela is still installing, moving or converting.",
+                                  "fix": "Update once that's done."})
+    app_dir = Path(sys.executable).parent
+    staging = app_dir.with_name(app_dir.name + ".update-new")  # next to the app, so the swap is a rename on one drive
+    try:
+        new = _stage_update(r, staging)
+    except (OSError, ValueError, zipfile.BadZipFile) as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise HTTPException(502, {"error": "update_failed", "message": f"Couldn't get the update: {e}",
+                                  "fix": "Try again later, or download it from GitHub."})
+    threading.Timer(0.5, apply_update, [new]).start()  # lets this response reach the page first
+    return {"version": r["version"]}
 
 
 # ---------------------------------------------------------------- library

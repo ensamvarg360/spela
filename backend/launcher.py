@@ -20,6 +20,7 @@ import webview
 from PIL import Image
 
 from app import config, jobs
+from app import main as web
 from app.main import APP_ID, app
 
 try:
@@ -84,6 +85,27 @@ def _message(text: str, flags: int = 0x40):  # MB_ICONINFORMATION
     ctypes.windll.user32.MessageBoxW(None, text, APP_NAME, flags)
 
 
+def _swap_script(new: Path) -> str:
+    """PowerShell, for -EncodedCommand: once this process has exited, puts the new Spela folder in place of this one
+    (renaming this one back if that fails) and starts Spela from it."""
+    exe = Path(sys.executable)
+    old = exe.parent.with_name(exe.parent.name + ".update-old")
+    q = lambda p: "'" + str(p).replace("'", "''") + "'"
+    script = f"""
+Wait-Process -Id {os.getpid()} -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath {q(old)} -Recurse -Force -ErrorAction SilentlyContinue
+foreach ($i in 1..40) {{  # WebView2's processes can hold the folder for a moment after Spela exits
+    try {{ Rename-Item -LiteralPath {q(exe.parent)} {q(old.name)} -ErrorAction Stop; break }} catch {{ Start-Sleep -Milliseconds 250 }}
+}}
+if (Test-Path -LiteralPath {q(old)}) {{
+    try {{ Move-Item -LiteralPath {q(new)} {q(exe.parent)} -ErrorAction Stop }} catch {{ Rename-Item -LiteralPath {q(old)} {q(exe.parent.name)} }}
+}}
+Start-Process -FilePath {q(exe)}
+Remove-Item -LiteralPath {q(old)}, {q(new.parent)} -Recurse -Force -ErrorAction SilentlyContinue
+"""
+    return base64.b64encode(script.encode("utf-16-le")).decode()
+
+
 def _show_running_window() -> bool:
     """Brings the window of the copy that's already running to the front, even when it's hidden in the tray."""
     hwnd = ctypes.windll.user32.FindWindowW(None, APP_NAME)
@@ -142,11 +164,14 @@ def main():
         icon.stop()
         window.destroy()  # ends webview.start() below, and with it the program
 
-    def restart(icon):
+    def restart(icon, update: Path | None = None):
         stop()  # free the port before the new instance checks it
         cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, __file__]
+        if update:
+            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", _swap_script(update)]
         # The new instance must not inherit the PyInstaller bootloader's settings of this one (splash, paths).
-        subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+        subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+                         creationflags=subprocess.CREATE_NO_WINDOW if update else 0)
         icon.stop()
         window.destroy()
 
@@ -216,6 +241,8 @@ def main():
         pystray.MenuItem("Quit", lambda: when_done("quit", lambda: quit_(icon))),
     ))
     jobs.notify = lambda title, message: icon.notify(message, title)  # installs and conversions that end
+    if (Path(sys.executable).parent / "_internal").is_dir():  # only a folder build can swap its folder
+        web.apply_update = lambda new: restart(icon, new)
     thread.start()
 
     def load_when_ready():  # runs once the window is on screen

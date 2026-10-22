@@ -190,3 +190,36 @@ def test_update_check(monkeypatch):
     monkeypatch.setattr(main.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
     monkeypatch.setattr(main, "_release_checked", None)
     assert main.latest_release() is None
+
+
+def test_update_install(monkeypatch, tmp_path):
+    import hashlib, io, json, threading, zipfile
+    from app import main
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("Spela/Spela.exe", "new")
+        z.writestr("Spela/_internal/x.dll", "")
+    files = {"/zip/Spela-999.0.0.zip": buf.getvalue()}
+    files["/sums"] = f"{hashlib.sha256(files['/zip/Spela-999.0.0.zip']).hexdigest()} *Spela-999.0.0.zip\n".encode()
+    release = json.dumps({"tag_name": "v999.0.0", "html_url": "https://example/r", "assets": [
+        {"name": "Spela-999.0.0.zip", "browser_download_url": "https://x/zip/Spela-999.0.0.zip"},
+        {"name": "SHA256SUMS.txt", "browser_download_url": "https://x/sums"}]}).encode()
+    monkeypatch.setattr(main.urllib.request, "urlopen", lambda req, **k: io.BytesIO(
+        release if isinstance(req, str) or "api.github" in req.full_url else files[req.full_url[len("https://x"):]]))
+    monkeypatch.setattr(main, "_release_checked", None)
+    monkeypatch.setattr(main.sys, "executable", str(tmp_path / "Spela" / "Spela.exe"))
+    applied = threading.Event()
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.post("/api/v1/auth/login", json={"password": "password1"})  # set up in test_flow
+        assert c.get("/api/v1/update").json()["installable"] is False  # no launcher: dev or Linux
+        assert c.post("/api/v1/update/install").status_code == 409
+        monkeypatch.setattr(main, "apply_update", lambda new: (applied.set(), setattr(applied, "new", new)))
+        assert c.get("/api/v1/update").json()["installable"] is True
+        files["/sums"] = b"0000 *Spela-999.0.0.zip\n"
+        r = c.post("/api/v1/update/install")
+        assert r.status_code == 502 and "checksum" in r.json()["message"]
+        assert not (tmp_path / "Spela.update-new").exists()
+        files["/sums"] = f"{hashlib.sha256(files['/zip/Spela-999.0.0.zip']).hexdigest()} *Spela-999.0.0.zip\n".encode()
+        assert c.post("/api/v1/update/install").json() == {"version": "999.0.0"}
+        assert applied.wait(5) and applied.new == tmp_path / "Spela.update-new" / "Spela"
+        assert (applied.new / "Spela.exe").read_text() == "new"

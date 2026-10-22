@@ -38,6 +38,8 @@ Also have ready:
   **Expect:** the splash shows within a second, then its window opens and a tray icon appears.
 - [x] Close the window, then start the `.exe` again.
   **Expect:** the same window comes back. No second copy starts and no "port in use" error appears.
+- [ ] Once the release is published (GitHub only offers published ones), start the previous release from its zip, if it came as one, and click **Update to v<version>** in the top bar.
+  **Expect:** after a few seconds Spela restarts as the new version, with the same library and settings, and only the Spela folder is left next to it.
 
 ## 2. Log in locally
 

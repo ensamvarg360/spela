@@ -97,7 +97,7 @@ The app is built from [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5
 
 ## Versions
 
-When a newer release is out, the top bar shows **v… available**, linking to its download page. The app asks GitHub's release list at most every 6 hours and sends nothing about you or your library.
+When a newer release is out, the top bar shows **Update to v…**. Clicking it downloads the release's zip, checks it against the release's `SHA256SUMS.txt`, unpacks it next to the Spela folder, and restarts Spela from the new version; the data folder isn't touched. It waits while an install, move or conversion runs. If the Spela folder can't be replaced (another program has it open), the old version starts again. Running from source (`python launcher.py`), the top bar shows **v… available** instead, linking to the download page. The app asks GitHub's release list at most every 6 hours and sends nothing about you or your library.
 
 The version number lives in one place: `__version__` in [backend/app/__init__.py](../backend/app/__init__.py). The Python package, `/api/v1/health`, the page header and the helper payload all read it.
 To release a new version, first run the [manual test on a real PS5](manual-test.md), then `./release.ps1 -Bump patch -Publish` (or `minor` / `major`); see [Releasing](../CONTRIBUTING.md#releasing). A plain `./build.ps1` builds only the app, and `./build.ps1 -Bump patch` also raises the version and rebuilds the committed helper (`backend/app/payload/spela.elf`, needs Docker Desktop). A test fails if the bundled helper's version doesn't match the app's version.
