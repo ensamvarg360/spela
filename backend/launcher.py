@@ -50,6 +50,7 @@ background:linear-gradient(135deg,#181c34,#261e48)"><img src="data:image/png;bas
 def _port_owner() -> str:
     """'free', 'us' (this app is already running) or 'other' (another program holds the port)."""
     with socket.socket() as s:
+        s.settimeout(0.1)  # Windows retries a refused loopback connect for ~2 s; a listening port answers at once
         if s.connect_ex(("127.0.0.1", config.PORT)) != 0:
             return "free"
     try:
