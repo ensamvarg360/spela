@@ -366,7 +366,7 @@ const PILL: Record<Game["compatibility_status"], [string, Tone]> = {
 };
 function pill(game: Game, tooNew: boolean): [string, Tone] {
   if (game.installed) return ["Installed", "success"];
-  if (tooNew) return ["Firmware too old", "danger"];
+  if (tooNew) return ["Firmware too new", "danger"];
   return PILL[game.compatibility_status];
 }
 
