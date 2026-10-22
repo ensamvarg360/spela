@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<!-- Unraid Community Applications template. To try it before it's listed: copy it to
+     /boot/config/plugins/dockerMan/templates-user/my-spela.xml, then Docker → Add Container → Template: spela. -->
+<Container version="2">
+  <Name>spela</Name>
+  <Repository>ghcr.io/ensamvarg360/spela:latest</Repository>
+  <Registry>https://github.com/ensamvarg360/spela/pkgs/container/spela</Registry>
+  <Network>host</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/ensamvarg360/spela/issues</Support>
+  <Project>https://github.com/ensamvarg360/spela</Project>
+  <Overview>A storefront for your own PS5 game backups. Browse them from any device in your home, and install them to a PS5 that already runs homebrew (ShadowMountPlus) over your network. Spela provides no games: it only works with backups you already have.&#xD;
+&#xD;
+Choose the admin password within 10 minutes of the first start. After that it asks for a setup code, which is in the container's log; restarting the container gives another 10 minutes. In Spela, add your games as /games/...</Overview>
+  <Category>Tools: GameServers:</Category>
+  <WebUI>http://[IP]:[PORT:8787]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/ensamvarg360/spela/master/unraid/spela.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/ensamvarg360/spela/master/images/spela_P_gradient_icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <Requires>A PS5 that already runs homebrew: an ELF loader on port 9021 and ShadowMountPlus.</Requires>
+  <Config Name="Games" Target="/games" Default="/mnt/user/games" Mode="rw" Description="The share with your PS5 games. In Spela, add them as /games/... It's writable so Spela can save .exfat images it converts next to a game." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/games</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/spela" Mode="rw" Description="Spela's settings, covers and save backups. Archives are unpacked here too, so it needs room for a whole game." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/spela</Config>
+  <Config Name="Port" Target="PORT" Default="8787" Mode="" Description="The port of Spela's web page. Host networking lets Spela find your PS5 by itself, so this is set here rather than as a port mapping." Type="Variable" Display="advanced" Required="false" Mask="false">8787</Config>
+  <Config Name="Allowed host names" Target="ALLOWED_HOSTS" Default="" Mode="" Description="Names you open Spela by besides its IP address, comma-separated, like tower.local. Any other name is refused." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+</Container>

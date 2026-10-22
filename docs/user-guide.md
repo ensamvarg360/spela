@@ -176,8 +176,8 @@ If a root or subfolder can't be read, the scan reports an error and leaves exist
 
 ## Deviations from project.md (deliberate, for now)
 
-- **Native Windows app, not Docker.** A container can't see the PC's drives without Docker Desktop mount setup, so it ships as a zipped folder with `Spela.exe` (PyInstaller; a folder rather than one `.exe`, which Defender scans for seconds and which unpacks itself on every launch) that serves the web UI locally. The code is plain Python and still runs on Linux (`python launcher.py`).
-- **Admin password set on first run** (from this PC only) and stored as a PBKDF2 hash, instead of an environment variable.
+- **Native Windows app, not Docker.** A container can't see the PC's drives without Docker Desktop mount setup, so it ships as a zipped folder with `Spela.exe` (PyInstaller; a folder rather than one `.exe`, which Defender scans for seconds and which unpacks itself on every launch) that serves the web UI locally. For a NAS there's also a Docker image (see the README), the same backend without the window and tray icon.
+- **Admin password set on first run** and stored as a PBKDF2 hash, instead of an environment variable. From another device that needs the setup code Spela logs at startup; in Docker, a LAN device may skip it in the first 10 minutes after the container starts.
 - **SQLite.** No Postgres, Redis or ARQ yet: a scan is the only background task. Models are portable; set `DATABASE_URL` (and add `psycopg`) to switch to Postgres.
 - **Numbered migrations, not Alembic.** `backend/app/migrations.py` upgrades an older database at startup, tracked in SQLite's `user_version`. Adding a model column means appending a step there. A data folder from a newer version is refused rather than opened by an older one.
 - **Interval rescans, no watchdog.** Filesystem events aren't reliable on SMB/NFS mounts.

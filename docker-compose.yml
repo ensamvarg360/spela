@@ -1,6 +1,7 @@
 # Spela on a NAS. ZimaOS/CasaOS: App Store → + → Install a customized app → Import, paste this file, then pick your
 # games folder in the form. Anywhere else: change the two host paths below, `docker compose up -d`, and open
-# http://<the NAS's IP>:8787. The first password needs the setup code from the log: `docker logs spela`.
+# http://<the NAS's IP>:8787. Choose the admin password within 10 minutes of the first start; after that it needs the
+# setup code from the log (`docker logs spela`), or a restart for another 10 minutes.
 name: spela
 services:
   spela:

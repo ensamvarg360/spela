@@ -8,7 +8,7 @@ Browse them on your PC, install them to your console over your home network, rem
 [![Latest release](https://img.shields.io/github/v/release/ensamvarg360/spela?display_name=tag&color=3b82f6)](https://github.com/ensamvarg360/spela/releases/latest)
 [![CI](https://github.com/ensamvarg360/spela/actions/workflows/ci.yml/badge.svg)](https://github.com/ensamvarg360/spela/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-![Platform: Windows](https://img.shields.io/badge/runs%20on-Windows%2010%2F11-0078d4)
+![Platform: Windows or Docker](https://img.shields.io/badge/runs%20on-Windows%2010%2F11%20%C2%B7%20Docker-0078d4)
 [![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-d97757)](#credits)
 
 <img src="docs/screenshots/library.png" alt="The Spela library: a grid of game covers with filters" width="860">
@@ -71,7 +71,7 @@ Browse them on your PC, install them to your console over your home network, rem
 
 ## What you need
 
-- A **Windows 10 or 11** PC. (The code is plain Python and also runs on Linux with `cd backend && python launcher.py`, but the packaged app is Windows only.)
+- A **Windows 10 or 11** PC, or a **NAS or Linux box with Docker** (Unraid, ZimaOS, CasaOS, Synology…): see [Run it on a NAS](#run-it-on-a-nas-docker).
 - A **PS5 that already runs homebrew**: an ELF loader listening on port 9021 and ShadowMountPlus (1.7 or later for the cleanest removals). Spela doesn't jailbreak anything and can't help you do it.
 - The PC and the console on the **same home network**.
 
@@ -91,6 +91,40 @@ You only download Spela once: later releases show up as **Update to vX.Y.Z** in 
 Nothing needs changing in Windows: the PC only ever connects out to the PS5, and the PS5 app reaches the PC through the helper, so no firewall rule or network setting is involved.
 
 Everything Spela knows is kept in `%LOCALAPPDATA%\Spela`. Your game files never are. The full walkthrough, backups, and a troubleshooting table are in the **[user guide](docs/user-guide.md)**.
+
+## Run it on a NAS (Docker)
+
+Spela also comes as a Docker image, `ghcr.io/ensamvarg360/spela`, built from the same code as each Windows release. It's the same app without the window and tray icon: you use it from a browser on any device in your home.
+
+**ZimaOS / CasaOS**
+
+1. **App Store → + → Install a customized app → Import**, and paste [docker-compose.yml](docker-compose.yml).
+2. In the form, set **/games** to the folder with your PS5 games. Leave **/data** as it is.
+3. Click **Install**, then open Spela from its icon and choose an admin password.
+
+**Unraid**
+
+Search for **Spela** under **Apps**, click **Install**, set **Games** to your games share (for example `/mnt/user/games`), and click **Apply**. Then open the WebUI and choose an admin password.
+
+Not listed there yet? Save [unraid/spela.xml](unraid/spela.xml) as `/boot/config/plugins/dockerMan/templates-user/my-spela.xml` on the server, then go to **Docker → Add Container** and pick **spela** under **Template**.
+
+**Anywhere else**
+
+Copy [docker-compose.yml](docker-compose.yml), change the two folders under `volumes:` to yours, run `docker compose up -d` and open `http://<your NAS's IP>:8787`. Or with plain Docker:
+
+```sh
+docker run -d --name spela --restart unless-stopped --network host \
+  -v /path/to/spela-data:/data -v /path/to/games:/games ghcr.io/ensamvarg360/spela:latest
+```
+
+**Good to know**
+
+- **Set the password within 10 minutes** of the container's first start. After that, Spela asks for a setup code: it's in the container's log (`docker logs spela`), or restart the container to get another 10 minutes. It's only asked when no password is set yet.
+- **Add your games as `/games/...`** in Spela, not by the NAS's own path: that's where the container sees them.
+- **Host networking** (`--network host`, already in the compose file) lets Spela find your PS5 by itself. With a bridge network (`-p 8787:8787` instead) everything still works, but you type the PS5's IP address in yourself.
+- **Opening Spela by name**, like `http://tower.local:8787` or through a reverse proxy, is refused unless you list the name in `ALLOWED_HOSTS` (comma-separated). That blocks a [DNS rebinding](#safety) attack.
+- **Archives** are unpacked in `/data/staging`, so the data folder needs room for a whole game. Point `STAGING_DIR` elsewhere to change that.
+- **Updates:** the top bar shows when a new version is out. Pull the new image to update: in ZimaOS and Unraid, **Update** on the app; elsewhere `docker compose pull && docker compose up -d`. Your library and settings are kept in `/data`.
 
 ## How it works
 
@@ -118,7 +152,7 @@ The **helper** is a small C payload (see [payload/main.c](payload/main.c)) that 
 
 Spela touches a game console, so it's built to be careful:
 
-- **LAN only.** It listens on `127.0.0.1` unless you opt in to your home network, refuses requests addressed to a host name (so a malicious website can't reach it by DNS rebinding), and must never be exposed to the internet.
+- **LAN only.** It listens on `127.0.0.1` unless you opt in to your home network (the Docker image always listens on it), refuses requests addressed to a host name (so a malicious website can't reach it by DNS rebinding), and must never be exposed to the internet.
 - **The helper only writes where it should.** Changes are limited to the `homebrew` folders on the console's drives, a game's own save folders when you restore a backup, and the one logo file and database column of a game the console already has. Everything else on the console is read-only to it.
 - **Only your PC can talk to it.** Each helper copy carries a key made for that console and PC; requests without it are refused, and so are requests from web pages. An unpaired helper refuses everything.
 - **Verified copies and explicit removals.** Installs are checked file by file before they appear. Removals show the exact path first, need a typed confirmation, and are written to an audit log. Your PC copy and your save data are never deleted.
