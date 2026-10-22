@@ -40,6 +40,10 @@ sed -i 's#^    action_bit(Action::page_prev) | action_bit(Action::page_next) | a
 # Leave out what we don't use: music, the second sound set, the kit's home-screen art (ours is copied next).
 rm -rf assets/audio/music assets/audio/sfx/paper
 rm -f sce_sys/pic0.dds sce_sys/pic1.dds sce_sys/snd0.at9 sce_sys/*-source.png
+# Game names carry ™, ® and accents, which the kit's basic glyph set draws as "?".
+sed -i 's|"\$range" 1024$|"$range" 2048 european|' tools/bake-fonts.sh
+grep -q '2048 european' tools/bake-fonts.sh
+HOST_CXX=clang++-18 make fonts >/dev/null
 cp /repo/console-app/sce_sys/{icon0.png,pic0.dds,pic1.dds} sce_sys/ # pic0/pic1: behind the tile and while starting (make_background.py)
 TITLE_ID=$TITLE_ID APP_NAME="Spela" make init >/dev/null
 # make init derives the content ID from the name. Consoles that have the app registered keep the ID it had then
