@@ -28,11 +28,15 @@ GAMES = [  # id, title, title ID, version, size, state, progress, has cover, kin
     ["d02", "Frostline: Whiteout Pack", "PPSA01004", "01.000.000", 900_000_000, "installable", "", "0", "dlc", "ps5_pkg"],
 ]
 FAVORITES = {"g06", "g10"}  # by id; the PC marks every copy of a game
+GENRES = {"g01": "Racing|Action", "g02": "Horror|Adventure", "g03": "Racing|Family", "g04": "Adventure|Action",
+          "g05": "Fighting|Action", "g06": "Adventure|Role Playing Games", "g08": "Action|Adventure", "g09": "Strategy|Family",
+          "g10": "Simulation|Family", "g11": "Action", "g12": "Shooter|Action", "d01": "Horror|Adventure"}
 
 
 def line(i: int, g: list) -> str:
-    """The columns above, padded past the install details, then favorite and when it was added (a day apart, g01 first)."""
-    cols = g + [""] * (15 - len(g)) + ["1" if g[0] in FAVORITES else "0", 1_760_000_000 + i * 86_400]
+    """The columns above, padded past the install details, then favorite, when it was added (a day apart, g01 first)
+    and genres (g07 has none: not on the store)."""
+    cols = g + [""] * (15 - len(g)) + ["1" if g[0] in FAVORITES else "0", 1_760_000_000 + i * 86_400, GENRES.get(g[0], "")]
     return "\t".join(map(str, cols)) + "\n"
 
 

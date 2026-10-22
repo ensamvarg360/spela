@@ -43,7 +43,7 @@ Browse them on your PC, install them to your console over your home network, rem
 
 **From the couch**
 
-- **A Spela app on the PS5 home screen.** Games, Installed and DLC tabs plus a cart on the TV: Cross installs, Square stops or removes, and you pick the drive. R2 favorites a game so it comes first, and L2 sorts by name, newest or size.
+- **A Spela app on the PS5 home screen.** Games, Installed and DLC tabs plus a cart on the TV: Cross installs, Square stops or removes, and you pick the drive. R2 favorites a game so it comes first, L2 sorts by name, newest or size, and a row of genres narrows the list.
 
 **Day to day**
 

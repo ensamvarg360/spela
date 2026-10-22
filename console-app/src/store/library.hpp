@@ -36,6 +36,7 @@ struct Game
     std::string step; // "Copying to USB."
     bool favorite = false;
     std::int64_t added = 0; // when it joined the PC's library, Unix seconds; 0 from an older PC
+    std::vector<std::string> genres; // from PlayStation Store; empty until the PC has looked it up
 };
 
 std::vector<Game> parse_library(std::string_view text);

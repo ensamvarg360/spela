@@ -80,6 +80,10 @@ std::vector<Game> parse_library(std::string_view text)
             g.favorite = f[15] == "1";
             g.added = std::strtoll(std::string(f[16]).c_str(), nullptr, 10);
         }
+        if (f.size() >= 18)
+            for (std::string_view genre : split(f[17], '|'))
+                if (!genre.empty())
+                    g.genres.emplace_back(genre);
         games.push_back(std::move(g));
     }
     return games;

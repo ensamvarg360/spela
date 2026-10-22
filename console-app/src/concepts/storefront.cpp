@@ -9,6 +9,8 @@
 // everything in it, one after another, to one drive.
 // R2 makes a game a favorite on the PC too; favorites come first in every tab
 // but the cart. L2 sorts the rest by name, by when they were added, or by size.
+// Up from the top row reaches a row of genres (PlayStation Store's, via the PC):
+// left and right there show only that genre's games.
 // Square on an install in progress offers to stop it. Square on an installed
 // game asks the PC what removing it would delete, shows it, and Square again
 // removes it; a dialog says how it ended, and whether its home-screen tile
@@ -57,11 +59,14 @@ const Color kFavorite = Color::rgb(0xff5c8a);
 
 constexpr float kMargin = 96.0f;
 constexpr int kColumns = 5;
-constexpr float kCardW = 216.0f;
+constexpr float kCardW = 200.0f;
 constexpr float kCardH = kCardW * 320.0f / 256.0f; // the PC's cover shape
 constexpr float kGap = 32.0f;
 constexpr float kPitch = kCardH + 84.0f;
-constexpr float kGridTop = 210.0f;
+constexpr float kGenresY = 196.0f; // the row of genre chips between the tabs and the grid
+constexpr float kChipH = 46.0f;
+constexpr float kGridTop = 274.0f;
+constexpr float kPanelTop = 170.0f;
 constexpr float kGridBottom = 890.0f; // the hint bar below needs room
 constexpr float kPanelX = 1368.0f;
 constexpr float kPanelW = 1920.0f - kMargin - kPanelX;
@@ -84,6 +89,7 @@ constexpr const char *kTechniques[] = {
     "Covers arrive as raw RGBA and become textures as they load",
     "L1 and R1 switch between games, installed games, DLC and the cart",
     "Favorites come first; L2 sorts the rest by name, newest or size",
+    "A row of genre chips above the grid filters it, most common genre first",
     "The cart queues all its games at once; the PC copies them one after another",
     "Installs run on the PC, to the drive picked here; this screen polls their progress",
     "Removals show the PC's preview and wait for a second press",
@@ -128,6 +134,12 @@ constexpr app::TourStep kTour[] = {
     {0.8f, 0, Direction::none, "cart"},
     {0.6f, action_bit(Action::confirm), Direction::none, "checkout"},
     {0.6f, action_bit(Action::confirm), Direction::none, "checked-out"},
+    {0.3f, action_bit(Action::page_prev), Direction::none}, // back to Games
+    {0.3f, 0, Direction::up},                               // to the genre row
+    {0.4f, 0, Direction::right},
+    {0.8f, 0, Direction::none, "genres"},
+    {0.4f, 0, Direction::down},
+    {0.8f, 0, Direction::none, "genre-grid"},
 };
 
 struct StateLook
@@ -359,6 +371,9 @@ class Storefront final : public app::Concept
         const Rect card = card_rect(focus_);
         scroll_.reveal(card.y - kGridTop, card.y - kGridTop + kPitch, kGridBottom - kGridTop, 24.0f);
         scroll_.update(dt);
+        const Rect chip = chip_rect(genre_index());
+        chips_scroll_.reveal(chip.x - kMargin, chip.x + chip.w - kMargin, kPanelX - kGap - kMargin, 48.0f);
+        chips_scroll_.update(dt);
         focus_ring_.target(card.inset(-kCardW * kLift * 0.5f));
         focus_ring_.update(dt, 20.0f);
         refusal_.update(dt, 9.0f);
@@ -525,6 +540,27 @@ class Storefront final : public app::Concept
             age_ = 0.0f; // the new tab's cards rise in (the shell plays the tab sound)
             return;
         }
+        if (tab_ != kCartTab && input.is_pressed(Action::jump_prev))
+        {
+            sort_ = (sort_ + 1) % kSortCount;
+            save::write_atomic(kSortFile, std::to_string(sort_));
+            show_tab({});
+            age_ = 0.0f; // the cards rise in again, in their new order
+            feedback.play(audio::Cue::tab);
+        }
+        if (input.is_pressed(Action::north))
+        {
+            client_.refresh();
+            feedback.play(audio::Cue::tick);
+        }
+        if (in_genres_)
+            return update_genres(input, feedback);
+        if (input.nav == Direction::up && focus_ < kColumns && !genres_.empty())
+        {
+            in_genres_ = true;
+            feedback.play(audio::Cue::focus);
+            return;
+        }
         if (count > 0 && input.nav != Direction::none)
         {
             int next = focus_;
@@ -626,18 +662,37 @@ class Storefront final : public app::Concept
             show_tab(was.id); // it moves to the front or back, and the focus goes with it
             feedback.play(audio::Cue::toggle);
         }
-        if (tab_ != kCartTab && input.is_pressed(Action::jump_prev))
+    }
+
+    // Left and right pick a genre and the grid follows; down, Cross or Circle go back to the games.
+    void update_genres(const InputFrame &input, app::Feedback &feedback)
+    {
+        if (input.nav == Direction::left || input.nav == Direction::right)
         {
-            sort_ = (sort_ + 1) % kSortCount;
-            save::write_atomic(kSortFile, std::to_string(sort_));
-            show_tab({});
-            age_ = 0.0f; // the cards rise in again, in their new order
-            feedback.play(audio::Cue::tab);
+            const int at = genre_index();
+            const int next = std::clamp(at + (input.nav == Direction::right ? 1 : -1), 0, static_cast<int>(genres_.size()));
+            if (next != at)
+            {
+                genre_ = next == 0 ? std::string() : genres_[static_cast<std::size_t>(next - 1)];
+                show_tab({});
+                age_ = 0.0f;
+                feedback.play(audio::Cue::focus, 1.0f, ui::pan_for_x(chip_rect(next).cx() - chips_scroll_.offset()));
+            }
+            else if (!input.nav_repeat)
+            {
+                feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+                refusal_.trigger();
+            }
         }
-        if (input.is_pressed(Action::north))
+        else if (input.nav == Direction::down || input.is_pressed(Action::confirm) || input.is_pressed(Action::back))
         {
-            client_.refresh();
-            feedback.play(audio::Cue::tick);
+            in_genres_ = false;
+            feedback.play(audio::Cue::focus);
+        }
+        else if (input.nav == Direction::up && !input.nav_repeat)
+        {
+            feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+            refusal_.trigger();
         }
     }
 
@@ -675,7 +730,9 @@ class Storefront final : public app::Concept
             return;
         ui::Hint hints[7];
         int count = 0;
-        const store::Game *g = focused();
+        const store::Game *g = in_genres_ ? nullptr : focused(); // the genre row takes no game actions
+        if (in_genres_)
+            hints[count++] = {ui::Button::dpad, "Genre"};
         if (g != nullptr && tab_ == kCartTab)
             hints[count++] = {ui::Button::cross, "Install all"};
         else if (g != nullptr && g->state == "installable")
@@ -806,13 +863,35 @@ class Storefront final : public app::Concept
         return false;
     }
 
-    // Lists the open tab's games, keeping the focus on `keep` when it's still there.
+    // Lists the open tab's games in genre_, keeping the focus on `keep` when it's still there; and the tab's genres,
+    // most common first. A genre that's no longer in the tab goes back to all of them.
     void show_tab(const std::string &keep)
     {
         shown_.clear();
+        std::unordered_map<std::string, int> counts;
         for (std::size_t i = 0; i < games_.size(); ++i)
-            if (tab_ == kCartTab ? in_cart(games_[i].id) : in_tab(games_[i], tab_) && is_card(i))
+        {
+            const store::Game &g = games_[i];
+            if (tab_ == kCartTab ? !in_cart(g.id) : !in_tab(g, tab_) || !is_card(i))
+                continue;
+            if (tab_ != kCartTab)
+                for (const std::string &genre : g.genres)
+                    ++counts[genre];
+            if (tab_ == kCartTab || genre_.empty() || std::find(g.genres.begin(), g.genres.end(), genre_) != g.genres.end())
                 shown_.push_back(static_cast<int>(i));
+        }
+        if (!genre_.empty() && !counts.contains(genre_))
+        {
+            genre_.clear();
+            return show_tab(keep);
+        }
+        genres_.clear();
+        for (const auto &[genre, n] : counts)
+            genres_.push_back(genre);
+        std::sort(genres_.begin(), genres_.end(), [&counts](const std::string &a, const std::string &b) {
+            return counts[a] != counts[b] ? counts[a] > counts[b] : a < b;
+        });
+        in_genres_ = in_genres_ && !genres_.empty();
         if (tab_ != kCartTab) // the cart keeps the order things went in
             std::stable_sort(shown_.begin(), shown_.end(), [this](int a, int b) {
                 return before(games_[static_cast<std::size_t>(a)], games_[static_cast<std::size_t>(b)]);
@@ -820,6 +899,52 @@ class Storefront final : public app::Concept
         const auto at = std::find_if(shown_.begin(), shown_.end(),
                                      [&](int i) { return games_[static_cast<std::size_t>(i)].id == keep; });
         focus_ = at != shown_.end() ? static_cast<int>(at - shown_.begin()) : 0;
+    }
+
+    // 0 is All, then genres_.
+    int genre_index() const
+    {
+        const auto at = std::find(genres_.begin(), genres_.end(), genre_);
+        return genre_.empty() || at == genres_.end() ? 0 : static_cast<int>(at - genres_.begin()) + 1;
+    }
+
+    const std::string &genre_name(int i) const
+    {
+        static const std::string kAll = "All";
+        return i == 0 ? kAll : genres_[static_cast<std::size_t>(i - 1)];
+    }
+
+    // Where chip i sits before the row scrolls.
+    Rect chip_rect(int i) const
+    {
+        const ui::FontRef &font = context_.fonts.semibold;
+        float x = kMargin;
+        for (int j = 0; j < i; ++j)
+            x += font.measure(genre_name(j), 22) + 40 + 12;
+        return {x, kGenresY, font.measure(genre_name(i), 22) + 40, kChipH};
+    }
+
+    void draw_genres(gfx::DrawList &list) const
+    {
+        const ui::Fonts &fonts = context_.fonts;
+        list.push_clip({kMargin - 12, kGenresY - 12, kPanelX - kGap - kMargin + 12, kChipH + 24});
+        const int picked = genre_index();
+        for (int i = 0; i <= static_cast<int>(genres_.size()); ++i)
+        {
+            Rect chip = chip_rect(i);
+            chip.x -= chips_scroll_.offset();
+            if (chip.x > kPanelX)
+                break;
+            const bool on = i == picked;
+            if (on && in_genres_)
+                chip.x += ui::shake(refusal_.value, clock_);
+            list.rounded_rect(chip, kChipH * 0.5f, on ? kAccent.with_alpha(in_genres_ ? 0.95f : 0.3f) : kWhite.with_alpha(0.07f));
+            list.bordered_rect(chip, kChipH * 0.5f, kTransparent, on && in_genres_ ? 2.0f : 1.5f,
+                               kWhite.with_alpha(on && in_genres_ ? 0.9f : 0.12f));
+            ui::text(list, fonts.semibold, genre_name(i), chip.cx(), chip.y + 30, 22,
+                     on ? kInk : kMuted.with_alpha(in_genres_ ? 1.0f : 0.8f), gfx::Align::center);
+        }
+        list.pop_clip();
     }
 
     void draw_tabs(gfx::DrawList &list) const
@@ -875,7 +1000,7 @@ class Storefront final : public app::Concept
         list.bordered_rect(pill, 22, kTransparent, 1.5f, kWhite.with_alpha(0.14f));
         ui::text(list, fonts.semibold, count, pill.cx(), pill.y + 30, 22, kInk, gfx::Align::center);
         if (!error_.empty()) // a later poll failed; the last good list stays up
-            ui::text(list, fonts.regular, list_fit(fonts, error_, 24, 1200), kMargin, 190, 24, kBad);
+            ui::text(list, fonts.regular, list_fit(fonts, error_, 24, 1200), kMargin, kGenresY + 30, 24, kBad); // in the genres' place
 
         if (shown_.empty())
         {
@@ -891,6 +1016,8 @@ class Storefront final : public app::Concept
             draw_grid(list);
             draw_panel(list);
         }
+        if (tab_ != kCartTab && !genres_.empty() && error_.empty())
+            draw_genres(list);
 
         if (!message_.empty() && message_age_ < kMessageSeconds)
         {
@@ -1196,7 +1323,7 @@ class Storefront final : public app::Concept
 
     void draw_grid(gfx::DrawList &list) const
     {
-        list.push_clip({0, kGridTop - 40, kPanelX - 8, kGridBottom - kGridTop + 60});
+        list.push_clip({0, kGenresY + kChipH + 4, kPanelX - 8, kGridBottom + 20 - (kGenresY + kChipH + 4)});
         list.push_transform(1.0f, 0.0f, 0.0f, 0.0f, -scroll_.offset());
         const int count = static_cast<int>(shown_.size());
         for (int i = 0; i < count; ++i)
@@ -1205,7 +1332,8 @@ class Storefront final : public app::Concept
         draw_card(list, focus_); // last, so it rises over its neighbours
         Rect ring = focus_ring_.value().inset(-6);
         ring.x += ui::shake(refusal_.value, clock_);
-        list.bordered_rect(ring, 20, kTransparent, 3, kWhite.with_alpha(0.75f + 0.25f * ui::breathe(clock_)));
+        if (!in_genres_) // the genre row has the focus
+            list.bordered_rect(ring, 20, kTransparent, 3, kWhite.with_alpha(0.75f + 0.25f * ui::breathe(clock_)));
         list.pop_transform();
         list.pop_clip();
     }
@@ -1283,7 +1411,7 @@ class Storefront final : public app::Concept
     {
         const ui::Fonts &fonts = context_.fonts;
         const store::Game &g = *focused();
-        const Rect panel{kPanelX, kGridTop - 40, kPanelW, kGridBottom - kGridTop + 40};
+        const Rect panel{kPanelX, kPanelTop, kPanelW, kGridBottom - kPanelTop};
         const Tones colours = tones(g);
         list.shadow({panel.x, panel.y + 20, panel.w, panel.h}, 24, 50, Color::rgb(0x000000, 0.45f));
         list.rounded_rect(panel, 24, kPanel.with_alpha(0.7f));
@@ -1376,6 +1504,10 @@ class Storefront final : public app::Concept
     std::vector<int> shown_; // indexes into games_ of the open tab; focus_ indexes this
     int tab_ = 0;            // kTabs
     int sort_ = 0;           // kSorts
+    std::vector<std::string> genres_; // the open tab's, most common first
+    std::string genre_;               // the one shown; empty: all of them
+    bool in_genres_ = false;          // the focus is on the genre row, not the grid
+    ui::Scroller chips_scroll_;
     std::string install_id_; // the game the install dialog is for; shown while set
     int drive_ = 0;          // the drive picked in it
     std::string stop_id_;    // the install the stop dialog is for; shown while set

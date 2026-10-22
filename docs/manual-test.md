@@ -230,6 +230,8 @@ Also check:
   **Expect:** it moves to the front with a heart before its name, and it's a favorite on the PC too. R2 again takes it back out.
 - [ ] Press L2 a few times, then close and reopen the PS5 app.
   **Expect:** the pill beside the tabs cycles *Name*, *Newest*, *Size* and the games reorder, favorites always first. The app opens with the last one picked.
+- [ ] In **Games**, press Up from the top row, then Right a few times, then Down.
+  **Expect:** a row of genres (*All* first, then the most common) gets the focus; each Right shows only that genre's games and the count beside the tabs follows. Down goes back to the games, still filtered. A library added since the PC was last online shows its genres within a poll or two.
 - [ ] With two install drives set on the PC, press Cross on a game that isn't installed, pick the other drive with the D-pad, and press Cross.
   **Expect:** it queues, the PC's **Installed** page shows the job, and the game goes to the drive you picked. A drive without room says *Not enough space* and can't be picked.
 - [ ] Focus that game while it copies.

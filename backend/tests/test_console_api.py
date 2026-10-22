@@ -285,6 +285,33 @@ def test_store_poster_and_info(tmp_path, monkeypatch):
         assert logos.concept("PPSA03333") is None
 
 
+def test_console_library_genres(tmp_path, monkeypatch):
+    """Genres from the store, else the sidecar's; store pages not seen yet are looked up after answering."""
+    monkeypatch.setattr(logos, "STORE_DIR", tmp_path / "store")
+    looked_up = []
+    monkeypatch.setattr(logos, "_get", lambda url: looked_up.append(url) or json.dumps(
+        [{"localizedGenres": [{"value": "Action"}, {"value": "Role Playing Games"}]}]).encode())
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        cid = _console(client)
+        with SessionLocal() as db:
+            store = Game(title="Store Game", title_id="PPSA07771", format="image", source_path=str(tmp_path / "s.exfat"),
+                         source_fingerprint="x", size_bytes=1, compatibility_status="ready")
+            sidecar = Game(title="Sidecar Game", format="image", genre="Puzzle", source_path=str(tmp_path / "p.exfat"),
+                           source_fingerprint="x", size_bytes=1, compatibility_status="ready")
+            db.add_all([store, sidecar])
+            db.commit()
+        auth = {"Authorization": f"Bearer {console_app_token(cid)}"}
+
+        def genres():
+            rows = client.get("/api/v1/console-app/library", headers=auth).text.splitlines()
+            return {r.split("\t")[0]: r.split("\t")[17] for r in rows}
+        asked = lambda: sum("PPSA07771" in url for url in looked_up)  # noqa: E731
+        first = genres()  # not looked up yet; the lookup runs after this answer
+        assert first[store.id] == "" and first[sidecar.id] == "Puzzle" and asked() == 1
+        assert genres()[store.id] == "Action|Role Playing Games" and asked() == 1  # kept, not asked again
+
+
 def test_ftp_console_app_upload(ps5):  # noqa: F811
     root, port, _ = ps5
     a = adapter(port)
