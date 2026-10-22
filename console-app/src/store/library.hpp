@@ -34,6 +34,8 @@ struct Game
     std::uint64_t rate_bps = 0;
     int seconds_left = -1;
     std::string step; // "Copying to USB."
+    bool favorite = false;
+    std::int64_t added = 0; // when it joined the PC's library, Unix seconds; 0 from an older PC
 };
 
 std::vector<Game> parse_library(std::string_view text);

@@ -7,6 +7,8 @@
 // install it; the PC does the copying and this screen follows its progress.
 // Options puts a game in the cart (a fourth tab), and Cross there installs
 // everything in it, one after another, to one drive.
+// R2 makes a game a favorite on the PC too; favorites come first in every tab
+// but the cart. L2 sorts the rest by name, by when they were added, or by size.
 // Square on an install in progress offers to stop it. Square on an installed
 // game asks the PC what removing it would delete, shows it, and Square again
 // removes it; a dialog says how it ended, and whether its home-screen tile
@@ -18,11 +20,13 @@
 
 #include "gfx/gl_batch.hpp"
 #include "store/client.hpp"
+#include "core/save_file.hpp"
 #include "ui/glyphs.hpp"
 #include "ui/motion.hpp"
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <string>
 #include <tuple>
@@ -49,6 +53,7 @@ const Color kBad = Color::rgb(0xff6b6b);
 const Color kTransparent = Color::rgb(0x000000, 0.0f);
 const Color kWhite = Color::rgb(0xffffff);
 const Color kNight = Color::rgb(0x06070f);
+const Color kFavorite = Color::rgb(0xff5c8a);
 
 constexpr float kMargin = 96.0f;
 constexpr int kColumns = 5;
@@ -69,11 +74,16 @@ constexpr const char *kTabCounts[] = {"games", "installed", "DLC", "in cart"};
 constexpr int kTabCount = 4;
 constexpr int kCartTab = 3;
 constexpr int kCheckoutNames = 5; // titles listed in the install-all dialog
+constexpr const char *kSorts[] = {"Name", "Newest", "Size"};
+constexpr int kSortCount = 3;
+// Beside the kit's settings. The PC preview has no such folder, so it never saves.
+constexpr const char *kSortFile = "/download0/hui/spela-sort.txt";
 
 constexpr const char *kTechniques[] = {
     "Library from the PC app over HTTP, on a background thread",
     "Covers arrive as raw RGBA and become textures as they load",
     "L1 and R1 switch between games, installed games, DLC and the cart",
+    "Favorites come first; L2 sorts the rest by name, newest or size",
     "The cart queues all its games at once; the PC copies them one after another",
     "Installs run on the PC, to the drive picked here; this screen polls their progress",
     "Removals show the PC's preview and wait for a second press",
@@ -83,12 +93,19 @@ constexpr const char *kTechniques[] = {
 // Shown in the PC preview: the tour waits, moves, and installs one game.
 constexpr app::TourStep kTour[] = {
     {1.0f, 0, Direction::none, "grid"},
-    {0.3f, 0, Direction::down},
+    {0.3f, 0, Direction::right},
+    {0.3f, 0, Direction::right},
+    {0.8f, action_bit(Action::jump_next), Direction::none}, // a third favorite
+    {0.8f, action_bit(Action::jump_prev), Direction::none, "favorite"},
+    {0.8f, action_bit(Action::jump_prev), Direction::none, "sorted"}, // newest first
+    {0.3f, action_bit(Action::jump_prev), Direction::none},           // back to by name
+    {0.3f, action_bit(Action::jump_next), Direction::none},           // and the favorite undone
+    {0.3f, 0, Direction::left},                                       // to the second favorite
     {0.8f, action_bit(Action::confirm), Direction::none, "focus"},
     {0.6f, action_bit(Action::confirm), Direction::none, "install"},
     {1.2f, 0, Direction::none, "queued"},
-    {0.3f, 0, Direction::up},
     {0.3f, 0, Direction::right},
+    {0.3f, 0, Direction::right}, // to the installed one
     {0.8f, action_bit(Action::west), Direction::none},
     {0.8f, 0, Direction::none, "remove"},
     {0.2f, action_bit(Action::west), Direction::none},
@@ -96,6 +113,7 @@ constexpr app::TourStep kTour[] = {
     {0.2f, action_bit(Action::north), Direction::none}, // the preview outruns the poll timer
     {0.8f, action_bit(Action::confirm), Direction::none, "removed"},
     {0.3f, action_bit(Action::page_next), Direction::none},
+    {0.3f, 0, Direction::right},              // past the favorite
     {0.8f, 0, Direction::right, "installed"}, // to the one installing
     {0.8f, 0, Direction::none, "progress"},
     {0.4f, action_bit(Action::west), Direction::none},
@@ -165,6 +183,17 @@ Tones placeholder_tones(const std::string &title)
     return kTones[std::hash<std::string>{}(title) % std::size(kTones)];
 }
 
+// A square stood on its corner with a disc on each upper edge, like the kit's Rating heart.
+void draw_heart(gfx::DrawList &list, float cx, float cy, float size, Color color)
+{
+    const float a = size * 0.56f;
+    const float y = cy + a * 0.0735f;
+    const float off = a * 0.35355f;
+    list.rotated_rect({cx - a * 0.5f, y - a * 0.5f, a, a}, a * 0.07f, 0.7853982f, color);
+    list.circle(cx - off, y - off, a * 0.5f, color);
+    list.circle(cx + off, y - off, a * 0.5f, color);
+}
+
 bool removable(const store::Game &g)
 {
     return g.state == "installed" || g.state == "update";
@@ -203,6 +232,9 @@ class Storefront final : public app::Concept
         const Color night[4] = {kNight, Color::rgb(0x0f1026), Color::rgb(0x1d2a6b), Color::rgb(0x3a1d5c)};
         for (int i = 0; i < 4; ++i)
             palette_[i].snap(night[i]);
+        std::string saved;
+        if (save::read_file(kSortFile, &saved, 16))
+            sort_ = std::clamp(std::atoi(saved.c_str()), 0, kSortCount - 1);
     }
 
     const app::ConceptInfo &info() const override
@@ -582,6 +614,26 @@ class Storefront final : public app::Concept
                 refusal_.trigger();
             }
         }
+        if (count > 0 && input.is_pressed(Action::jump_next))
+        {
+            store::Game &g = games_[static_cast<std::size_t>(shown_[static_cast<std::size_t>(focus_)])];
+            const bool on = !g.favorite;
+            const store::Game was = g;
+            for (store::Game &copy : games_)
+                if (copy.id == was.id || same_game(copy, was))
+                    copy.favorite = on; // until the PC's list says otherwise
+            client_.favorite(was.id, on);
+            show_tab(was.id); // it moves to the front or back, and the focus goes with it
+            feedback.play(audio::Cue::toggle);
+        }
+        if (tab_ != kCartTab && input.is_pressed(Action::jump_prev))
+        {
+            sort_ = (sort_ + 1) % kSortCount;
+            save::write_atomic(kSortFile, std::to_string(sort_));
+            show_tab({});
+            age_ = 0.0f; // the cards rise in again, in their new order
+            feedback.play(audio::Cue::tab);
+        }
         if (input.is_pressed(Action::north))
         {
             client_.refresh();
@@ -621,7 +673,7 @@ class Storefront final : public app::Concept
         }
         if (!client_.paired() || !loaded_ || games_.empty())
             return;
-        ui::Hint hints[5];
+        ui::Hint hints[7];
         int count = 0;
         const store::Game *g = focused();
         if (g != nullptr && tab_ == kCartTab)
@@ -636,6 +688,10 @@ class Storefront final : public app::Concept
             hints[count++] = {ui::Button::square, "Remove"};
         if (g != nullptr && installing(*g))
             hints[count++] = {ui::Button::square, "Stop"};
+        if (g != nullptr)
+            hints[count++] = {ui::Button::r2, g->favorite ? "Unfavorite" : "Favorite"};
+        if (tab_ != kCartTab)
+            hints[count++] = {ui::Button::l2, "Sort"};
         hints[count++] = {ui::Button::triangle, "Refresh"};
         hints[count++] = {ui::Button::l1, "Category", ui::Button::r1};
         ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, count, 1824, true);
@@ -738,18 +794,32 @@ class Storefront final : public app::Concept
         return ids;
     }
 
+    // Favorites first, then by sort_. The PC sends the list by name.
+    bool before(const store::Game &a, const store::Game &b) const
+    {
+        if (a.favorite != b.favorite)
+            return a.favorite;
+        if (sort_ == 1)
+            return a.added > b.added;
+        if (sort_ == 2)
+            return a.size_bytes > b.size_bytes;
+        return false;
+    }
+
     // Lists the open tab's games, keeping the focus on `keep` when it's still there.
     void show_tab(const std::string &keep)
     {
         shown_.clear();
-        focus_ = 0;
         for (std::size_t i = 0; i < games_.size(); ++i)
             if (tab_ == kCartTab ? in_cart(games_[i].id) : in_tab(games_[i], tab_) && is_card(i))
-            {
-                if (games_[i].id == keep)
-                    focus_ = static_cast<int>(shown_.size());
                 shown_.push_back(static_cast<int>(i));
-            }
+        if (tab_ != kCartTab) // the cart keeps the order things went in
+            std::stable_sort(shown_.begin(), shown_.end(), [this](int a, int b) {
+                return before(games_[static_cast<std::size_t>(a)], games_[static_cast<std::size_t>(b)]);
+            });
+        const auto at = std::find_if(shown_.begin(), shown_.end(),
+                                     [&](int i) { return games_[static_cast<std::size_t>(i)].id == keep; });
+        focus_ = at != shown_.end() ? static_cast<int>(at - shown_.begin()) : 0;
     }
 
     void draw_tabs(gfx::DrawList &list) const
@@ -794,8 +864,11 @@ class Storefront final : public app::Concept
             return draw_notice(list, "No games on your PC yet",
                                "On the PC, follow the setup guide on Spela's Dashboard, or add your games folder in Settings and scan it.");
 
-        char count[64];
-        std::snprintf(count, sizeof(count), "%zu %s", shown_.size(), kTabCounts[tab_]);
+        char count[80];
+        if (tab_ == kCartTab)
+            std::snprintf(count, sizeof(count), "%zu %s", shown_.size(), kTabCounts[tab_]);
+        else
+            std::snprintf(count, sizeof(count), "%zu %s  ·  %s", shown_.size(), kTabCounts[tab_], kSorts[sort_]);
         const float count_w = fonts.semibold.measure(count, 22) + 40;
         const Rect pill{kPanelX - kGap - count_w, 112, count_w, 44};
         list.rounded_rect(pill, 22, kWhite.with_alpha(0.08f));
@@ -823,7 +896,7 @@ class Storefront final : public app::Concept
         {
             const float fade = std::min(1.0f, (kMessageSeconds - message_age_) * 2.0f);
             list.push_opacity(fade);
-            ui::text(list, fonts.semibold, list_fit(fonts, message_, 26, 1100), kMargin, 1020, 26,
+            ui::text(list, fonts.semibold, list_fit(fonts, message_, 26, 1100), kMargin, 950, 26, // above the hints
                      message_ok_ ? kGood : kBad);
             list.pop_opacity();
         }
@@ -1187,8 +1260,12 @@ class Storefront final : public app::Concept
             draw_progress(list, {r.x + 14, r.y + r.h - 22, r.w - 28, 8}, g.progress);
         }
         list.pop_transform();
-        ui::text(list, fonts.semibold, fonts.semibold.font->fit(g.title, 22, kCardW), r.x,
-                 r.y + r.h + 36 + r.h * kLift * 0.5f * lift, 22, focused ? kInk : kMuted);
+        const float title_y = r.y + r.h + 36 + r.h * kLift * 0.5f * lift;
+        const float heart = g.favorite ? 28.0f : 0.0f; // a favorite's title starts with a heart
+        if (g.favorite)
+            draw_heart(list, r.x + 10, title_y - 8, 22, kFavorite);
+        ui::text(list, fonts.semibold, fonts.semibold.font->fit(g.title, 22, kCardW - heart), r.x + heart, title_y, 22,
+                 focused ? kInk : kMuted);
         list.pop_opacity();
     }
 
@@ -1298,6 +1375,7 @@ class Storefront final : public app::Concept
     std::vector<store::Drive> drives_;
     std::vector<int> shown_; // indexes into games_ of the open tab; focus_ indexes this
     int tab_ = 0;            // kTabs
+    int sort_ = 0;           // kSorts
     std::string install_id_; // the game the install dialog is for; shown while set
     int drive_ = 0;          // the drive picked in it
     std::string stop_id_;    // the install the stop dialog is for; shown while set

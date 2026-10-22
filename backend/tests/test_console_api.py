@@ -53,7 +53,8 @@ def test_console_api(tmp_path):
         assert client.get("/api/v1/console-app/library", headers={"Authorization": f"Bearer {forged}"}).status_code == 401
 
         rows = {r.split("\t")[0]: r.split("\t") for r in client.get("/api/v1/console-app/library", headers=auth).text.splitlines()}
-        assert rows[ready.id] == [ready.id, "Racer Tabs", "PPSA04444", "01.000.000", "1", "installable", "", "1", "game", "image", "", "", "", "", ""]
+        assert rows[ready.id][:15] == [ready.id, "Racer Tabs", "PPSA04444", "01.000.000", "1", "installable", "", "1", "game", "image", "", "", "", "", ""]
+        assert rows[ready.id][15] == "0" and int(rows[ready.id][16]) > 1_700_000_000  # favorite, added
         assert rows[pkg.id][5].startswith("blocked:") and "packages need firmware" in rows[pkg.id][5]
         assert rows[have.id][5] == "installed"
         assert rows[dlc.id][8:10] == ["dlc", "unlocker"] and rows[dlc.id][5] != "installed"  # not its game's state
@@ -68,6 +69,19 @@ def test_console_api(tmp_path):
         with SessionLocal() as db:
             db.get(Console, a).firmware = None
             db.commit()
+
+        # a favorite from the PS5 marks the game's other copies too, not its DLC
+        with SessionLocal() as db:
+            folder = Game(title="Have It", title_id="PPSA06666", format="folder_dump", source_path=str(tmp_path / "h"),
+                          source_fingerprint="x", size_bytes=1, compatibility_status="ready")
+            db.add(folder)
+            db.commit()
+        r = client.post(f"/api/v1/console-app/favorite/{have.id}?on=true", headers=auth)
+        assert (r.status_code, r.text) == (200, "Added to Favorites.")
+        rows = {r.split("\t")[0]: r.split("\t") for r in client.get("/api/v1/console-app/library", headers=auth).text.splitlines()}
+        assert [rows[i][15] for i in (have.id, folder.id, dlc.id, ready.id)] == ["1", "1", "0", "0"]
+        client.post(f"/api/v1/console-app/favorite/{folder.id}?on=false", headers=auth)
+        assert not any(g["favorite"] for g in client.get("/api/v1/games").json() if g["id"] in (have.id, folder.id))
 
         assert client.get("/api/v1/console-app/drives", headers=auth).text == f"{usb}\tUSB\t40\t100\n"  # install targets only
         installed = {g["id"]: g["installed"] for g in client.get("/api/v1/games").json()}
@@ -89,7 +103,7 @@ def test_console_api(tmp_path):
                               total_bytes=100, transfer_rate_bps=5, eta_seconds=15, message="Copying to USB."))  # running: the worker leaves it alone
             db.commit()
         row = next(x for x in client.get("/api/v1/console-app/library", headers=auth).text.splitlines() if x.startswith(have.id))
-        assert row.split("\t")[5:7] + row.split("\t")[10:] ==["installing", "0.250", "25", "100", "5", "15", "Copying to USB."]
+        assert row.split("\t")[5:7] + row.split("\t")[10:15] ==["installing", "0.250", "25", "100", "5", "15", "Copying to USB."]
         assert client.post(f"/api/v1/console-app/install/{have.id}/cancel", headers=auth).text == "Stopping."
         assert client.post(f"/api/v1/console-app/install/{have.id}/cancel", headers=auth).status_code == 200  # still running
         assert client.post(f"/api/v1/console-app/install/{pkg.id}/cancel", headers=auth).status_code == 409

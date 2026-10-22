@@ -1385,7 +1385,8 @@ def _field(v) -> str:
 @console_api.get("/library", response_class=PlainTextResponse)
 def console_library(c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
     """id, title, title ID, version, size, state, progress (0-1 while installing or removing), has cover (1/0), kind, format,
-    then while installing or removing: bytes done, bytes total, bytes/s, seconds left, the step it's on (empty when unknown).
+    then while installing or removing: bytes done, bytes total, bytes/s, seconds left, the step it's on (empty when unknown),
+    then favorite (1/0) and when it was added to the library (Unix seconds).
     state: installable | installed | update | queued | installing | removing | blocked:<reason>
     kind: game | dlc. DLC shares its game's title ID, so it never shows as installed or removable."""
     installed = {g.title_id: g for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
@@ -1409,7 +1410,8 @@ def console_library(c: Console = Depends(console_from_token), db: Session = Depe
             state = f"blocked:{reason}" if reason else "installable"
         lines.append("\t".join(map(_field, (g.id, g.title, g.title_id, g.version, g.size_bytes, state,
                                              f"{progress:.3f}" if progress is not None else "",
-                                             int(bool(g.cover_path or g.title_id)), g.kind, g.format, *detail))))
+                                             int(bool(g.cover_path or g.title_id)), g.kind, g.format, *detail,
+                                             int(g.favorite), int(g.created_at.timestamp())))))
     return "".join(f"{line}\n" for line in lines)
 
 
@@ -1446,6 +1448,17 @@ def console_install(game_id: str, drive: str | None = None, c: Console = Depends
     except ValueError as e:
         return PlainTextResponse(str(e), 409)
     return "Queued."
+
+
+@console_api.post("/favorite/{game_id}", response_class=PlainTextResponse)
+def console_favorite(game_id: str, on: bool, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
+    """Marks a game a favorite, or not, with its other copies: the PS5 shows them as one card."""
+    g = _game(db, game_id)
+    copies = db.scalars(select(Game).where(Game.kind == "game", Game.title_id == g.title_id))         if g.kind == "game" and g.title_id else [g]
+    for copy in copies:
+        copy.favorite = on
+    db.commit()
+    return "Added to Favorites." if on else "Taken out of Favorites."
 
 
 @console_api.post("/install/{game_id}/cancel", response_class=PlainTextResponse)

@@ -213,6 +213,7 @@ bool Client::step()
         const std::string path =
             job.kind == Job::install  ? "/api/v1/console-app/install/" + job.game_id + (job.arg.empty() ? "" : "?drive=" + job.arg)
             : job.kind == Job::cancel ? "/api/v1/console-app/install/" + job.game_id + "/cancel"
+            : job.kind == Job::favorite ? "/api/v1/console-app/favorite/" + job.game_id + "?on=" + job.arg
                                       : "/api/v1/console-app/uninstall/" + job.game_id + "/confirm/" + job.arg;
         const Response r = request(server_, "POST", path, 4096);
         const std::string text = r.status == 0     ? kCantReach
@@ -361,6 +362,13 @@ void Client::cancel(const std::string &game_id)
 {
     pthread_mutex_lock(&lock_);
     jobs_.push_front({Job::cancel, game_id});
+    pthread_mutex_unlock(&lock_);
+}
+
+void Client::favorite(const std::string &game_id, bool on)
+{
+    pthread_mutex_lock(&lock_);
+    jobs_.push_front({Job::favorite, game_id, on ? "true" : "false"});
     pthread_mutex_unlock(&lock_);
 }
 

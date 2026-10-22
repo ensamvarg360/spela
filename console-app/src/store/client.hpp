@@ -59,6 +59,8 @@ class Client
     void install(const std::string &game_id, const std::string &drive_id);
     // Stops a queued or running install; answers via take_message.
     void cancel(const std::string &game_id);
+    // Marks a game (and its other copies) a favorite on the PC, or not; answers via take_message.
+    void favorite(const std::string &game_id, bool on);
     // Asks the PC what removing a game would delete; the answer comes back
     // through take_removal. remove() then deletes it, answering via take_message.
     void preview_removal(const std::string &game_id);
@@ -79,11 +81,12 @@ class Client
             cover,
             install,
             cancel,
+            favorite,
             preview,
             remove
         } kind;
         std::string game_id; // the removal id for remove
-        std::string arg = {}; // the title ID for remove, the drive id for install
+        std::string arg = {}; // the title ID for remove, the drive id for install, true/false for favorite
     };
 
     static void *thread_main(void *self);

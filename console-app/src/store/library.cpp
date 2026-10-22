@@ -75,6 +75,11 @@ std::vector<Game> parse_library(std::string_view text)
             g.seconds_left = f[13].empty() ? -1 : std::atoi(std::string(f[13]).c_str());
             g.step = f[14];
         }
+        if (f.size() >= 17)
+        {
+            g.favorite = f[15] == "1";
+            g.added = std::strtoll(std::string(f[16]).c_str(), nullptr, 10);
+        }
         games.push_back(std::move(g));
     }
     return games;

@@ -226,6 +226,10 @@ Also check:
   **Expect:** *Can't reach Spela*, "The Spela helper isn't running on this PS5…". Run the jailbreak: within about a minute the helper is sent and the library comes back.
 - [ ] Press L1 and R1.
   **Expect:** the tabs switch between **Games**, **Installed**, **DLC** and **Cart**. DLC shows only under **DLC**, never as *Installed*.
+- [ ] Press R2 on a game in **Games**, then look at it in the PC's Library.
+  **Expect:** it moves to the front with a heart before its name, and it's a favorite on the PC too. R2 again takes it back out.
+- [ ] Press L2 a few times, then close and reopen the PS5 app.
+  **Expect:** the pill beside the tabs cycles *Name*, *Newest*, *Size* and the games reorder, favorites always first. The app opens with the last one picked.
 - [ ] With two install drives set on the PC, press Cross on a game that isn't installed, pick the other drive with the D-pad, and press Cross.
   **Expect:** it queues, the PC's **Installed** page shows the job, and the game goes to the drive you picked. A drive without room says *Not enough space* and can't be picked.
 - [ ] Focus that game while it copies.
