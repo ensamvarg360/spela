@@ -1205,12 +1205,6 @@ class FTPConsoleAdapter:
         if replaced and not backup_to:
             raise AdapterError("saves_exist", f"The console already has save data for {title_id} "
                                               f"({len(replaced)} of the {len(targets)} folder(s) in this backup).")
-        if replaced:
-            try:
-                self._backup_saves(ftp, title_id, backup_to, lambda d, t: None)
-            except BaseException:
-                shutil.rmtree(backup_to, True)  # a half backup must not pass for a whole one
-                raise
 
         plan = []  # (local entry, console path, hidden upload name, folders, files)
         for p, t in zip(entries, targets):
@@ -1227,21 +1221,37 @@ class FTPConsoleAdapter:
             done += len(block)
             progress(done, total)
 
+        def drop_uploads():
+            for _, _, partial, _, _ in plan:
+                parent, _, hidden = partial.rpartition("/")
+                if hidden in ftp.ls(parent):
+                    self._rm_partial(ftp, partial)
+
         for p, t, tmp, dirs, files in plan:
-            for d in dirs:
-                ftp.mkd(d)
-            for local, remote in files:
-                with open(local, "rb") as f:
-                    ftp.storbinary(f"STOR {remote}", f, self.BLOCK, chunk)
+            try:
+                for d in dirs:
+                    ftp.mkd(d)
+                for local, remote in files:
+                    with open(local, "rb") as f:
+                        ftp.storbinary(f"STOR {remote}", f, self.BLOCK, chunk)
+            except ftplib.error_perm as e:
+                if str(e).startswith("403"):  # a helper from before restores (save_path() in payload/main.c)
+                    raise AdapterError("helper_outdated", "The helper on the console is too old to restore saves. "
+                                       "Click Reinstall helper in Settings → Consoles, then restore again.")
+                raise
             folder, _, name = tmp.rpartition("/")
             want = {remote[len(tmp):]: local.stat().st_size for local, remote in files}
             got = self._sizes(ftp, tmp) if p.is_dir() else {"": ftp.ls(folder).get(name, (False, -1))[1]}
             if got != want:
-                for _, _, partial, _, _ in plan:
-                    parent, _, hidden = partial.rpartition("/")
-                    if hidden in ftp.ls(parent):
-                        self._rm_partial(ftp, partial)
+                drop_uploads()
                 raise AdapterError("verify_failed", f"{t} didn't copy completely, so nothing was replaced. Restore it again.")
+        if replaced:  # only now: a restore that can't write must not leave a backup behind
+            try:
+                self._backup_saves(ftp, title_id, backup_to, lambda d, t: None)
+            except BaseException:
+                shutil.rmtree(backup_to, True)  # a half backup must not pass for a whole one
+                drop_uploads()
+                raise
         for _, t, tmp, _, _ in plan:
             folder, _, name = t.rpartition("/")
             old = f"{folder}/.{name}.old.partial"

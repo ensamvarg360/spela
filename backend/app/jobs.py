@@ -8,6 +8,7 @@ DLC packages need a package installer, like game packages.
 Conversions turn a folder dump into an .exfat disc image next to it, on this PC (exfat.py).
 Moves copy an installed game to another drive on the console itself, then delete the original."""
 import asyncio
+import filecmp
 import logging
 import os
 import re
@@ -712,7 +713,10 @@ save_backups: dict[str, dict] = {}  # backup id -> status: copying|success|faile
 def backup_folder(title_id: str, console: Console) -> Path:
     stamp = now().astimezone().strftime("%Y-%m-%d %H%M%S")
     name = re.sub(r'[<>:"/\\|?*]', "_", console.name).strip(" .") or "console"
-    return config.SAVE_BACKUP_DIR / title_id / f"{stamp} {name}"
+    folder, n = config.SAVE_BACKUP_DIR / title_id / f"{stamp} {name}", 2
+    while folder.exists():  # two backups within a second must not share a folder
+        folder, n = folder.with_name(f"{stamp} {name} ({n})"), n + 1
+    return folder
 
 
 def list_save_backups(title_id: str) -> list[dict]:
@@ -795,6 +799,16 @@ def start_save_restore(db: Session, console: Console, title_id: str, backup: str
     return r
 
 
+def _same_backup(new: Path) -> str | None:
+    """The name of another backup of the same title holding exactly the files of `new`, byte for byte."""
+    files = sorted(p.relative_to(new) for p in new.rglob("*") if p.is_file())
+    for d in new.parent.iterdir():
+        if (d != new and d.is_dir() and sorted(p.relative_to(d) for p in d.rglob("*") if p.is_file()) == files
+                and all(filecmp.cmp(new / f, d / f, shallow=False) for f in files)):
+            return d.name
+    return None
+
+
 async def _save_restore(restore_id: str):
     r = save_restores[restore_id]
     src = config.SAVE_BACKUP_DIR / r["title_id"] / r["backup"]
@@ -810,9 +824,14 @@ async def _save_restore(restore_id: str):
             if not console:
                 raise AdapterError("not_found", "The console was deleted.")
             r["files"] = await inventory.adapter_for(db, console).restore_saves(src, r["title_id"], progress, kept)
-            r["status"] = "success"
-            r["message"] = f"Restored {r['files']} file(s) to {console.name}." + (
-                f" The saves it replaced are backed up as {kept.name}." if kept and kept.exists() else "")
+            message = f"Restored {r['files']} file(s) to {console.name}."
+            if kept and kept.exists():
+                if same := await asyncio.to_thread(_same_backup, kept):
+                    await asyncio.to_thread(shutil.rmtree, kept, True)  # a second copy of a backup adds nothing
+                    message += f" The saves it replaced were already backed up as {same}."
+                else:
+                    message += f" The saves it replaced are backed up as {kept.name}."
+            r["status"], r["message"] = "success", message  # last: pollers stop once the status changes
         except AdapterError as e:
             r["status"], r["message"] = "confirm" if e.code == "saves_exist" else "failed", e.message
         except OSError as e:

@@ -1,5 +1,6 @@
 """Install engine: FTP and helper staging into ShadowMountPlus folders and the job runner, against a real local FTP server."""
 import asyncio
+import ftplib
 import shutil
 import subprocess
 import threading
@@ -18,7 +19,7 @@ from sqlalchemy import delete, select
 from test_console_profiles import login
 from test_inventory import FakeHelper
 
-from app import __version__, archives, config, credentials, inventory, jobs
+from app import __version__, archives, config, consoles, credentials, inventory, jobs
 from app.consoles import AdapterError, DriveInfo, FTPConsoleAdapter, HelperConsoleAdapter, InstalledGameInfo, RemovalResult
 from app.database import Base, SessionLocal, engine
 from app.main import app, console_app_token
@@ -763,6 +764,19 @@ def test_save_restore_job(ps5, monkeypatch, tmp_path):
         assert sorted(p.name for p in (root / save).parent.iterdir()) == [".keep", "PPSA03333"]  # no .partial left
         kept = next(b for b in jobs.list_save_backups("PPSA03333") if b["name"] != "backup")
         assert (Path(kept["path"]) / save / "sdimg_SAVEDATA00").read_bytes() == b"newer save on the console"
+
+        before = len(jobs.list_save_backups("PPSA03333"))
+        r = asyncio.run(restore(overwrite=True))  # the console's save is the backup itself now
+        assert r["status"] == "success" and "already backed up as backup" in r["message"], r["message"]
+        assert len(jobs.list_save_backups("PPSA03333")) == before  # no second copy of the same save
+
+        def refuse(*a, **k):  # what a helper from before restores answers
+            raise ftplib.error_perm("403 only the homebrew folders can be changed")
+        with monkeypatch.context() as m:
+            m.setattr(consoles._FTP, "storbinary", refuse)
+            r = asyncio.run(restore(overwrite=True))
+        assert r["status"] == "failed" and "Reinstall helper" in r["message"]
+        assert len(jobs.list_save_backups("PPSA03333")) == before  # no backup of a save that was never replaced
 
         write(root / "mnt/sandbox/PPSA03333_000/app0/eboot.bin", b"e")
         r = asyncio.run(restore(overwrite=True))
