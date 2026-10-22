@@ -43,6 +43,9 @@ RUN_LOADER = "Run your jailbreak on the PS5. Once its ELF loader is up, Spela se
 WAKE_UP = "Press the PS button on the controller, or click Wake if you've saved the console's Remote Play key."
 INSTALL_HELPER = "Click Install helper in Settings → Consoles, or run your jailbreak: Spela sends it by itself within a minute."
 UPDATE_HELPER = "Click Update helper in Settings → Consoles, or wait: Spela replaces it by itself within a minute."
+OTHER_PC = "Another Spela (on another computer, or in Docker) runs this PS5's helper."
+OTHER_PC_FIX = ("Use that one, or click Install helper in Settings → Consoles to move the helper here. "
+                "Spela doesn't take it over by itself, or the two would keep replacing each other's.")
 
 
 def not_answering(host: str) -> str:
@@ -589,6 +592,18 @@ class FTPConsoleAdapter:
         except (OSError, ValueError):
             return None
 
+    def _no_helper(self) -> str:
+        """Why _helper() got nothing: "other_pc" when a helper runs but holds another Spela's key (another PC, or
+        Docker on a NAS), else "missing". Sending ours would push theirs out, and theirs would push ours back."""
+        req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/info", headers={HELPER_KEY_HEADER: self.key})
+        try:
+            urllib.request.urlopen(req, timeout=3).close()
+        except urllib.error.HTTPError as e:
+            return "other_pc" if e.code == 401 else "missing"
+        except OSError:
+            pass
+        return "missing"
+
     def _drives(self, ftp: ftplib.FTP) -> list[tuple[DriveInfo, str, str]]:
         info = self._helper()
         space = {m["mount"]: (m["total"], m["free"]) for m in info["mounts"]} if info else {}
@@ -667,7 +682,7 @@ class FTPConsoleAdapter:
     async def _helper_status(self) -> tuple[dict, dict | None]:
         banner, app = await self._run(lambda f: (f.getwelcome(), f.get(f"{CONSOLE_APP_PATH}/assets/version.txt")))
         info = await asyncio.to_thread(self._helper)
-        return {"ftp": "ok", "banner": banner, "helper": info["version"] if info else "missing",
+        return {"ftp": "ok", "banner": banner, "helper": info["version"] if info else await asyncio.to_thread(self._no_helper),
                 "console_app": app.decode(errors="replace").strip() if app else "missing"}, info
 
     def _ddp(self) -> bytes:
@@ -1511,9 +1526,11 @@ class HelperConsoleAdapter(FTPConsoleAdapter):
         except AdapterError as e:
             error = e
         info = await asyncio.to_thread(self._helper)
-        helper = {"helper": info["version"] if info else "missing"}
+        helper = {"helper": info["version"] if info else await asyncio.to_thread(self._no_helper)}
         if info:  # running, but outdated
             return ConsoleStatus("degraded", error.message, helper, error.fix)
+        if helper["helper"] == "other_pc":
+            return ConsoleStatus("degraded", OTHER_PC, helper, OTHER_PC_FIX)
         ddp = await asyncio.to_thread(self._ddp)
         if b" 620 " in ddp:  # payloads don't run in rest mode
             return ConsoleStatus("standby", "The console is in rest mode.", helper, WAKE_UP)

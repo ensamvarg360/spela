@@ -50,7 +50,7 @@ function ConsoleCard({ c, version, many, onRefreshed }: { c: Console; version: s
   }
 
   const helper = c.helper_status.helper;
-  const running = !!helper && helper !== "missing";
+  const running = !!helper && helper !== "missing" && helper !== "other_pc";
   return (
     <>
       <Panel title={c.name} badge={<Badge tone={STATE_TONE[c.state]} dot>{STATE_LABEL[c.state]}</Badge>}

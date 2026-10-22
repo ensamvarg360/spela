@@ -315,6 +315,34 @@ def test_helper_is_sent_again_after_a_reboot(monkeypatch):
         db.commit()
 
 
+def test_another_spelas_helper_is_left_alone(monkeypatch):
+    """A helper with another Spela's key (PC and Docker both set up) isn't replaced every minute: they'd take turns."""
+    from app import inventory
+    from app.consoles import ConsoleStatus, MockConsoleAdapter
+
+    class Taken(MockConsoleAdapter):
+        sent = 0
+
+        async def connect(self):
+            return ConsoleStatus("degraded", "Another Spela runs it.", {"helper": "other_pc"})
+
+        async def install_helper(self):
+            Taken.sent += 1
+            return __version__
+
+    with SessionLocal() as db:
+        con = Console(name="Shared", ip_address="10.0.0.4", connection_type="helper", port=7735)
+        db.add(con)
+        db.commit()
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: Taken(c))
+    monkeypatch.setattr(inventory.time, "monotonic", lambda: 1e9)
+    assert asyncio.run(inventory.check(con.id))["state"] == "degraded" and Taken.sent == 0
+    with SessionLocal() as db:
+        inventory.forget(db, con.id)
+        db.delete(db.get(Console, con.id))
+        db.commit()
+
+
 def test_remove_helper_stops_it_and_its_resending(monkeypatch):
     """Remove helper stops the payload and keeps Spela from sending it again, until Install helper is clicked."""
     from app import inventory

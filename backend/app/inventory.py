@@ -159,7 +159,7 @@ async def _auto_helper(db: Session, console: Console, adapter: ConsoleAdapter, r
     """The helper stops when the PS5 restarts. Once the console is on again and the jailbreak's ELF loader is up,
     this sends the helper (or replaces an outdated one) without the user clicking Install helper. True when it did.
     The console is on when it's online or degraded; offline and rest mode can't run payloads."""
-    if not console.auto_helper or console.connection_type not in ("helper", "ftp") or result.state not in ("online", "degraded")             or result.helper_status.get("helper") == __version__:
+    if not console.auto_helper or console.connection_type not in ("helper", "ftp") or result.state not in ("online", "degraded")             or result.helper_status.get("helper") in (__version__, "other_pc"):
         return False
     if time.monotonic() - _auto_helper_at.get(console.id, float("-inf")) < AUTO_HELPER_SECONDS:
         return False

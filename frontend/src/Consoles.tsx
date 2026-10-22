@@ -30,6 +30,7 @@ function WakeKey({ c, onSaved }: { c: Console; onSaved: () => void }) {
 /** "v0.7.3" and whether it matches this app, or that it isn't there. */
 function Version({ v, want, missing }: { v: string | undefined; want: string; missing: string }) {
   if (!v || v === "missing") return <span className="sp-muted">{missing}</span>;
+  if (v === "other_pc") return <span className="sp-muted">Run by another Spela</span>;
   return <>
     <span className="sp-num">v{v}</span>
     {want && (v === want ? <Badge tone="success">Up to date</Badge> : <Badge tone="warning">Needs v{want}</Badge>)}
@@ -37,8 +38,8 @@ function Version({ v, want, missing }: { v: string | undefined; want: string; mi
 }
 
 function Facts({ c, version, busy, act, onSaved }: { c: Console; version: string; busy: boolean; act: (path: string) => void; onSaved: () => void }) {
-  const helper = c.helper_status.helper; // "missing", a version, or absent before the first check
-  const hasHelper = !!helper && helper !== "missing";
+  const helper = c.helper_status.helper; // "missing", "other_pc", a version, or absent before the first check
+  const hasHelper = !!helper && helper !== "missing" && helper !== "other_pc";
   const helperOk = !!version && helper === version;
   const consoleApp = c.helper_status.console_app; // same: "missing", a version, or absent
   const hasApp = !!consoleApp && consoleApp !== "missing";
