@@ -1,4 +1,5 @@
 import os
+import time
 
 from fastapi.testclient import TestClient
 
@@ -7,6 +8,29 @@ from app.database import SessionLocal
 from app import main
 from app.main import app
 from app.models import Game
+
+
+def test_setup_window(monkeypatch):
+    """In Docker, a LAN device may set the first password without the code, but only right after the start."""
+    saved = config.PASSWORD_FILE.read_bytes() if config.PASSWORD_FILE.exists() else None
+    config.PASSWORD_FILE.unlink(missing_ok=True)
+    body = {"password": "password1"}
+    try:
+        with TestClient(app, base_url="http://127.0.0.1", client=("192.168.1.20", 50000)) as lan, \
+                TestClient(app, base_url="http://127.0.0.1", client=("8.8.8.8", 50000)) as internet:
+            assert lan.post("/api/v1/auth/setup", json=body).status_code == 403  # not Docker: the code, always
+            monkeypatch.setattr(config, "DOCKER", True)
+            monkeypatch.setattr(main, "STARTED", main.STARTED - main.SETUP_WINDOW - 1)
+            r = lan.post("/api/v1/auth/setup", json=body)
+            assert r.status_code == 403 and "restart the container" in r.json()["fix"]  # window over
+            monkeypatch.setattr(main, "STARTED", time.monotonic())
+            assert internet.post("/api/v1/auth/setup", json=body).status_code == 403  # only LAN addresses
+            assert lan.post("/api/v1/auth/setup", json=body).status_code == 200
+    finally:
+        if saved is None:
+            config.PASSWORD_FILE.unlink(missing_ok=True)
+        else:
+            config.PASSWORD_FILE.write_bytes(saved)
 
 
 def test_flow(library):

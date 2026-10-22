@@ -42,7 +42,8 @@ async def lifespan(app: FastAPI):
     migrations.upgrade(engine)
     if not config.PASSWORD_FILE.exists():  # on a NAS the browser is elsewhere, so setup needs this code (setup())
         logging.getLogger(__name__).warning("First run: to set the admin password from another device, enter the "
-                                            "setup code %s", SETUP_CODE)
+                                            "setup code %s%s", SETUP_CODE, f" (not needed in the first {SETUP_WINDOW // 60}"
+                                            " minutes after this start)" if config.DOCKER else "")
     tasks = [asyncio.create_task(jobs.worker())]
     if config.SCAN_INTERVAL_MINUTES > 0:
         tasks.append(asyncio.create_task(_scheduled_scans()))
@@ -162,6 +163,16 @@ class SetupIn(BaseModel):
 
 
 SETUP_CODE = secrets.token_hex(5).upper()  # logged at startup while no password is set; new on every start
+SETUP_WINDOW = 600  # seconds after start in which Docker's first setup needs no code from a LAN address
+STARTED = time.monotonic()
+
+
+def _in_setup_window(ip: str) -> bool:
+    try:
+        lan = ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+    return config.DOCKER and lan and time.monotonic() - STARTED < SETUP_WINDOW
 
 
 def _hash(password: str, salt: bytes) -> bytes:
@@ -189,15 +200,18 @@ def _require_setup_done():
 @public.post("/auth/setup")
 def setup(body: SetupIn, request: Request, db: Session = Depends(get_db)):
     """First run only: sets the admin password. From another device only with the setup code from Spela's log, so
-    nobody else on the LAN can claim it first."""
+    nobody else on the LAN can claim it first. In Docker, devices on the LAN may also claim it without the code for
+    SETUP_WINDOW seconds after the container starts, so installing on a NAS needs no terminal (as Portainer does)."""
     ip = request.client.host if request.client else "?"
-    if ip not in ("127.0.0.1", "::1") and not hmac.compare_digest(body.code.strip().upper(), SETUP_CODE):
+    if (ip not in ("127.0.0.1", "::1") and not _in_setup_window(ip)
+            and not hmac.compare_digest(body.code.strip().upper(), SETUP_CODE)):
         recent = [t for t in _failures.get(ip, []) if time.time() - t < 60]
         if len(recent) >= 5:
             raise HTTPException(429, {"error": "rate_limited", "message": "Too many attempts. Wait a minute."})
         if body.code:
             _failures[ip] = recent + [time.time()]
-        where = ("in the container's log (docker logs spela)" if config.DOCKER else
+        where = ("in the container's log (docker logs spela). Or restart the container and set the password within "
+                 f"{SETUP_WINDOW // 60} minutes, without a code" if config.DOCKER else
                  "in app.log in Spela's data folder. Or set the password on the PC running Spela, from its tray icon")
         raise HTTPException(403, {"error": "setup_code", "message": "Wrong setup code." if body.code else "Enter the setup code.",
                                   "fix": f"It's {where}."})
