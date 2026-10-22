@@ -162,6 +162,7 @@ class ConsoleAdapter(Protocol):
     async def list_leftovers(self) -> dict[str, int]: ...
     async def remove_leftovers(self) -> int: ...  # AdapterError("busy") while the helper copies a game between drives
     async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
+    async def has_file(self, path: str) -> bool: ...  # raises AdapterError
     # Copies every save folder of `title_id` (all users) under `dest`, mirroring console paths. Reads only. Returns files copied.
     async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int: ...
     # Writes a backup_saves folder back to the same console paths. A save already there raises AdapterError("saves_exist")
@@ -378,9 +379,17 @@ class MockConsoleAdapter:
     async def get_home_db(self) -> bytes:
         self._check()
         db = sqlite3.connect(":memory:")
-        db.execute("CREATE TABLE tbl_contentinfo (titleId TEXT PRIMARY KEY, conceptId INT)")
-        db.executemany("INSERT INTO tbl_contentinfo VALUES (?, ?)", [(g, int(g[4:])) for g in self.icons])  # concept = digits
+        db.execute("CREATE TABLE tbl_contentinfo (titleId TEXT PRIMARY KEY, conceptId INT, localConceptId INT)")
+        db.execute("CREATE TABLE tbl_conceptmetadata (localConceptId INT, logoImageInfo TEXT)")
+        for i, g in enumerate(sorted(self.icons)):  # concept = digits
+            db.execute("INSERT INTO tbl_contentinfo VALUES (?, ?, ?)", (g, int(g[4:]), i))
+            db.execute("INSERT INTO tbl_conceptmetadata VALUES (?, ?)",
+                       (i, f"/user/appmeta/{g}/logo.png?ts=1" if g in self.logos else ""))
         return db.serialize()
+
+    async def has_file(self, path: str) -> bool:
+        self._check()
+        return any(path == f"/user/appmeta/{t}/logo.png" for t in self.logos)
 
     async def set_home_logo(self, title_id: str, png: bytes) -> None:
         self._check()
@@ -1345,6 +1354,10 @@ class FTPConsoleAdapter:
         if not (data := await self._run(lambda fs: fs.get(HOME_DB))):
             raise AdapterError("home_db_unreadable", "Can't read the home screen's database on the console.")
         return data
+
+    async def has_file(self, path: str) -> bool:
+        folder, _, name = path.rpartition("/")
+        return name in await self._run(lambda fs: fs.ls(folder))
 
     def _set_logo(self, title_id: str, png: bytes):
         req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/logo?id={title_id}", data=png, method="POST",

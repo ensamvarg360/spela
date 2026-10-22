@@ -13,7 +13,7 @@ from test_jobs import adapter, forget_consoles, ps5  # noqa: F401  (fixtures)
 from app import config, consoles, inventory, jobs, logos, main
 from app.database import SessionLocal
 from app.main import app, console_app_token
-from app.models import Console, Drive, Game, InstalledGame, InstallJob
+from app.models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob
 from sqlalchemy import select
 
 
@@ -170,6 +170,35 @@ def test_home_logo(tmp_path, monkeypatch):
         assert not r[0]["ok"] and "isn't a usable PNG" in r[0]["message"] and fetched[-1].endswith("/concepts/5678?country=US&language=en-US&age=99")
         catalog["media"]["images"].pop()
         assert "no logo" in client.post(f"/api/v1/games/{on.id}/home-logo").json()[0]["message"]
+
+
+def test_logos_back_after_restart(monkeypatch):
+    png = logos.PNG + b"logo"
+    fetched = []
+
+    def get(url):
+        fetched.append(url)
+        return json.dumps({"media": {"images": [{"type": "LOGO", "url": "https://image.api.playstation.com/l.png"}]}}).encode() \
+            if "/concepts/" in url else png
+    monkeypatch.setattr(logos, "_get", get)
+    monkeypatch.setattr(logos, "RESTORE_AGAIN_SECONDS", 0)
+    mock = consoles.MockConsoleAdapter()
+    mock.logos["PPSA01234"] = png  # still there
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: mock)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        cid = _console(client)
+        asyncio.run(logos.restore(cid))
+        assert set(mock.logos) == {"PPSA01234", "PPSA05678"}
+        assert fetched == [logos.CATALOG.format(5678), "https://image.api.playstation.com/l.png"]  # once: kept on the PC
+
+        mock.has_file = lambda path: asyncio.sleep(0, False)  # the restart deleted the files, the entries still point at them
+        mock.logos.clear()
+        asyncio.run(logos.restore(cid))
+        assert set(mock.logos) == {"PPSA01234", "PPSA05678"} and len(fetched) == 4  # 1234's logo is new, 5678's kept
+    with SessionLocal() as db:
+        events = db.scalars(select(AuditLog).where(AuditLog.action == "home_logo")).all()
+        assert events[-1].details["title_ids"] == ["PPSA01234", "PPSA05678"]  # one entry per sweep
 
 
 def test_logo_after_install(tmp_path, monkeypatch):

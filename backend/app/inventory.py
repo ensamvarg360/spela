@@ -148,10 +148,12 @@ async def check(console_id: str) -> dict:
             if console.connection_type in ("helper", "ftp"):  # the helper runs: the PS5 app reaches the PC through it
                 relay.ensure(console.id, console.ip_address)
             if prev.get("state") != "online":
+                from . import jobs, logos  # they import this module
                 try:
                     await refresh(db, console)
                 except AdapterError as e:
                     record(console_id, "degraded", e.message, e.fix)
+                jobs._spawn(logos.restore(console.id))  # a restart of the PS5 drops the logos
         return status[console_id]
 
 

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from . import config, inventory
 from .consoles import AdapterError
+from .database import SessionLocal
 from .models import AuditLog, Console
 
 CATALOG = "https://m.np.playstation.com/api/catalog/v2/concepts/{}?country=US&language=en-US&age=99"  # no login needed
@@ -240,15 +241,97 @@ def audit(db: Session, console: Console, title_id: str, ok: bool, message: str):
                     details={"message": message}))
 
 
-async def apply(db: Session, console: Console, title_id: str) -> None:
-    """Puts the game's logo on `console`'s home screen. Saves the console's database to the data folder first
-    (console-backups/<console id>-app.db), the copy to put back over FTP if the home screen ever breaks."""
-    adapter = inventory.adapter_for(db, console)
-    home_db = await adapter.get_home_db()
+def _backup(console: Console, home_db: bytes):
+    """console-backups/<console id>-app.db, the copy to put back over FTP if the home screen ever breaks."""
     backup = config.DATA_DIR / "console-backups" / f"{console.id}-app.db"
     backup.parent.mkdir(exist_ok=True)
     backup.write_bytes(home_db)  # ponytail: only the latest copy; keep several if a bad write ever goes unnoticed
+
+
+async def apply(db: Session, console: Console, title_id: str) -> None:
+    """Puts the game's logo on `console`'s home screen, saving the console's database first (_backup)."""
+    adapter = inventory.adapter_for(db, console)
+    home_db = await adapter.get_home_db()
+    _backup(console, home_db)
     if not (concept := concept_id(home_db, title_id)):
         raise AdapterError("not_found", "The console's home screen has no PlayStation Store entry for this game.")
     png = await asyncio.to_thread(fetch_logo, concept)
     await adapter.set_home_logo(title_id, png)
+
+
+def cached_logo(concept: int) -> bytes | None:
+    """fetch_logo, kept in STORE_DIR as concept-<id>.png. None when the store has no logo (asked again after
+    RETRY_SECONDS) or can't be reached."""
+    path, none = STORE_DIR / f"concept-{concept}.png", STORE_DIR / f"concept-{concept}.none"
+    if path.is_file():
+        return path.read_bytes()
+    if none.is_file() and time.time() - none.stat().st_mtime < RETRY_SECONDS:
+        return None
+    try:
+        png = fetch_logo(concept)
+    except AdapterError as e:
+        if e.code == "no_logo":
+            _save(none, b"")
+        return None
+    _save(path, png)
+    return png
+
+
+def home_games(home_db: bytes) -> dict[str, tuple[int, bool]]:
+    """{title ID: (concept ID, whether its logo entry points at the logo the helper writes)} for the games on the
+    home screen that have a PlayStation Store concept."""
+    db = sqlite3.connect(":memory:")
+    try:
+        db.deserialize(home_db)
+        rows = db.execute("SELECT c.titleId, c.conceptId, m.logoImageInfo FROM tbl_contentinfo c LEFT JOIN "
+                          "tbl_conceptmetadata m ON m.localConceptId = c.localConceptId WHERE c.conceptId").fetchall()
+    except sqlite3.DatabaseError:
+        raise AdapterError("home_db_unreadable", "The console's home-screen database couldn't be read.")
+    finally:
+        db.close()
+    return {t: (c, (info or "").startswith(f"/user/appmeta/{t}/logo.png")) for t, c, info in rows if TITLE_ID.fullmatch(t)}
+
+
+RESTORE_AGAIN_SECONDS = 180  # after a restart ShadowMountPlus adds the games back a while after the console answers
+_restoring: set[str] = set()
+
+
+async def restore(console_id: str):
+    """Gives every game on the console's home screen its title logo, unless it still has the one from us. A restart
+    of the PS5 registers the games again, which drops their logos, so this runs each time the console comes back
+    online: right away and once more RESTORE_AGAIN_SECONDS later. Anything that fails waits for the next time."""
+    if console_id in _restoring:
+        return
+    _restoring.add(console_id)
+    try:
+        for wait in (0, RESTORE_AGAIN_SECONDS):
+            await asyncio.sleep(wait)
+            with SessionLocal() as db:
+                console = db.get(Console, console_id)
+                if not console or console.connection_type not in ("helper", "mock"):  # only the helper sets logos
+                    return
+                adapter, done = inventory.adapter_for(db, console), []
+                try:
+                    home_db = await adapter.get_home_db()
+                    for title_id, (concept, ours) in home_games(home_db).items():
+                        if ours and await adapter.has_file(f"/user/appmeta/{title_id}/logo.png"):
+                            continue
+                        if not (png := await asyncio.to_thread(cached_logo, concept)):
+                            continue
+                        if not done:
+                            _backup(console, home_db)
+                        try:
+                            await adapter.set_home_logo(title_id, png)
+                            done.append(title_id)
+                        except AdapterError as e:
+                            if e.code != "not_found":  # not_found: left the home screen meanwhile
+                                raise
+                except AdapterError:
+                    pass  # offline again, or the helper is missing or too old
+                if done:  # one entry, not one per game after every restart
+                    db.add(AuditLog(action="home_logo", console_id=console_id, result="success", details={
+                        "message": f"Put back the logo of {len(done)} game(s) on the home screen.",
+                        "title_ids": done, "automatic": True}))
+                    db.commit()
+    finally:
+        _restoring.discard(console_id)
