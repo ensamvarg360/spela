@@ -124,8 +124,8 @@ def main():
         _show_running_window() or webbrowser.open(URL)
         return
     if owner == "other":
-        ctypes.windll.user32.MessageBoxW(None, f"Port {config.PORT} is already in use by another program, so PS5 Local "
-                                         "Storefront can't start.\n\nClose that program and try again.",
+        ctypes.windll.user32.MessageBoxW(None, f"Port {config.PORT} is already in use by another program, so Spela "
+                                         "can't start.\n\nClose that program and try again.",
                                          "Spela", 0x10)  # MB_ICONERROR
         return
     # log_config=None: a windowed .exe has no console, so uvicorn must log through the file handler above.
