@@ -9,7 +9,8 @@ services:
     container_name: spela
     restart: unless-stopped
     # host: Spela finds PS5s on your network by itself. With a bridge network (ports: ["8787:8787"] instead)
-    # everything works, but you type each PS5's IP address in yourself.
+    # everything works, but you type each PS5's IP address in yourself. Page never loads? Docker Desktop needs host
+    # networking turned on in its settings (or the bridge network), and a firewall like ufw needs port 8787 allowed.
     network_mode: host
     environment:
       TZ: Etc/UTC
