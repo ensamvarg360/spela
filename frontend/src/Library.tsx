@@ -291,7 +291,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
           </div>
           {picked && <InstallBar kind={kind} picked={picked} shown={shown} setPicked={setPicked} />}
           {shown.length ? (() => {
-            const props = (g: Game) => ({ game: g, tooNew: tooNew.has(g.id), onChange: changed, picked: picked && picked.has(g.id), onPick: () => {
+            const props = (g: Game) => ({ game: g, tooNew: tooNew.has(g.id), onChange: changed, peek: !!view.q.trim(), picked: picked && picked.has(g.id), onPick: () => {
               const next = new Set(picked);
               if (!next.delete(g.id)) next.add(g.id);
               setPicked(next);
@@ -321,7 +321,8 @@ function chip(game: Game, tooNew: boolean): [string, Tone, IconName] | null {
 }
 
 /** `picked`: null when not selecting; otherwise a click ticks the card instead of opening the game. */
-type TileProps = { game: Game; tooNew: boolean; onChange: (id: string, changes: Partial<Game>) => void; picked: boolean | null; onPick: () => void };
+/** `peek`: a search is on, so every card shown matched it and the small card shows its title without a hover. */
+type TileProps = { game: Game; tooNew: boolean; onChange: (id: string, changes: Partial<Game>) => void; peek: boolean; picked: boolean | null; onPick: () => void };
 
 // asked once the art loads, so only cards that have scrolled into view ask the store
 const askStore = ({ game, onChange }: TileProps) => {
@@ -433,7 +434,7 @@ function Tile(props: TileProps) {
 
   return (
     <div className="sp-coveritem">
-      <a className={picked ? "sp-cover sp-cover--picked" : "sp-cover"} href={`#/game/${game.id}`} {...selecting(props)}>
+      <a className={`sp-cover${picked ? " sp-cover--picked" : ""}${props.peek ? " is-peek" : ""}`} href={`#/game/${game.id}`} {...selecting(props)}>
         <Cover game={game} onLoad={() => askStore(props)}>
           <div className="sp-cover__top">
             {picked !== null ? <span className="sp-cover__pick" aria-hidden>{picked && <Icon name="check" />}</span>
@@ -442,9 +443,8 @@ function Tile(props: TileProps) {
           {state && <div className="sp-cover__bottom">
             <span className={`sp-cover__chip sp-cover__chip--${state[1]}`} role="img" aria-label={state[0]} title={state[0]}><Icon name={state[2]} /></span>
           </div>}
+          <span className="sp-cover__caption">{game.title}{game.copies && <span className="sp-cover__sub">{game.copies.length} versions</span>}</span>
         </Cover>
-        <span className="sp-cover__title" title={game.title}>{game.title}</span>
-        {game.copies && <span className="sp-cover__meta">{game.copies.length} versions</span>}
       </a>
       {/* a sibling, not inside the link: a button can't be nested in a link */}
       {picked === null && !session.readOnly && (

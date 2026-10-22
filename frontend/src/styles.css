@@ -84,7 +84,8 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .sp-cover__pick svg { width: 14px; height: 14px; }
 .sp-cover--picked .sp-cover__art { outline: 3px solid var(--accent); outline-offset: -3px; }
 .sp-cover--picked .sp-cover__pick { background: var(--accent); border-color: var(--accent); }
-.sp-cover__meta { margin-top: -6px; font-size: 12px; line-height: 16px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a second, quieter line in a cover's hover caption: "2 versions", the drives a game is on */
+.sp-cover__sub { display: block; margin-top: 2px; font-weight: 400; font-size: 12px; line-height: 16px; color: var(--text-muted); }
 /* Large game cards: the whole item lifts, not just the link, so the favorite star (its sibling) moves with the card
    (worth moving into the design system's GameCardLarge) */
 .sp-gamegrid > li { transition: transform .5s cubic-bezier(.22, 1, .36, 1); }

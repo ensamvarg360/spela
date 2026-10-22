@@ -437,9 +437,11 @@ export default function Installed() {
               return (
                 <div key={g.title_id} className="sp-coveritem">
                   <a className="sp-cover" href={g.game_id ? `#/game/${g.game_id}` : `#/installed/${c.id}/${g.id}`} title={tip}>
-                    <Art g={g} />
-                    <span className="sp-cover__title">{g.title}</span>
-                    <span className="sp-cover__meta">{copies.map((x) => (x.drive_id && driveLabel[x.drive_id]) || "Unknown drive").join(" · ")}</span>
+                    <Art g={g}>
+                      <span className="sp-cover__caption">{g.title}
+                        <span className="sp-cover__sub">{copies.map((x) => (x.drive_id && driveLabel[x.drive_id]) || "Unknown drive").join(" · ")}</span>
+                      </span>
+                    </Art>
                     {label !== "Installed" && <span><Badge tone={tone}>{label}</Badge></span>}
                   </a>
                   {act && (
