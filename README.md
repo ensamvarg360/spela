@@ -24,24 +24,39 @@ Browse them on your PC, install them to your console over your home network, rem
 
 ## What it does
 
-- **Finds your games.** Point it at a folder or a whole drive. It recognizes folder dumps, disc images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) and `.zip` / `.7z` / `.rar` archives holding them, by looking *inside* the files, not just at their names. Anything it can't identify is flagged instead of guessed.
-- **Looks good.** Posters, publisher, release year, genre and rating come from PlayStation Store by title ID, no account needed. Upload your own cover if you like.
-- **Installs over your network.** One click (or a whole selection) copies a game to the console's internal drive or a USB drive. It copies under a hidden name, checks every file's size, and only then renames it into place, so ShadowMountPlus never sees half a game.
+**Your library**
+
+- **Finds your games.** Point it at a folder or a whole drive. It recognizes folder dumps, disc images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) and `.zip` / `.7z` / `.rar` archives holding them by looking *inside* the files, not just at their names. Anything it can't identify is flagged, never guessed.
+- **Looks the part.** Posters, publisher, release year, genre and rating come from PlayStation Store by title ID, no account needed. Prefer your own cover? Upload it.
+- **Keeps DLC apart.** DLC gets its own page and folders, and unlockers can be added straight into an installed game's folder.
+- **Converts folder dumps** to a single `.exfat` image in plain Python: no OSFMount, WSL or admin rights.
+
+**Your console**
+
+- **Installs over your network.** Click one game, or select a dozen and queue them all, to copy them to the internal SSD or a USB drive. Each copy goes in under a hidden name, every file's size is checked, and only then is it renamed into place, so ShadowMountPlus never sees half a game. One title ID per console, so two versions can't clash.
 - **Removes cleanly.** Deleting a ShadowMountPlus game on the PS5 leaves its files behind. Spela shows exactly what it will delete, deletes only that, and takes the home-screen tile with it.
-- **Moves games between drives** on the console itself, without sending anything over the network.
-- **Fixes the home screen.** Installed games get their proper logo on the PS5 home screen, which a jailbroken console can't fetch itself.
-- **Handles DLC.** Installs DLC unlockers into a game's folder; keeps DLC in its own list.
-- **Backs up and restores save data** between the console and your PC (asking before it replaces a save), and converts folder dumps to `.exfat` images in plain Python (no OSFMount, WSL or admin rights).
-- **Wakes the console** from rest mode, and re-sends its helper by itself after the console restarts.
-- **Has a PS5 app.** Games, Installed, DLC and a cart on the TV, with Cross to install and Square to stop or remove.
+- **Moves games** between the console's drives without anything crossing the network, or back onto your PC when the console runs out of room.
+- **Tidies up.** Unfinished copies left by an install that stopped partway are found and can be cleaned up in one click.
+- **Fixes the home screen.** Installed games get their proper logo, which a jailbroken console can't fetch for itself.
+- **Backs up and restores save data** between the console and your PC, and asks (and backs up the current save) before it replaces one.
+- **Wakes the console** from rest mode, and sends its helper again by itself after the console restarts.
+
+**From the couch**
+
+- **A Spela app on the PS5 home screen.** Games, Installed and DLC tabs plus a cart on the TV: Cross installs, Square stops or removes, and you pick the drive.
+
+**Day to day**
+
+- **Keeps you posted.** A Dashboard shows library totals, each console's status and free space, and anything that needs a look. A bell in the top bar lists what finished while you were away.
+- **Updates in one click.** When a new release is out, **Update to v…** in the top bar downloads it and restarts Spela, keeping your library and settings. The helper and the PS5 app update themselves after it.
 - **Stays private.** Runs in the tray, answers only to your PC by default, and can give a phone or a guest a view-only password.
 
 ## Screenshots
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/dashboard.png" alt="Dashboard: library totals, console status, drive space"><br><sub><b>Dashboard</b>: what's in the library, how each console and drive is doing, what needs a look.</sub></td>
-    <td width="50%"><img src="docs/screenshots/game.png" alt="A game's page with install button and file details"><br><sub><b>Game page</b>: choose a drive, install, convert, see exactly where the files came from.</sub></td>
+    <td width="50%"><img src="docs/screenshots/dashboard.png" alt="Dashboard: library totals, console status, drive space"><br><sub><b>Dashboard</b>: what's in the library, how each console and drive is doing, and what needs a look.</sub></td>
+    <td width="50%"><img src="docs/screenshots/game.png" alt="A game's page with install button and file details"><br><sub><b>Game page</b>: pick a drive and install, add it to the cart, convert it, and see exactly where the files came from.</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/ps5-games.png" alt="The Spela app on the PS5: the games on your PC"><br><sub><b>On the PS5</b>: the games on your PC, with what's installed, updatable or in progress.</sub></td>
@@ -70,6 +85,8 @@ Browse them on your PC, install them to your console over your home network, rem
 
    You can leave halfway: the guide remembers where you got to, and stays on the Dashboard until you're done. When something goes wrong, it says what to check. Then open a game and click **Install**.
 3. Optional: click **Install PS5 app** under **Settings → Consoles** to get Spela on the console's home screen.
+
+You only download Spela once: later releases show up as **Update to v…** in the top bar.
 
 Nothing needs changing in Windows: the PC only ever connects out to the PS5, and the PS5 app reaches the PC through the helper, so no firewall rule or network setting is involved.
 
