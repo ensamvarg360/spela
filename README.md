@@ -48,7 +48,7 @@ Browse them on your PC, install them to your console over your home network, rem
 **Day to day**
 
 - **Keeps you posted.** A Dashboard shows library totals, each console's status and free space, and anything that needs a look. A bell in the top bar lists what finished while you were away.
-- **Updates in one click.** When a new release is out, **Update to v…** in the top bar downloads it and restarts Spela, keeping your library and settings. The helper and the PS5 app update themselves after it.
+- **Updates in one click.** When a new release is out, **Update to vX.Y.Z** in the top bar downloads it and restarts Spela, keeping your library and settings. The helper and the PS5 app update themselves after it.
 - **Stays private.** Runs in the tray, answers only to your PC by default, and can give a phone or a guest a view-only password.
 
 ## Screenshots
@@ -86,7 +86,7 @@ Browse them on your PC, install them to your console over your home network, rem
    You can leave halfway: the guide remembers where you got to, and stays on the Dashboard until you're done. When something goes wrong, it says what to check. Then open a game and click **Install**.
 3. Optional: click **Install PS5 app** under **Settings → Consoles** to get Spela on the console's home screen.
 
-You only download Spela once: later releases show up as **Update to v…** in the top bar.
+You only download Spela once: later releases show up as **Update to vX.Y.Z** in the top bar.
 
 Nothing needs changing in Windows: the PC only ever connects out to the PS5, and the PS5 app reaches the PC through the helper, so no firewall rule or network setting is involved.
 
