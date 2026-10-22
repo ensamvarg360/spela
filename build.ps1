@@ -19,10 +19,18 @@ if (-not (Test-Path $venv)) { python -m venv $venv }
 # setuptools reuses backend\build\lib and skips files whose source looks older, which shipped stale code
 Remove-Item -Recurse -Force "$PSScriptRoot\backend\build" -ErrorAction SilentlyContinue
 & "$venv\Scripts\python" -m pip install --quiet "$PSScriptRoot\backend" pyinstaller
+# the splash gets the version stamped on its bottom edge, so it always matches the build
+& "$venv\Scripts\python" -c @"
+from PIL import Image, ImageDraw, ImageFont
+img = Image.open(r'$PSScriptRoot\images\splash.png').convert('RGB')
+draw = ImageDraw.Draw(img)
+draw.text((img.width / 2, img.height - 22), 'v$version', fill=(200, 196, 230), anchor='mm', font=ImageFont.truetype('segoeui.ttf', 16))
+img.save(r'$PSScriptRoot\build\splash.png')
+"@
 Push-Location "$PSScriptRoot\backend"
 # --splash shows while the one-file .exe unpacks, before any Python runs; launcher.py closes it
 & "$venv\Scripts\python" -m PyInstaller --noconfirm --onefile --windowed --name "Spela-$version" --icon "$PSScriptRoot\backend\app\assets\spela.ico" `
-    --splash "$PSScriptRoot\backend\splash.png" `
+    --splash "$PSScriptRoot\build\splash.png" `
     --distpath "$PSScriptRoot\dist" --workpath "$PSScriptRoot\build" --specpath "$PSScriptRoot\build" `
     --add-data "$PSScriptRoot\frontend\dist;app/static" --add-data "$PSScriptRoot\backend\app\payload;app/payload" `
     --add-data "$PSScriptRoot\backend\app\console_app;app/console_app" `
