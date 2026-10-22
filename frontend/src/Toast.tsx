@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { Icon } from "./ui";
 
 type Toast = { id: number; text: ReactNode; error?: boolean };
 
@@ -22,11 +23,12 @@ export default function Toasts() {
     };
   }, []);
   return (
-    <div className="toasts" role="status" aria-live="polite">
+    <div className="sp-toasts" role="status" aria-live="polite">
       {list.map((t) => (
-        <div key={t.id} className={`toast${t.error ? " bad" : ""}`}>
-          <span>{t.text}</span>
-          <button className="link" aria-label="Dismiss" onClick={() => drop(t.id)}>×</button>
+        <div key={t.id} className={`sp-notice sp-toast${t.error ? " sp-toast--danger" : ""}`}>
+          <Icon name={t.error ? "xCircle" : "checkCircle"} className="sp-notice__icon" />
+          <div className="sp-notice__body"><span className="sp-notice__text">{t.text}</span></div>
+          <button type="button" className="sp-btn sp-btn--ghost sp-btn--icon sp-btn--sm" aria-label="Dismiss" onClick={() => drop(t.id)}><Icon name="x" /></button>
         </div>
       ))}
     </div>

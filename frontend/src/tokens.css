@@ -1,0 +1,61 @@
+/* Spela — generated from tokens.json in the Spela design system. Change values there, not here. */
+:root {
+  color-scheme: dark;
+
+  --bg: #0b0e14;
+  --surface: #131821;
+  --surface-sunken: #0e121a;
+  --surface-raised: #1a202b;
+  --surface-hover: #1f2632;
+  --row-hover: #181e28;
+  --border: #232a36;
+  --border-strong: #2c3442;
+  --border-hover: #3a4352;
+  --track: var(--border);
+  --text: #e6e9ef;
+  --text-muted: #9aa3b2;
+  --text-subtle: #7b8494;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-text: #7aa7ff;
+  --accent-soft: rgba(59, 130, 246, 0.16);
+  --on-accent: #ffffff;
+  --brand-blue: #1b72f2;
+  --brand-violet: #6e04b3;
+  --focus: #60a5fa;
+  --success: #4ade80;
+  --success-soft: rgba(34, 197, 94, 0.14);
+  --warning: #fbbf24;
+  --warning-soft: rgba(245, 158, 11, 0.14);
+  --danger: #f87171;
+  --danger-soft: rgba(239, 68, 68, 0.14);
+  --danger-solid: #dc2626;
+  --scrim: rgba(11, 14, 20, 0.72);
+
+  --font-sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --control-sm: 32px;
+  --control-md: 40px;
+  --control-lg: 44px;
+  --page-max: 1200px;
+  --page-narrow: 820px;
+  --cover-min: 160px;
+
+  --ring: 0 0 0 3px rgba(59, 130, 246, 0.35);
+  --popover: 0 12px 32px rgba(0, 0, 0, 0.45);
+}

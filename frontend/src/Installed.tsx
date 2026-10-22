@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import { StatusNote } from "./Problem";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import Problem, { StatusNote } from "./Problem";
 import { api, appVersion, formatBytes, JOB_ACTIVE, needsOnline, session, wakeConsole, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal, type Root } from "./api";
+import { Badge, Bar, Empty, Field, Icon, Meter, Notice, PageHead, Panel, Path, Spinner, Time, utc, type Tone } from "./ui";
 
-const JOB_LABEL: Record<JobStatus, [string, string]> = {
-  queued: ["Waiting", "unknown"], preflight: ["Checking", "unknown"], extracting: ["Extracting", "needs_attention"], transferring: ["Copying", "needs_attention"],
-  registering: ["Finishing", "needs_attention"], success: ["Installed", "ready"], failed: ["Failed", "incompatible"],
-  canceled: ["Canceled", "unknown"], interrupted: ["Interrupted", "incompatible"],
+const JOB_LABEL: Record<JobStatus, [string, Tone]> = {
+  queued: ["Waiting", "info"], preflight: ["Checking", "info"], extracting: ["Extracting", "info"], transferring: ["Copying", "info"],
+  registering: ["Finishing", "info"], success: ["Installed", "success"], failed: ["Failed", "danger"],
+  canceled: ["Canceled", ""], interrupted: ["Interrupted", "danger"],
 };
 
 /** Installs on this console: polls every 2 s while one is running. `onDone` re-reads the inventory. */
-export function Jobs({ consoleId, onDone }: { consoleId: string; onDone: () => void }) {
+export function Jobs({ consoleId, name, onDone }: { consoleId: string; name?: string; onDone: () => void }) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const active = jobs.some((j) => JOB_ACTIVE.includes(j.status));
 
@@ -31,31 +32,46 @@ export function Jobs({ consoleId, onDone }: { consoleId: string; onDone: () => v
   const cancel = (j: Job) => api<Job>(`/jobs/${j.id}/cancel`, { method: "POST" }).then((nj) => setJobs((js) => js.map((x) => (x.id === nj.id ? nj : x))), () => {});
 
   return (
-    <section className="card">
-      <h2>Installs</h2>
-      <ul className="jobs">
+    <Panel title={name ? `Installs on ${name}` : "Installs"} desc="They run one after another. Finished ones stay here for a day." flush>
+      <ul className="sp-list">
         {recent.map((j) => {
-          const [label, cls] = JOB_LABEL[j.status];
+          const [label, tone] = JOB_LABEL[j.status];
+          const copying = j.status === "transferring" || (j.status === "extracting" && j.bytes_transferred > 0);
           return (
-            <li key={j.id}>
-              <span className={`badge ${cls}`}>{label}</span>
-              <strong><a href={`#/game/${j.game_id}`}>{j.title}</a></strong>
-              {(j.status === "transferring" || (j.status === "extracting" && j.bytes_transferred > 0)) && (
-                <>
-                  <progress max={1} value={j.progress} />
-                  <span className="muted">
-                    {formatBytes(j.bytes_transferred)} of {formatBytes(j.total_bytes)} · {formatBytes(j.transfer_rate_bps)}/s
-                    {j.eta_seconds != null && ` · ${Math.ceil(j.eta_seconds / 60)} min left`}
-                  </span>
-                </>
+            <li key={j.id} className="sp-listrow">
+              <div className="sp-listrow__lead"><Badge tone={tone}>{label}</Badge></div>
+              <div className="sp-listrow__main">
+                <div className="sp-listrow__title"><a className="sp-link" href={`#/game/${j.game_id}`}>{j.title}</a></div>
+                {copying && <Bar value={j.progress} label={`Copying ${j.title}`} />}
+                <div className="sp-listrow__meta">
+                  {copying && <>
+                    <span className="sp-num">{formatBytes(j.bytes_transferred)} of {formatBytes(j.total_bytes)}</span><span className="sp-sep" />
+                    <span className="sp-num">{formatBytes(j.transfer_rate_bps)}/s</span>
+                    {j.eta_seconds != null && <><span className="sp-sep" /><span className="sp-num">{Math.ceil(j.eta_seconds / 60)} min left</span></>}
+                    {j.message && <span className="sp-sep" />}
+                  </>}
+                  {j.message && <span>{j.message}</span>}
+                </div>
+              </div>
+              {JOB_ACTIVE.includes(j.status) && !session.readOnly && (
+                <div className="sp-listrow__aside"><button type="button" className="sp-btn sp-btn--sm sp-btn--ghost" onClick={() => cancel(j)}>Cancel</button></div>
               )}
-              <span className="muted">{j.message}</span>
-              {JOB_ACTIVE.includes(j.status) && !session.readOnly && <button className="small secondary" onClick={() => cancel(j)}>Cancel</button>}
             </li>
           );
         })}
       </ul>
-    </section>
+    </Panel>
+  );
+}
+
+/** A modal Panel. Closing it (Esc, or the close button) calls `onClose`. */
+function Dialog({ dref, onClose, title, badge, foot, children }: {
+  dref: React.RefObject<HTMLDialogElement | null>; onClose: () => void; title: ReactNode; badge?: ReactNode; foot: ReactNode; children: ReactNode;
+}) {
+  return (
+    <dialog ref={dref} className="sp-dialog" onClose={onClose}>
+      <Panel title={title} badge={badge} foot={foot}>{children}</Panel>
+    </dialog>
   );
 }
 
@@ -82,42 +98,47 @@ export function RemoveDialog({ consoleId, game, onClose }: { consoleId: string; 
     api<Removal>(`/consoles/${consoleId}/uninstall`, { json: { removal_id: p!.id, confirm_title_id: typed } }).then(setP, (e) => setError(e.message));
   }
   const ended = p?.status === "success" || p?.status === "failed";
+  const asking = p?.allowed && p.status === "awaiting_confirmation";
 
   return (
-    <dialog ref={ref} className="card remove" onClose={onClose} aria-labelledby="remove-title">
-      <h2 id="remove-title">Remove {game.title} ({game.title_id})?</h2>
-      {!p ? <p className="muted">{error || "Checking…"}</p> : !p.allowed ? <p>{p.reason}</p> : (
+    <Dialog dref={ref} onClose={onClose} title={`Remove ${game.title}?`} badge={<span className="sp-code">{game.title_id}</span>}
+      foot={<>
+        <button type="button" className="sp-btn sp-btn--ghost" onClick={() => ref.current?.close()}>{ended || !p?.allowed ? "Close" : "Cancel"}</button>
+        {asking && <button type="submit" form="remove-confirm" className="sp-btn sp-btn--danger-solid" disabled={typed.trim().toUpperCase() !== p.title_id}>Remove from console</button>}
+      </>}>
+      {!p ? (error ? <Problem error={error} /> : <p className="sp-muted">Checking…</p>) : !p.allowed ? <Notice tone="warning" title="This can't be removed" text={p.reason} /> : (
         <>{p.orphaned ? <>
           <p>Its home-screen tile points at files that are no longer on the console:</p>
-          <code>{p.source_path}</code>
-          <p>No space is freed. Save data and the copy in your PC library are kept.</p>
+          {p.source_path && <Path path={p.source_path} copy />}
+          <p className="sp-muted">No space is freed. Save data and the copy in your PC library are kept.</p>
         </> : <>
           <p>This deletes the game's ShadowMountPlus files from the console:</p>
-          <code>{p.source_path}</code>
-          <p>Space freed: {p.estimated_bytes_freed ? `about ${formatBytes(p.estimated_bytes_freed)}` : "unknown"}. Save data and the copy in your PC library are kept.</p>
-          <p className="muted">Its home-screen tile is removed too. If that fails, you'll be told to delete it on the PS5.</p>
+          {p.source_path && <Path path={p.source_path} copy />}
+          <dl className="sp-kv">
+            <dt>Space freed</dt><dd className="sp-num">{p.estimated_bytes_freed ? `About ${formatBytes(p.estimated_bytes_freed)}` : <span className="sp-muted">Unknown</span>}</dd>
+            <dt>Kept</dt><dd>Save data and the copy in your PC library</dd>
+          </dl>
+          <p className="sp-muted">Its home-screen tile is removed too. If that fails, you'll be told to delete it on the PS5.</p>
         </>}
-          {p.warnings.map((w) => <p className="muted" key={w}>{w}</p>)}
-          {p.status === "awaiting_confirmation" && (
-            <form onSubmit={confirm}>
-              <label>Type {p.title_id} to confirm
-                <input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoComplete="off" spellCheck={false} />
-              </label>
-              <button className="danger" disabled={typed.trim().toUpperCase() !== p.title_id}>Remove from console</button>
+          {p.warnings.map((w) => <Notice key={w} tone="warning" title={w} />)}
+          {asking && (
+            <form id="remove-confirm" onSubmit={confirm}>
+              <Field label={<>Type <span className="sp-code">{p.title_id}</span> to confirm</>}>
+                <input className="sp-input sp-input--mono" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoComplete="off" spellCheck={false} />
+              </Field>
             </form>
           )}
           {p.status === "removing" && (
-            <div role="status">
-              <progress max={1} value={p.progress} aria-label="Deleting" />
-              <p className="muted">{p.bytes_total ? `${formatBytes(p.bytes_done)} of ${formatBytes(p.bytes_total)} · ` : ""}{p.message}</p>
+            <div className="sp-stack sp-stack--tight" role="status">
+              <Bar value={p.progress} label="Deleting" />
+              <span className="sp-hint sp-num">{p.bytes_total ? `${formatBytes(p.bytes_done)} of ${formatBytes(p.bytes_total)} · ` : ""}{p.message}</span>
             </div>
           )}
-          {ended && <p className={p.status === "failed" ? "error" : p.tile_left ? "callout" : ""} role="status">{p.message}</p>}
+          {ended && <Notice tone={p.status === "failed" ? "danger" : p.tile_left ? "warning" : "success"} title={p.status === "failed" ? "Couldn't remove it" : "Removed"} text={p.message} />}
+          {error && <Problem error={error} />}
         </>
       )}
-      {error && p && <p className="error" role="alert">{error}</p>}
-      <button className="secondary" onClick={() => ref.current?.close()}>{ended || !p?.allowed ? "Close" : "Cancel"}</button>
-    </dialog>
+    </Dialog>
   );
 }
 
@@ -152,74 +173,71 @@ export function MoveDialog({ consoleId, game, drives, onClose }: { consoleId: st
     api<Move>(`/consoles/${consoleId}/move`, { json: { installed_game_id: game.id, ...to } }).then(setM, (e) => setError(e.message));
   }
   const ended = m && m.status !== "moving";
+  const choosing = !m && (others.length > 0 || roots.length > 0);
 
   return (
-    <dialog ref={ref} className="card remove" onClose={onClose} aria-labelledby="move-title">
-      <h2 id="move-title">Move {game.title}</h2>
-      {!m ? (others.length || roots.length ? (
-        <form onSubmit={start}>
-          {root ? <p>Spela copies <code>{game.source_path}</code> into <code>{root.path}</code> on this PC, checks the copy and adds it to
-            your library. Then it deletes the game from the console.</p>
-            : <p>The console copies <code>{game.source_path}</code> to the other drive itself, checks the copy, then deletes the original.
-              {game.size_bytes > 0 && ` It needs about ${formatBytes(game.size_bytes)} free there.`}</p>}
-          <label>Move to
-            <select value={did} onChange={(e) => setDid(e.target.value)}>
+    <Dialog dref={ref} onClose={onClose} title={`Move ${game.title}`}
+      foot={m?.status === "moving"
+        ? <button type="button" className="sp-btn" onClick={() => api(`/moves/${m.id}/cancel`, { method: "POST" })}>Cancel move</button>
+        : <>
+          <button type="button" className="sp-btn sp-btn--ghost" onClick={() => ref.current?.close()}>{ended || !choosing ? "Close" : "Cancel"}</button>
+          {choosing && <button type="submit" form="move-start" className="sp-btn sp-btn--primary" disabled={!did}>Move</button>}
+        </>}>
+      {!m ? (choosing ? (
+        <form id="move-start" className="sp-stack" onSubmit={start}>
+          <p>{root ? <>Spela copies the game into {root.path} on this PC, checks the copy and adds it to your library. Then it deletes the game from the console.</>
+            : <>The console copies the game to the other drive itself, checks the copy, then deletes the original.
+              {game.size_bytes > 0 && ` It needs about ${formatBytes(game.size_bytes)} free there.`}</>}</p>
+          {game.source_path && <Path path={game.source_path} copy />}
+          <Field label="Move to" hint={root ? "Close the game on the PS5 first. Its home-screen tile is removed; save data stays on the console."
+            : "Close the game on the PS5 first. Its home-screen tile is replaced by one from the new drive; save data is kept."}>
+            <select className="sp-select" value={did} onChange={(e) => setDid(e.target.value)}>
               {others.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
               {roots.map((r) => <option key={r.id} value={`root:${r.id}`}>This PC: {r.path}</option>)}
             </select>
-          </label>
-          <p className="muted">{root ? "Close the game on the PS5 first. Its home-screen tile is removed; save data stays on the console."
-            : "Close the game on the PS5 first. Its home-screen tile is replaced by a new one from the new drive; save data is kept."}</p>
-          <button disabled={!did}>Move</button>
+          </Field>
         </form>
       ) : <p>This console has no other drive to move it to.</p>) : (
-        <div role="status">
-          {m.status === "moving" && <>
-            <progress max={1} value={m.progress} aria-label="Copying" />
-            <p className="muted">{m.bytes_total ? `${formatBytes(m.bytes_done)} of ${formatBytes(m.bytes_total)} · ` : ""}{m.message}</p>
-          </>}
-          {ended && <p className={m.status === "failed" ? "error" : m.tile_left ? "callout" : ""}>{m.message}</p>}
+        <div className="sp-stack" role="status">
+          {m.status === "moving" && <div className="sp-stack sp-stack--tight">
+            <Bar value={m.progress} label="Copying" />
+            <span className="sp-hint sp-num">{m.bytes_total ? `${formatBytes(m.bytes_done)} of ${formatBytes(m.bytes_total)} · ` : ""}{m.message}</span>
+          </div>}
+          {ended && <Notice tone={m.status === "failed" ? "danger" : m.tile_left ? "warning" : "success"} title={m.status === "failed" ? "Couldn't move it" : "Moved"} text={m.message} />}
         </div>
       )}
-      {error && <p className="error" role="alert">{error}</p>}
-      {m?.status === "moving"
-        ? <button className="secondary" onClick={() => api(`/moves/${m.id}/cancel`, { method: "POST" })}>Cancel move</button>
-        : <button className="secondary" onClick={() => ref.current?.close()}>{ended ? "Close" : "Cancel"}</button>}
-    </dialog>
+      {error && <Problem error={error} />}
+    </Dialog>
   );
 }
 
-/** The portrait poster from PlayStation Store, else the console's square icon. */
-export function Art({ g }: { g: InstalledGame }) {
+/** The portrait poster from PlayStation Store, else the console's square icon. `children` are the overlays on the art. */
+export function Art({ g, children }: { g: InstalledGame; children?: ReactNode }) {
   const [src, setSrc] = useState<string | null>(g.game_id ? `/api/v1/games/${g.game_id}/poster` : `/api/v1/titles/${g.title_id}/poster`);
-  if (!src) return <div className="art placeholder" aria-hidden>{g.title.slice(0, 1)}</div>;
+  if (!src) return <div className="sp-cover__art"><span className="sp-cover__ph">{g.title}</span>{children}</div>;
   const square = src === g.cover_url;
   return (
-    <div className={square ? "art square" : "art"} style={square ? ({ "--art": `url("${src}")` } as CSSProperties) : undefined}>
+    <div className={square ? "sp-cover__art sp-cover__art--square" : "sp-cover__art"} style={square ? ({ "--art": `url("${src}")` } as CSSProperties) : undefined}>
       <img src={src} alt="" loading="lazy" onError={() => setSrc(square ? null : g.cover_url)} />
+      {children}
     </div>
   );
 }
 
-// Reuses the library badge colours.
-export const STATE_BADGE: Record<ConsoleState, string> = {
-  online: "ready", standby: "needs_attention", degraded: "needs_attention", offline: "incompatible", disabled: "unknown", unknown: "unknown",
+export const STATE_TONE: Record<ConsoleState, Tone> = {
+  online: "success", standby: "warning", degraded: "warning", offline: "danger", disabled: "", unknown: "",
 };
 export const STATE_LABEL: Record<ConsoleState, string> = {
   online: "Online", standby: "Rest mode", degraded: "Degraded", offline: "Offline", disabled: "Disabled", unknown: "Not checked yet",
 };
-const STATUS = {
-  installed: ["Installed", "ready"],
-  update_available: ["Update in library", "needs_attention"],
-  partially_installed: ["Partly installed", "incompatible"],
-  orphaned_icon: ["Icon only", "incompatible"],
-  unknown: ["Unknown", "unknown"],
-} as const;
-
-// SQLite drops the zone from stored UTC times; without a "Z" the browser would read them as local time.
-const utc = (t: string) => new Date(/(Z|[+-]\d\d:\d\d)$/.test(t) ? t : t + "Z");
-export const when = (t: string | null) => (t ? utc(t).toLocaleString() : "Never");
-const bytes = (n: number) => (n ? formatBytes(n) : "Unknown");
+const STATUS: Record<InstalledGame["status"], [string, Tone]> = {
+  installed: ["Installed", "success"],
+  update_available: ["Update in library", "warning"],
+  partially_installed: ["Partly installed", "danger"],
+  orphaned_icon: ["Icon only", "danger"],
+  unknown: ["Unknown", ""],
+};
+const DRIVE_TYPE: Record<Drive["drive_type"], string> = { internal: "Internal", usb: "USB", network: "Network", unknown: "Unknown type" };
 
 export default function Installed() {
   const [consoles, setConsoles] = useState<Console[] | null>(null);
@@ -260,7 +278,7 @@ export default function Installed() {
     return () => clearInterval(t);
   }, [id, games]);
 
-  // one card per title: a game on several drives lists each copy on its detail page
+  // one cover per title: a game on several drives lists each copy on its detail page
   const titles = useMemo(() => {
     const by = new Map<string, InstalledGame[]>();
     for (const g of games) by.set(g.title_id, [...(by.get(g.title_id) ?? []), g]);
@@ -271,14 +289,18 @@ export default function Installed() {
     return titles.filter(([g]) => !needle || g.title.toLowerCase().includes(needle) || g.title_id.toLowerCase().includes(needle));
   }, [titles, q]);
 
-  if (error && !consoles) return <p className="error" role="alert">{error}</p>;
-  if (!consoles) return <p className="muted">Loading…</p>;
+  if (error && !consoles) return <Problem error={error} />;
+  if (!consoles) return <p className="sp-muted">Loading…</p>;
   if (!consoles.length)
     return (
-      <div className="empty card">
-        <h2>No consoles yet</h2>
-        <p>Add your PS5 under <a href="#/settings">Settings → Consoles</a>.</p>
-      </div>
+      <>
+        <PageHead title="Installed" />
+        <div className="sp-panel">
+          <Empty icon="inbox" title="No consoles yet" text="Add your PS5 in Settings to see what's installed on it.">
+            <a className="sp-btn sp-btn--primary" href="#/settings">Add console</a>
+          </Empty>
+        </div>
+      </>
     );
 
   const c = consoles.find((x) => x.id === id) ?? consoles[0];
@@ -337,92 +359,116 @@ export default function Installed() {
       .then((nd) => setDrives((ds) => ds.map((x) => (x.id === nd.id ? { ...nd, installed_count: x.installed_count } : x))), (e) => setError(e.message));
 
   return (
-    <div className="installed">
-      <div className="toolbar">
-        {consoles.length > 1 ? (
-          <select aria-label="Console" value={c.id} onChange={(e) => setId(e.target.value)}>
-            {consoles.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-          </select>
-        ) : <h2 className="inline-title">{c.name}</h2>}
-        <span className={`badge ${STATE_BADGE[c.state]}`}>{STATE_LABEL[c.state]}</span>
-        <StatusNote message={c.status_message} fix={c.status_fix} />
-        {c.state === "standby" && c.has_wake_key && !session.readOnly && <button className="small" disabled={busy} onClick={wake}>{busy ? "Waking…" : "Wake"}</button>}
-        {(helperBad || consoleAppBad) && !session.readOnly && <a href="#/settings">Update needed in Settings</a>}
-        <span className="spacer" />
-        {drives.map((d) => (
-          <details key={d.id} className="drive" name="drive">{/* same name: the browser keeps only one open */}
-            <summary>
-              <strong>{d.label}</strong>
-              {d.total_bytes > 0 && <meter min={0} max={d.total_bytes} value={d.total_bytes - d.free_bytes} />}
-              <span className="muted">{bytes(d.free_bytes)} free</span>
-            </summary>
-            <div className="card">
-              <span className="muted">{d.drive_type} · <code>{d.path}</code></span>
-              {d.total_bytes > 0 && <span>{formatBytes(d.total_bytes - d.free_bytes)} used of {formatBytes(d.total_bytes)}</span>}
-              <span className="muted">{d.installed_count} installed · last seen {when(d.last_seen_at)}</span>
-              <label className="check">
-                <input type="checkbox" disabled={session.readOnly} checked={d.is_install_target} onChange={(e) => setTarget(d, e.target.checked)} /> Allow installs here
-              </label>
-            </div>
-          </details>
-        ))}
-        {!session.readOnly && <button {...needsOnline(c)} disabled={busy || c.state !== "online"} onClick={rescan}>{busy ? "Working…" : "Refresh inventory"}</button>}
-      </div>
-      {leftover > 0 && !session.readOnly && (
-        <p className="muted">
-          {formatBytes(leftover)} on this console is taken by unfinished copies, left by an install, move or removal that stopped partway.{" "}
-          <button className="small secondary" disabled={busy || c.state !== "online"} onClick={cleanUp}>Clean up</button>
-        </p>
+    <>
+      <PageHead title={<>{c.name}<Badge tone={STATE_TONE[c.state]} dot>{STATE_LABEL[c.state]}</Badge></>}
+        desc={c.state !== "online" && c.status_message ? <StatusNote message={c.status_message} fix={c.status_fix} /> : `What's installed on ${c.name}, drive by drive.`}
+        actions={<>
+          {consoles.length > 1 && (
+            <select className="sp-select sp-console-pick" aria-label="Console" value={c.id} onChange={(e) => setId(e.target.value)}>
+              {consoles.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          )}
+          {c.state === "standby" && c.has_wake_key && !session.readOnly && <button type="button" className="sp-btn sp-btn--primary" disabled={busy} onClick={wake}><Icon name="power" />{busy ? "Waking…" : "Wake"}</button>}
+          {!session.readOnly && <button type="button" className="sp-btn" {...needsOnline(c)} disabled={busy || c.state !== "online"} onClick={rescan}>
+            {busy ? <Spinner /> : <Icon name="refresh" />}Refresh inventory</button>}
+        </>} />
+
+      {(helperBad || consoleAppBad) && !session.readOnly && (
+        <Notice tone="warning" title={helperBad ? "The helper is out of date" : "The PS5 app is out of date"}
+          text={`This version of Spela needs v${version}. Some installs won't work until it's updated.`}
+          action={<a className="sp-btn sp-btn--sm" href="#/settings">Open Settings</a>} />
       )}
-      {error && <p className="error" role="alert">{error}</p>}
+      {leftover > 0 && !session.readOnly && (
+        <Notice title={`${formatBytes(leftover)} taken by unfinished copies`} text="Left by an install, move or removal that stopped partway."
+          action={<button type="button" className="sp-btn sp-btn--sm" disabled={busy || c.state !== "online"} onClick={cleanUp}>Clean up</button>} />
+      )}
+      {error && <Problem error={error} />}
+
+      {drives.length > 0 && (
+        <Panel title="Storage" desc="Turn off a drive to keep Spela from installing there." flush>
+          <ul className="sp-list">
+            {drives.map((d) => (
+              <li key={d.id} className="sp-listrow">
+                <div className="sp-listrow__lead">
+                  <label className="sp-switch">
+                    <input type="checkbox" role="switch" disabled={session.readOnly} checked={d.is_install_target} onChange={(e) => setTarget(d, e.target.checked)} />
+                    <span className="sp-switch__track" />
+                    <span className="sp-visually-hidden">Allow installs on {d.label}</span>
+                  </label>
+                </div>
+                <div className="sp-listrow__main">
+                  <div className="sp-listrow__title">{d.label}{!d.is_install_target && <Badge>No installs</Badge>}</div>
+                  <div className="sp-listrow__meta">
+                    <span>{DRIVE_TYPE[d.drive_type]}</span><span className="sp-sep" />
+                    <Path path={d.path} /><span className="sp-sep" />
+                    <span className="sp-num">{d.installed_count} installed</span><span className="sp-sep" />
+                    <span>Seen <Time t={d.last_seen_at} /></span>
+                  </div>
+                </div>
+                <div className="sp-listrow__aside sp-drivemeter">
+                  {d.total_bytes > 0 ? <>
+                    <Meter used={d.total_bytes - d.free_bytes} total={d.total_bytes} label={d.label} />
+                    <span className="sp-meter__value">{formatBytes(d.free_bytes)} free of {formatBytes(d.total_bytes)}</span>
+                  </> : <span className="sp-meter__value">Space unknown</span>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
 
       <Jobs consoleId={c.id} onDone={() => loadInventory(c.id)} />
 
       {games.length > 0 ? (
-        <>
-          <div className="toolbar">
-            <input type="search" placeholder="Search title or title ID" aria-label="Search installed games" value={q} onChange={(e) => setQ(e.target.value)} />
-            <span className="muted">{shown.length} of {titles.length}</span>
+        <div className="sp-stack">
+          <div className="sp-row">
+            <input className="sp-input sp-search sp-grow-field" type="search" placeholder="Search title or title ID" aria-label="Search installed games" value={q} onChange={(e) => setQ(e.target.value)} />
+            <span className="sp-muted sp-num">{shown.length === titles.length ? `${titles.length} games` : `${shown.length} of ${titles.length} games`}</span>
           </div>
-          <ul className="games compact">
+          <div className="sp-covergrid sp-covergrid--small">
             {shown.map((copies) => {
               const g = copies.find((x) => x.removing || x.moving || x.status !== "installed") ?? copies[0];
               const single = copies.length === 1;
-              const [label, cls] = g.removing ? ["Removing", "needs_attention"] : g.moving ? ["Moving", "needs_attention"] : STATUS[g.status];
-              const tip = copies.map((x) => `${x.title_id} · v${x.version ?? "?"} · ${bytes(x.size_bytes)}\n${x.installed_path}`).join("\n");
-              const body = <>
-                <Art g={g} />
-                <div className="name">
-                  <strong>{g.title}</strong>
-                  <span className="genre">{copies.map((x) => (x.drive_id && driveLabel[x.drive_id]) || "Unknown drive").join(" · ")}</span>
-                  {(g.removing || g.moving || g.status !== "installed") && <span className={`badge ${cls}`}>{label}</span>}
-                </div>
-              </>;
+              const [label, tone]: [string, Tone] = g.removing ? ["Removing", "info"] : g.moving ? ["Moving", "info"] : STATUS[g.status];
+              const tip = copies.map((x) => `${x.title_id} · v${x.version ?? "?"} · ${x.size_bytes ? formatBytes(x.size_bytes) : "size unknown"}\n${x.installed_path}`).join("\n");
+              const act = single && g.install_route === "shadowmountplus" && !g.removing && !g.moving && !session.readOnly;
+              const canMove = act && g.status !== "orphaned_icon" && (drives.length > 1 || !g.game_id);
+              const why = c.state !== "online" ? "The console must be online." : undefined;
               return (
-                <li key={g.title_id}>
-                  <a className="game" href={g.game_id ? `#/game/${g.game_id}` : `#/installed/${c.id}/${g.id}`} title={tip}>{body}</a>
-                  {single && g.install_route === "shadowmountplus" && !g.removing && !g.moving && g.status !== "orphaned_icon" && (drives.length > 1 || !g.game_id) && !session.readOnly && (
-                    <button className="fav move" disabled={c.state !== "online"} title={c.state !== "online" ? "The console must be online." : "Move to another drive"}
-                      aria-label={`Move ${g.title} to another drive`} onClick={() => setMoving(g)}>
-                      <svg viewBox="0 0 24 24" aria-hidden><path d="M4 9h13l-4-4M20 15H7l4 4" /></svg>
-                    </button>
+                <div key={g.title_id} className="sp-coveritem">
+                  <a className="sp-cover" href={g.game_id ? `#/game/${g.game_id}` : `#/installed/${c.id}/${g.id}`} title={tip}>
+                    <Art g={g} />
+                    <span className="sp-cover__title">{g.title}</span>
+                    <span className="sp-cover__meta">{copies.map((x) => (x.drive_id && driveLabel[x.drive_id]) || "Unknown drive").join(" · ")}</span>
+                    {label !== "Installed" && <span><Badge tone={tone}>{label}</Badge></span>}
+                  </a>
+                  {act && (
+                    <div className="sp-cover__actions">
+                      {canMove && <button type="button" className="sp-cover__chip" disabled={!!why} title={why ?? "Move to another drive"}
+                        aria-label={`Move ${g.title} to another drive`} onClick={() => setMoving(g)}><Icon name="move" /></button>}
+                      <button type="button" className="sp-cover__chip sp-cover__chip--remove" disabled={!!why} title={why ?? "Remove from console"}
+                        aria-label={`Remove ${g.title} from console`} onClick={() => setRemoving(g)}><Icon name="trash" /></button>
+                    </div>
                   )}
-                  {single && g.install_route === "shadowmountplus" && !g.removing && !g.moving && !session.readOnly && (
-                    <button className="fav" disabled={c.state !== "online"} title={c.state !== "online" ? "The console must be online." : "Remove from console"}
-                      aria-label={`Remove ${g.title} from console`} onClick={() => setRemoving(g)}>
-                      <svg viewBox="0 0 24 24" aria-hidden><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" /></svg>
-                    </button>
-                  )}
-                </li>
+                </div>
               );
             })}
-          </ul>
-        </>
+          </div>
+          {!shown.length && <p className="sp-muted">No installed game matches “{q.trim()}”.</p>}
+        </div>
       ) : (
-        <p className="muted">{c.last_inventory_scan_at ? "No games found on this console." : "Inventory not read yet. Click Refresh inventory."}</p>
+        <div className="sp-panel">
+          {c.last_inventory_scan_at
+            ? <Empty icon="gamepad" title="No games on this console" text="Install one from your library, and it shows up here." >
+              <a className="sp-btn sp-btn--primary" href="#/">Open your library</a>
+            </Empty>
+            : <Empty icon="refresh" title="Inventory not read yet" text="Spela reads what's installed once the console is online and the helper runs.">
+              {!session.readOnly && <button type="button" className="sp-btn sp-btn--primary" {...needsOnline(c)} disabled={busy || c.state !== "online"} onClick={rescan}>Refresh inventory</button>}
+            </Empty>}
+        </div>
       )}
       {moving && <MoveDialog consoleId={c.id} game={moving} drives={drives} onClose={() => { setMoving(null); loadInventory(c.id); }} />}
       {removing && <RemoveDialog consoleId={c.id} game={removing} onClose={() => { setRemoving(null); loadInventory(c.id); }} />}
-    </div>
+    </>
   );
 }

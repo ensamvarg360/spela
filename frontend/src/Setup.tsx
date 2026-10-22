@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, ApiError, type Console, type Root } from "./api";
 import { FindConsole } from "./Consoles";
-import { STATE_BADGE, STATE_LABEL } from "./Installed";
+import { STATE_LABEL, STATE_TONE } from "./Installed";
 import { useScan } from "./Library";
 import Problem from "./Problem";
 import { Folders, NothingFound } from "./Settings";
+import { Badge, Bar, Collapsible, Field, Icon, Notice, PageHead, Panel, Spinner } from "./ui";
 
 /** GET /setup: each step worked out from what's already set up (backend/app/main.py, setup_status). */
 export interface SetupState {
@@ -41,11 +42,7 @@ export function useSetup() {
 const dismiss = (dismissed: boolean) => api("/setup", { json: { dismissed } });
 
 function Check({ done }: { done: boolean }) {
-  return (
-    <span className={`step-check${done ? " done" : ""}`} aria-hidden>
-      {done && <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
-    </span>
-  );
+  return <span className={done ? "sp-stepcheck sp-stepcheck--done" : "sp-stepcheck"} aria-hidden>{done && <Icon name="check" />}</span>;
 }
 
 /** The Dashboard's reminder until the required steps are done or it's hidden. */
@@ -55,18 +52,16 @@ export function SetupCard() {
   const done = STEPS.filter(([k]) => state[k]).length;
   if (done === STEPS.length) return null;
   return (
-    <section className="card setup-card">
-      <div className="toolbar">
-        <h2 className="inline-title">Finish setting up Spela</h2>
-        <span className="muted">{done} of {STEPS.length} done</span>
-        <span className="spacer" />
-        <button className="link" onClick={() => dismiss(true).then(load)}>Hide</button>
-      </div>
-      <ol className="setup-mini">
-        {STEPS.map(([k, label]) => <li key={k} className={state[k] ? "done" : ""}><Check done={state[k]} />{label}</li>)}
+    <Panel title="Finish setting up Spela" badge={<Badge>{done} of {STEPS.length} done</Badge>}
+      actions={<button type="button" className="sp-btn sp-btn--ghost" onClick={() => dismiss(true).then(load)}>Hide</button>}
+      foot={<>
+        <span className="sp-panel__note">Spela remembers where you got to.</span>
+        <a className="sp-btn sp-btn--primary" href="#/setup">Continue setup</a>
+      </>}>
+      <ol className="sp-steps">
+        {STEPS.map(([k, label]) => <li key={k} className={state[k] ? "sp-muted" : ""}><Check done={state[k]} />{label}</li>)}
       </ol>
-      <a className="button" href="#/setup">Continue setup</a>
-    </section>
+    </Panel>
   );
 }
 
@@ -90,18 +85,18 @@ function AddConsole({ onAdded }: { onAdded: () => void }) {
   }
 
   return (
-    <div className="add-console">
+    <div className="sp-addconsole">
       <FindConsole onAdded={onAdded} />
-      <form className="setup-form add-option" onSubmit={add}>
+      <form onSubmit={add}>
         <h3>I know its IP address</h3>
-        <div className="fields">
-          <label>Name<input required maxLength={100} placeholder="Living Room PS5" value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label>IP address<input required inputMode="decimal" placeholder="192.168.1.50" value={ip} onChange={(e) => setIp(e.target.value)} /></label>
+        <div className="sp-formgrid">
+          <Field label="Name"><input className="sp-input" required maxLength={100} placeholder="Living Room PS5" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+          <Field label="IP address"><input className="sp-input sp-input--mono" required inputMode="decimal" placeholder="192.168.1.50" value={ip} onChange={(e) => setIp(e.target.value)} /></Field>
         </div>
-        <p className="muted">On the PS5: <em>Settings → Network → Connection Status → View Connection Status</em>, under <em>IPv4 address</em>.
+        <p className="sp-hint">On the PS5: Settings → Network → Connection Status → View Connection Status, under IPv4 address.
           It can change when the router restarts; most routers let you reserve one for the PS5.</p>
-        <div className="actions"><button type="submit">Add console</button></div>
         <Problem error={error} />
+        <div className="sp-btngroup"><button type="submit" className="sp-btn sp-btn--primary">Add console</button></div>
       </form>
     </div>
   );
@@ -129,24 +124,27 @@ function HelperStep({ consoles, reload }: { consoles: Console[]; reload: () => v
     <>
       <p>The helper is a small program Spela sends to the PS5. It reads the drives and copies games, and stops whenever
         the PS5 restarts. Run your jailbreak's ELF loader and Spela sends it by itself; you don't need to click anything.</p>
-      <ul className="setup-consoles">
+      <ul className="sp-list sp-boxed">
         {consoles.map((c) => (
           <li key={c.id}>
-            <div className="toolbar">
-              <strong>{c.name}</strong>
-              <span className={`badge ${STATE_BADGE[c.state]}`}>{STATE_LABEL[c.state]}</span>
-              <span className="muted">{c.state === "online" ? "The helper is running." : c.status_message || "Checking…"}</span>
-              <span className="spacer" />
-              {c.state !== "online" && <>
-                <button className="small secondary" disabled={!!busy} onClick={() => act(c, "test-connection")}>{busy === c.id ? "Checking…" : "Check now"}</button>
-                <button className="small" disabled={!!busy || c.state === "standby"} onClick={() => act(c, "helper")}>Send helper now</button>
-              </>}
+            <div className="sp-listrow">
+              <div className="sp-listrow__main">
+                <div className="sp-listrow__title">{c.name}<Badge tone={STATE_TONE[c.state]} dot>{STATE_LABEL[c.state]}</Badge></div>
+                <div className="sp-listrow__meta">{c.state === "online" ? "The helper is running." : c.status_message || "Checking…"}</div>
+              </div>
+              {c.state !== "online" && (
+                <div className="sp-listrow__aside">
+                  <button type="button" className="sp-btn sp-btn--sm sp-btn--ghost" disabled={!!busy} onClick={() => act(c, "test-connection")}>{busy === c.id ? "Checking…" : "Check now"}</button>
+                  <button type="button" className="sp-btn sp-btn--sm" disabled={!!busy || c.state === "standby"} title={c.state === "standby" ? "Wake the console first." : undefined}
+                    onClick={() => act(c, "helper")}>Send helper now</button>
+                </div>
+              )}
             </div>
-            {c.state !== "online" && c.status_fix && <p className="callout">{c.status_fix}</p>}
+            {c.state !== "online" && c.status_fix && <div className="sp-listrow__more"><Notice tone="warning" title="What to do" text={c.status_fix} /></div>}
           </li>
         ))}
       </ul>
-      <p className="muted">Spela checks every 15 seconds; this page updates by itself.</p>
+      <p className="sp-hint">Spela checks every 15 seconds; this page updates by itself.</p>
       <Problem error={error?.e} retry={error?.retry} />
     </>
   );
@@ -154,16 +152,16 @@ function HelperStep({ consoles, reload }: { consoles: Console[]; reload: () => v
 
 const NEEDS = [
   <>A PS5 that runs homebrew, with an <strong>ELF loader</strong> on port 9021 (most jailbreaks start one).</>,
-  <><a href="https://github.com/drakmor/ShadowMountPlus" target="_blank" rel="noreferrer">ShadowMountPlus</a> on the PS5. It's what puts installed games on the home screen.</>,
+  <><a className="sp-link" href="https://github.com/drakmor/ShadowMountPlus" target="_blank" rel="noreferrer">ShadowMountPlus</a> on the PS5. It's what puts installed games on the home screen.</>,
   <>This PC and the PS5 on the <strong>same home network</strong>.</>,
   <>Your <strong>own backups</strong> of games you own, in a folder or on a drive of this PC. Spela never downloads games.</>,
 ];
 
 const OPTIONAL: [keyof SetupState, string, ReactNode][] = [
-  ["console_app", "PS5 app", <>Browse and install from the couch with the controller: <em>Install PS5 app</em> in <a href="#/settings">Settings → Consoles</a>.</>],
-  ["wake", "Wake from rest mode", <>Save the PS5's Remote Play key under <a href="#/settings">Settings → Consoles → Edit</a> to wake it from here.</>],
-  ["dlc_folder", "DLC folder", <>If you keep DLC in its own folder, add it in <a href="#/settings">Settings</a>. DLC inside game folders is found anyway.</>],
-  ["viewer", "View-only password", <>Let a phone or a guest browse without being able to change anything. In <a href="#/settings">Settings</a>.</>],
+  ["console_app", "PS5 app", <>Browse and install from the couch with the controller: Install PS5 app in <a className="sp-link" href="#/settings">Settings → Consoles</a>.</>],
+  ["wake", "Wake from rest mode", <>Save the PS5's Remote Play key under <a className="sp-link" href="#/settings">Settings → Consoles → Edit</a> to wake it from here.</>],
+  ["dlc_folder", "DLC folder", <>If you keep DLC in its own folder, add it in <a className="sp-link" href="#/settings">Settings</a>. DLC inside game folders is found anyway.</>],
+  ["viewer", "View-only password", <>Let a phone or a guest browse without being able to change anything. In <a className="sp-link" href="#/settings">Settings</a>.</>],
 ];
 
 /** The Get started page (#/setup): the required steps in order, each opening when it's next, then the optional ones. */
@@ -183,7 +181,7 @@ export default function Setup() {
     return () => clearInterval(t);
   }, []);
 
-  if (!state) return <p className="muted">Loading…</p>;
+  if (!state) return <p className="sp-muted">Loading…</p>;
   const current = STEPS.findIndex(([k]) => !state[k]);
   const done = STEPS.filter(([k]) => state[k]).length;
   const startScan = () => (setScanError(""), api("/library/scan", { method: "POST" })
@@ -192,14 +190,16 @@ export default function Setup() {
 
   const body: Record<(typeof STEPS)[number][0], ReactNode> = {
     folder: <>
-      <p>Pick the folder that holds your PS5 backups, or a whole drive like <code>G:\</code>. Spela only ever reads it, subfolders included.</p>
-      <Folders kind="game" roots={roots} act={(p) => p.then(() => (loadRoots(), loadState()))} />
+      <p>Pick the folder that holds your PS5 backups, or a whole drive like <code className="sp-code">G:\</code>. Spela only ever reads it, subfolders included.</p>
+      <div className="sp-boxed"><Folders kind="game" roots={roots} act={(p) => p.then(() => (loadRoots(), loadState()))} /></div>
     </>,
     scan: <>
       <p>Spela looks through the folder for game folders, disc images, packages and archives, and gets their art from PlayStation Store.</p>
-      <div className="toolbar">
-        <button onClick={startScan} disabled={scan?.running || !state.folder}>{scan?.running ? <><span className="spinner" aria-hidden />Scanning…</> : "Scan now"}</button>
-        <span className="muted" role="status">{!state.folder ? "Add a folder first."
+      <div className="sp-row">
+        <button type="button" className="sp-btn sp-btn--primary" onClick={startScan} disabled={scan?.running || !state.folder}>
+          {scan?.running ? <><Spinner />Scanning…</> : <><Icon name="refresh" />Scan now</>}
+        </button>
+        <span className="sp-hint" role="status">{!state.folder ? "Add a folder first."
           : scan?.running ? "A large drive can take a few minutes. You can carry on with the next steps meanwhile."
           : finished && scan?.report ? `Done: ${scan.report.added.length} added.` : null}</span>
       </div>
@@ -207,56 +207,48 @@ export default function Setup() {
       <Problem error={scanError} />
     </>,
     console: consoles.length
-      ? <p>Added: {consoles.map((c) => `${c.name} (${c.ip_address})`).join(", ")}. More in <a href="#/settings">Settings → Consoles</a>.</p>
+      ? <p>Added: {consoles.map((c) => `${c.name} (${c.ip_address})`).join(", ")}. More in <a className="sp-link" href="#/settings">Settings → Consoles</a>.</p>
       : <AddConsole onAdded={reload} />,
-    helper: consoles.length ? <HelperStep consoles={consoles} reload={reload} /> : <p className="muted">Add your PS5 first.</p>,
+    helper: consoles.length ? <HelperStep consoles={consoles} reload={reload} /> : <p className="sp-muted">Add your PS5 first.</p>,
   };
 
   return (
-    <div className="setup">
-      <header className="setup-head">
-        <h1>Get started</h1>
-        <p className="muted">{done === STEPS.length ? "You're all set. Open a game in your library and click Install." : `${done} of ${STEPS.length} done. Spela remembers where you got to.`}</p>
-        <meter min={0} max={STEPS.length} value={done} aria-label="Setup progress" />
-      </header>
+    <>
+      <PageHead title="Get started"
+        desc={done === STEPS.length ? "You're all set. Open a game in your library and click Install." : `${done} of ${STEPS.length} done. Spela remembers where you got to.`}
+        actions={done === STEPS.length && <a className="sp-btn sp-btn--primary sp-btn--lg" href="#/">Open your library</a>} />
+      <Bar value={done / STEPS.length} label="Setup progress" />
 
-      <details className="card" open={done === 0}>
-        <summary><h2 className="inline-title">Before you start</h2></summary>
-        <ul className="needs">{NEEDS.map((n, i) => <li key={i}>{n}</li>)}</ul>
-      </details>
+      <Collapsible title="Before you start" meta="What you need" open={done === 0}>
+        <ul className="sp-bullets">{NEEDS.map((n, i) => <li key={i}>{n}</li>)}</ul>
+      </Collapsible>
 
-      <ol className="setup-steps">
+      <div className="sp-stack">
         {STEPS.map(([k, label], i) => (
-          <li key={k} className={`card${state[k] ? " done" : ""}${i === current ? " current" : ""}`}>
-            {/* keyed on the current step, so the next one opens by itself when one is done */}
-            <details key={current} open={i === current}>
-              <summary>
-                <Check done={state[k]} />
-                <span className="step-title">{i + 1}. {label}</span>
-                {state[k] && <span className="muted">Done</span>}
-              </summary>
-              <div className="step-body">{body[k]}</div>
-            </details>
-          </li>
+          // keyed on the current step, so the next one opens by itself when one is done
+          <Collapsible key={`${k}-${current}`} open={i === current} meta={state[k] ? "Done" : undefined}
+            title={<><Check done={state[k]} />{i + 1}. {label}</>}>
+            {body[k]}
+          </Collapsible>
         ))}
-      </ol>
+      </div>
 
-      <section className="card">
-        <h2>Optional</h2>
-        <ul className="optional">
+      <Panel title="Optional" desc="Worth doing once the steps above are done." flush>
+        <ul className="sp-list">
           {OPTIONAL.map(([k, label, text]) => (
-            <li key={k}><Check done={!!state[k]} /><div><strong>{label}</strong><p className="muted">{text}</p></div></li>
+            <li key={k} className="sp-listrow">
+              <div className="sp-listrow__lead"><Check done={!!state[k]} /></div>
+              <div className="sp-listrow__main"><div className="sp-listrow__title">{label}</div><div className="sp-listrow__meta"><span>{text}</span></div></div>
+            </li>
           ))}
         </ul>
-      </section>
+      </Panel>
 
-      <div className="toolbar">
-        {done === STEPS.length && <a className="button" href="#/">Open your library</a>}
-        <span className="spacer" />
+      <div className="sp-row">
         {state.dismissed
-          ? <span className="muted">Hidden from the Dashboard. It stays here, under Settings.</span>
-          : <button className="link" onClick={() => dismiss(true).then(() => (location.hash = "#/dashboard"))}>Hide this guide</button>}
+          ? <span className="sp-hint sp-push">Hidden from the Dashboard. It stays here, under Settings.</span>
+          : <button type="button" className="sp-btn sp-btn--ghost sp-push" onClick={() => dismiss(true).then(() => (location.hash = "#/dashboard"))}>Hide this guide</button>}
       </div>
-    </div>
+    </>
   );
 }

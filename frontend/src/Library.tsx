@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, appVersion, coverUrl, formatLabel, groupCopies, needsOnline, session, STATUS_LABEL, useConsoles, type Console, type Game, type Kind, type ScanStatus, type StoreInfo } from "./api";
 import { cart, confirmBatch, queueAll } from "./Cart";
-import { STATE_LABEL } from "./Installed";
+import { STATE_LABEL, STATE_TONE } from "./Installed";
+import Problem from "./Problem";
+import { toastError } from "./Toast";
+import { Empty, Icon, Notice, PageHead, type IconName, type Tone } from "./ui";
 
 export type Sort = "title" | "recent" | "rating" | "released" | "size";
 /** What the library shows: the header's search, the sidebar's ticked values per filter, and the order. */
@@ -56,9 +59,7 @@ export function useScan(onDone?: (s: ScanStatus) => void) {
   return [scan, setScan] as const;
 }
 
-const LIGHT = { online: "ok", standby: "warn", degraded: "warn", offline: "bad" } as Record<string, string>;
-
-/** Status lights for the first enabled PS5 and its helper payload, refreshed every 15 s. */
+/** Status dots for the first enabled PS5 and its helper payload, refreshed every 15 s. */
 function Connection() {
   const [c, setC] = useState<Console | null | undefined>();
   const [version, setVersion] = useState("");
@@ -69,19 +70,20 @@ function Connection() {
     const t = setInterval(load, 15000);
     return () => clearInterval(t);
   }, []);
-  if (c === null) return <p className="connection muted"><a href="#/settings">Add a PS5</a> to connect</p>;
+  if (c === null) return <div className="sp-facets__foot"><span><a className="sp-link" href="#/settings">Add a PS5</a> to connect</span></div>;
   if (!c) return null;
   const online = c.state === "online";
   const helper = c.helper_status.helper; // "missing", a version, or absent before the first check
-  const [light, label] = !online ? ["off", "Unknown"]
-    : !helper || helper === "missing" ? ["bad", "Not running"]
-    : version && helper !== version ? ["warn", `v${helper}, needs v${version}`]
-    : ["ok", `v${helper}`];
+  const [tone, label]: [Tone, string] = !online ? ["", "Unknown"]
+    : !helper || helper === "missing" ? ["danger", "Not running"]
+    : version && helper !== version ? ["warning", `v${helper}, needs v${version}`]
+    : ["success", `v${helper}`];
+  const dot = (t: Tone) => (t ? `sp-dot sp-dot--${t}` : "sp-dot");
   return (
-    <ul className="connection" aria-label="Connection">
-      <li title={c.status_message}><i className={`light ${LIGHT[c.state] ?? "off"}`} />{c.name}<span className="muted">{STATE_LABEL[c.state]}</span></li>
-      <li><i className={`light ${light}`} />Helper<span className="muted">{label}</span></li>
-    </ul>
+    <div className="sp-facets__foot" aria-label="Connection">
+      <div className="sp-facets__status" title={c.status_message}><span className={dot(STATE_TONE[c.state])} />{c.name}<span>{STATE_LABEL[c.state]}</span></div>
+      <div className="sp-facets__status"><span className={dot(tone)} />Helper<span className="sp-num">{label}</span></div>
+    </div>
   );
 }
 
@@ -107,48 +109,43 @@ function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Se
   };
 
   return (
-    <div className="pick-bar card" role="region" aria-label="Selection">
-      <strong>{picked.size} selected</strong>
-      <button className="link" onClick={() => setPicked(new Set(shown.map((g) => g.id)))}>Select all {shown.length}</button>
-      {picked.size > 0 && <button className="link" onClick={() => setPicked(new Set())}>Clear</button>}
-      <span className="spacer" />
-      {!consoles.length ? <a href="#/settings">Add a PS5 to install</a> : <>
-        {consoles.length > 1 && (
-          <select aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
-            {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        )}
-        <button className="secondary" disabled={busy || !games.length} onClick={addToCart}>Add to cart</button>
-        <button {...needsOnline(target)} disabled={busy || !games.length || !!needsOnline(target).disabled} onClick={install}>
-          {busy ? "Queuing…" : `${kind === "dlc" ? "Add" : "Install"} ${games.length || ""}`.trim()}
-        </button>
-      </>}
-      <button className="secondary" onClick={() => setPicked(null)}>Done</button>
-      {result && (
-        <div className="pick-result" role="status">
-          {!!result.carted && <p className="muted">Added {result.carted} to the <a href="#/cart">cart</a>.</p>}
-          {result.queued > 0 && <p className="muted">Queued {result.queued}. They install one at a time; follow them on the <a href="#/installed">Installed</a> page.</p>}
-          {result.failed.length > 0 && <>
-            <p className="error">Couldn't queue {result.failed.length}:</p>
-            <ul>{result.failed.map(([t, why]) => <li key={t}><strong>{t}</strong>: {why}</li>)}</ul>
+    <div className="sp-panel sp-pickbar" role="region" aria-label="Selection">
+      <div className="sp-row">
+        <strong className="sp-num">{picked.size} selected</strong>
+        <button type="button" className="sp-btn sp-btn--ghost sp-btn--sm" onClick={() => setPicked(new Set(shown.map((g) => g.id)))}>Select all {shown.length}</button>
+        {picked.size > 0 && <button type="button" className="sp-btn sp-btn--ghost sp-btn--sm" onClick={() => setPicked(new Set())}>Clear</button>}
+        <div className="sp-btngroup sp-push">
+          <button type="button" className="sp-btn sp-btn--ghost" onClick={() => setPicked(null)}>Done</button>
+          {!consoles.length ? <a className="sp-btn" href="#/settings">Add a PS5 to install</a> : <>
+            {consoles.length > 1 && (
+              <select className="sp-select sp-console-pick" aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
+                {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            )}
+            <button type="button" className="sp-btn" disabled={busy || !games.length} onClick={addToCart}>Add to cart</button>
+            <button type="button" className="sp-btn sp-btn--primary" {...needsOnline(target)} disabled={busy || !games.length || !!needsOnline(target).disabled} onClick={install}>
+              {busy ? "Queuing…" : `${kind === "dlc" ? "Add" : "Install"} ${games.length || ""}`.trim()}
+            </button>
           </>}
         </div>
-      )}
+      </div>
+      {result && <>
+        {!!result.carted && <Notice tone="success" title={`Added ${result.carted} to the cart`} action={<a className="sp-btn sp-btn--sm" href="#/cart">Open cart</a>} />}
+        {result.queued > 0 && <Notice tone="success" title={`Queued ${result.queued}`}
+          text={<>They install one at a time; follow them on the <a className="sp-link" href="#/installed">Installed</a> page.</>} />}
+        {result.failed.length > 0 && <Notice tone="danger" title={`Couldn't queue ${result.failed.length}`}
+          text={<ul className="sp-bullets">{result.failed.map(([t, why]) => <li key={t}><strong>{t}</strong>: {why}</li>)}</ul>} />}
+      </>}
     </div>
   );
 }
 
-// card width in px from the size slider; below TILE_TEXT the text is too small to read, so only posters show
-const TILE_MIN = 80, TILE_MAX = 190, TILE_TEXT = 140;
-// the grid's column gap in px, as .games and .games.posters set it in styles.css
-const gapFor = (px: number) => (px < TILE_TEXT ? 12 : 20);
-/** How many cards of at least `px` fit in a row `width` wide; cards then stretch to fill it. */
-const colsFor = (width: number, px: number) => Math.max(1, Math.floor((width + gapFor(px)) / (px + gapFor(px))));
-/** The width cards get with `n` to a row, so each size step adds or removes one card per row. */
-const tileFor = (width: number, n: number) => {
-  const px = Math.floor((width + 20) / n - 20);
-  return px < TILE_TEXT ? Math.min(TILE_TEXT - 1, Math.floor((width + 12) / n - 12)) : px;
-};
+// cover width in px from the size slider; GAP is .sp-covergrid's gap (--space-4)
+const TILE_MIN = 100, TILE_MAX = 200, GAP = 16;
+/** How many covers of at least `px` fit in a row `width` wide; covers then stretch to fill it. */
+const colsFor = (width: number, px: number) => Math.max(1, Math.floor((width + GAP) / (px + GAP)));
+/** The width covers get with `n` to a row, so each size step adds or removes one cover per row. */
+const tileFor = (width: number, n: number) => Math.floor((width + GAP) / n - GAP);
 
 /** The grid of games, or of DLC: DLC shares its game's title ID, so its tiles show the game's art. */
 export default function Library({ kind, view, setView }: { kind: Kind; view: View; setView: (v: View) => void }) {
@@ -158,7 +155,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
   const [filtersOpen, setFiltersOpen] = useState(false); // phones only: the sidebar sits behind a button
   const [picked, setPicked] = useState<Set<string> | null>(null); // null = not selecting; tiles open their game
   const [tile, setTile] = useState(() => { try { return Number(localStorage.getItem("tileSize")) || TILE_MAX; } catch { return TILE_MAX; } });
-  const [grid, setGrid] = useState<HTMLUListElement | null>(null);
+  const [grid, setGrid] = useState<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0); // the grid's, which decides how many cards fit a row
   useEffect(() => {
     if (!grid) return;
@@ -199,197 +196,175 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
 
   const shown = useMemo(() => searched.filter((g) => matches(g, view.picked)).sort(COMPARE[view.sort]), [searched, view.picked, view.sort]);
 
-  if (error) return <p className="error" role="alert">{error}</p>;
-  if (!games) return <p className="muted">Loading…</p>;
+  const noun = kind === "dlc" ? "DLC" : "games";
+  if (error) return <Problem error={error} />;
+  if (!games) return <p className="sp-muted">Loading…</p>;
   const scanning = scan?.running && (
-    <p className="scan-banner" role="status"><span className="spinner" aria-hidden />Scanning your folders. New {kind === "dlc" ? "DLC" : "games"} show up here when it's done.</p>
+    <Notice tone="info" title="Scanning your folders" text={`New ${noun} show up here when it's done.`} />
+  );
+  const head = (desc?: string) => (
+    <PageHead title={kind === "dlc" ? "DLC" : "Library"} desc={desc}
+      actions={!picked && !session.readOnly && games.length > 0 && <button type="button" className="sp-btn" onClick={() => setPicked(new Set())}>Select</button>} />
   );
   if (!games.length)
-    return scanning || (kind === "dlc" ? (
-      <div className="empty card">
-        <h2>No DLC yet</h2>
-        <p>Add your DLC folder in <a href="#/settings">Settings</a>, then run a scan. DLC packages and DLC unlocker folders
-          (with a <code>dlc_emu.ini</code>) are found in game folders too.</p>
-      </div>
-    ) : (
-      <div className="empty card">
-        <h2>Your library is empty</h2>
-        <p>{session.readOnly ? "Nothing has been added yet." : <>The <a href="#/setup">setup guide</a> takes you through adding your
-          games folder and your PS5, step by step. Or add a folder yourself in <a href="#/settings">Settings</a>.</>}</p>
-      </div>
-    ));
+    return <>
+      {head()}
+      {scanning || <div className="sp-panel">{kind === "dlc" ? (
+        <Empty icon="folder" title="No DLC yet" text="Add your DLC folder in Settings, then scan. DLC packages and unlocker folders (with a dlc_emu.ini) are found in game folders too.">
+          {!session.readOnly && <a className="sp-btn sp-btn--primary" href="#/settings">Open Settings</a>}
+        </Empty>
+      ) : (
+        <Empty icon="gamepad" title="Your library is empty" text={session.readOnly ? "Nothing has been added yet."
+          : "The setup guide takes you through adding your games folder and your PS5, step by step."}>
+          {!session.readOnly && <><a className="sp-btn" href="#/settings">Open Settings</a><a className="sp-btn sp-btn--primary" href="#/setup">Open the setup guide</a></>}
+        </Empty>
+      )}</div>}
+    </>;
 
   const toggle = (key: string, v: string) => {
     const now = view.picked[key] ?? [];
     setView({ ...view, picked: { ...view.picked, [key]: now.includes(v) ? now.filter((x) => x !== v) : [...now, v] } });
   };
+  const ticked = Object.values(view.picked).reduce((n, vs) => n + vs.length, 0);
+  const clearFilters = () => setView({ ...view, picked: {} });
   const clear = () => setView({ ...view, q: "", picked: {} });
-  const chips = Object.entries(view.picked).flatMap(([key, vs]) => vs.map((v) => [key, v]));
-  const q = view.q.trim();
-  const noun = kind === "dlc" ? "DLC" : "games";
 
   return (
-    <div className="browse">
-      <button className="secondary filters-toggle" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}>
-        Filters{chips.length > 0 && <span>{chips.length}</span>}
-      </button>
-      <aside className={filtersOpen ? "filters open" : "filters"} aria-label="Filters">
-        {facets.filter((f) => f.values.length > 1 || view.picked[f.key]?.length).map((f) => (
-          <details key={f.key} open>
-            <summary>{f.label}</summary>
-            <ul>
-              {(expanded[f.key] ? f.values : f.values.slice(0, 8)).map(([v, n]) => (
-                <li key={v}>
-                  <label className="facet">
-                    <input type="checkbox" checked={!!view.picked[f.key]?.includes(v)} onChange={() => toggle(f.key, v)} />
-                    <span>{v}</span>
-                    <span className="count">{n}</span>
-                  </label>
-                </li>
+    <>
+      {head(shown.length === games.length ? `${games.length} ${noun}` : `${shown.length} of ${games.length} ${noun}`)}
+      {scanning}
+      <div className="sp-browse">
+        <button type="button" className="sp-btn sp-filters-toggle" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}>
+          <Icon name="filter" />Filters{ticked > 0 && <span className="sp-badge sp-num">{ticked}</span>}
+        </button>
+        <aside className={filtersOpen ? "sp-facets sp-facets--open" : "sp-facets"} aria-label="Filters">
+          {ticked > 0 && <div><button type="button" className="sp-btn sp-btn--ghost sp-btn--sm" onClick={clearFilters}><Icon name="x" />Clear filters</button></div>}
+          {facets.filter((f) => f.values.length > 1 || view.picked[f.key]?.length).map((f) => (
+            <fieldset key={f.key} className="sp-facet">
+              <legend className="sp-facet__title">{f.label}</legend>
+              {(expanded[f.key] || f.values.length <= 8 ? f.values : f.values.slice(0, 5)).map(([v, n]) => (
+                <label key={v} className="sp-check">
+                  <input type="checkbox" checked={!!view.picked[f.key]?.includes(v)} onChange={() => toggle(f.key, v)} />
+                  <span className="sp-check__label">{v}</span>
+                  <span className="sp-check__count">{n}</span>
+                </label>
               ))}
-            </ul>
-            {f.values.length > 8 && (
-              <button className="link more" onClick={() => setExpanded({ ...expanded, [f.key]: !expanded[f.key] })}>
-                {expanded[f.key] ? "Show fewer" : `Show all ${f.values.length}`}
+              {f.values.length > 8 && (
+                <div><button type="button" className="sp-btn sp-btn--ghost sp-btn--sm" onClick={() => setExpanded({ ...expanded, [f.key]: !expanded[f.key] })}>
+                  {expanded[f.key] ? "Show fewer" : `Show all ${f.values.length}`}
+                </button></div>
+              )}
+            </fieldset>
+          ))}
+          <Connection />
+        </aside>
+        <div className="sp-browse__main">
+          <div className="sp-row">
+            <input className="sp-input sp-search sp-grow-field" type="search" placeholder={`Search your ${kind === "dlc" ? "DLC" : "library"}`} aria-label="Search title or title ID"
+              value={view.q} onChange={(e) => setView({ ...view, q: e.target.value })} />
+            <label className="sp-sort">
+              <span className="sp-label">Sort by</span>
+              <select className="sp-select sp-console-pick" value={view.sort} onChange={(e) => setView({ ...view, sort: e.target.value as Sort })}>
+                <option value="title">Title</option>
+                <option value="recent">Recently added</option>
+                <option value="rating">Rating</option>
+                <option value="released">Release date</option>
+                <option value="size">Size</option>
+              </select>
+            </label>
+            <span className="sp-tilesize">
+              <button type="button" className="sp-btn sp-btn--ghost sp-btn--icon sp-btn--sm" aria-label="Smaller covers" title="Smaller covers" onClick={() => resize(tileFor(width, cols + 1))}>
+                <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h4v4H1zM6 1h4v4H6zM11 1h4v4h-4zM1 6h4v4H1zM6 6h4v4H6zM11 6h4v4h-4zM1 11h4v4H1zM6 11h4v4H6zM11 11h4v4h-4z" /></svg>
               </button>
-            )}
-          </details>
-        ))}
-        <Connection />
-      </aside>
-      <section className="results">
-        {scanning}
-        <div className="results-bar">
-          <ul className="chips">
-            {q && <li><button className="chip" onClick={() => setView({ ...view, q: "" })} aria-label={`Clear search ${q}`}>“{q}” <span aria-hidden>×</span></button></li>}
-            {chips.map(([key, v]) => (
-              <li key={key + v}><button className="chip" onClick={() => toggle(key, v)} aria-label={`Remove filter ${v}`}>{v} <span aria-hidden>×</span></button></li>
-            ))}
-            {(chips.length > 0 || q) && <li><button className="link" onClick={clear}>Clear all</button></li>}
-          </ul>
-          <span className="muted">{shown.length === games.length ? `${games.length} ${noun}` : `${shown.length} of ${games.length} ${noun}`}</span>
-          <input className="search" type="search" placeholder={`Search your ${kind === "dlc" ? "DLC" : "library"}`} aria-label="Search title or title ID"
-            value={view.q} onChange={(e) => setView({ ...view, q: e.target.value })} />
-          {!picked && !session.readOnly && <button className="secondary small" onClick={() => setPicked(new Set())}>Select</button>}
-          <label className="sort">
-            Sort by
-            <select value={view.sort} onChange={(e) => setView({ ...view, sort: e.target.value as Sort })}>
-              <option value="title">Title</option>
-              <option value="recent">Recently added</option>
-              <option value="rating">Rating</option>
-              <option value="released">Release date</option>
-              <option value="size">Size</option>
-            </select>
-          </label>
-          <span className="tile-size">
-            <button type="button" aria-label="Smaller cards" onClick={() => resize(tileFor(width, cols + 1))}>
-              <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h4v4H1zM6 1h4v4H6zM11 1h4v4h-4zM1 6h4v4H1zM6 6h4v4H6zM11 6h4v4h-4zM1 11h4v4H1zM6 11h4v4H6zM11 11h4v4h-4z" /></svg>
-            </button>
-            {/* negative so dragging right means fewer, bigger cards */}
-            <input type="range" min={-colsFor(width, TILE_MIN)} max={-colsFor(width, TILE_MAX)} value={-cols} aria-label="Card size"
-              aria-valuetext={`${cols} per row`} onChange={(e) => resize(tileFor(width, -Number(e.target.value)))} />
-            <button type="button" aria-label="Larger cards" onClick={() => resize(tileFor(width, cols - 1))}>
-              <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h6v6H1zM9 1h6v6H9zM1 9h6v6H1zM9 9h6v6H9z" /></svg>
-            </button>
-          </span>
+              {/* negative so dragging right means fewer, bigger covers */}
+              <input type="range" min={-colsFor(width, TILE_MIN)} max={-colsFor(width, TILE_MAX)} value={-cols} aria-label="Cover size"
+                aria-valuetext={`${cols} per row`} onChange={(e) => resize(tileFor(width, -Number(e.target.value)))} />
+              <button type="button" className="sp-btn sp-btn--ghost sp-btn--icon sp-btn--sm" aria-label="Larger covers" title="Larger covers" onClick={() => resize(tileFor(width, cols - 1))}>
+                <svg viewBox="0 0 16 16" aria-hidden><path d="M1 1h6v6H1zM9 1h6v6H9zM1 9h6v6H1zM9 9h6v6H9z" /></svg>
+              </button>
+            </span>
+          </div>
+          {picked && <InstallBar kind={kind} picked={picked} shown={shown} setPicked={setPicked} />}
+          {shown.length
+            ? <div ref={setGrid} className="sp-covergrid" style={{ "--cover-min": `${tile}px` } as CSSProperties}>{shown.map((g) => (
+              <Tile key={g.id} game={g} tooNew={tooNew.has(g.id)} onChange={changed} picked={picked && picked.has(g.id)} onPick={() => {
+                const next = new Set(picked);
+                if (!next.delete(g.id)) next.add(g.id);
+                setPicked(next);
+              }} />
+            ))}</div>
+            : <div className="sp-panel">
+              <Empty icon="filter" title={`No ${noun} match`} text="Try other filters, or another search.">
+                <button type="button" className="sp-btn" onClick={clear}>Clear filters</button>
+              </Empty>
+            </div>}
         </div>
-        {picked && <InstallBar kind={kind} picked={picked} shown={shown} setPicked={setPicked} />}
-        {shown.length
-          ? <ul ref={setGrid} className={tile < TILE_TEXT ? "games posters" : "games"} style={{ "--tile": `${tile}px` } as CSSProperties}>{shown.map((g) => <li key={g.id}>
-            <Tile game={g} tooNew={tooNew.has(g.id)} onChange={changed} picked={picked && picked.has(g.id)} onPick={() => {
-              const next = new Set(picked);
-              if (!next.delete(g.id)) next.add(g.id);
-              setPicked(next);
-            }} />
-          </li>)}</ul>
-          : <p className="muted nothing">No {noun} match. <button className="link" onClick={clear}>Clear the filters</button></p>}
-      </section>
+      </div>
+    </>
+  );
+}
+
+/** The one state chip a cover shows, bottom right: what's wrong first, then installed. */
+function chip(game: Game, tooNew: boolean): [string, Tone, IconName] | null {
+  if (tooNew) return ["Doesn't run on this console's firmware", "danger", "alert"];
+  if (game.compatibility_status === "incompatible") return [STATUS_LABEL.incompatible, "danger", "alert"];
+  if (game.installed) return ["Installed on a console", "success", "drive"];
+  if (game.compatibility_status === "needs_attention") return [STATUS_LABEL.needs_attention, "warning", "alert"];
+  return null;
+}
+
+/** `picked`: null when not selecting; otherwise a click ticks the cover instead of opening the game. */
+function Tile({ game, tooNew, onChange, picked, onPick }: { game: Game; tooNew: boolean; onChange: (id: string, changes: Partial<Game>) => void; picked: boolean | null; onPick: () => void }) {
+  const loaded = () => {
+    // asked once the art loads, so only covers that have scrolled into view ask the store
+    if (game.title_id && !game.store) api<StoreInfo | null>(`/games/${game.id}/store`).then((i) => i && onChange(game.id, { store: i }), () => {});
+  };
+  const favorite = () => api<Game>(`/games/${game.id}`, { method: "PATCH", json: { favorite: !game.favorite } })
+    .then((g) => onChange(game.id, { favorite: g.favorite, new: false }), toastError);
+  const state = chip(game, tooNew);
+
+  return (
+    <div className="sp-coveritem">
+      <a className={picked ? "sp-cover sp-cover--picked" : "sp-cover"} href={`#/game/${game.id}`}
+        onClick={picked !== null ? (e) => { e.preventDefault(); onPick(); } : undefined}
+        aria-pressed={picked ?? undefined} role={picked !== null ? "button" : undefined}>
+        <Cover game={game} onLoad={loaded}>
+          <div className="sp-cover__top">
+            {picked !== null ? <span className="sp-cover__pick" aria-hidden>{picked && <Icon name="check" />}</span>
+              : game.new && <span className="sp-badge sp-badge--new">New</span>}
+          </div>
+          {state && <div className="sp-cover__bottom">
+            <span className={`sp-cover__chip sp-cover__chip--${state[1]}`} role="img" aria-label={state[0]} title={state[0]}><Icon name={state[2]} /></span>
+          </div>}
+        </Cover>
+        <span className="sp-cover__title" title={game.title}>{game.title}</span>
+        {game.copies && <span className="sp-cover__meta">{game.copies.length} versions</span>}
+      </a>
+      {/* a sibling, not inside the link: a button can't be nested in a link */}
+      {picked === null && !session.readOnly && (
+        <button type="button" className="sp-cover__chip sp-cover__fav" aria-pressed={game.favorite} title={game.favorite ? "Remove from favorites" : "Add to favorites"}
+          aria-label={`Favorite ${game.title}`} onClick={favorite}><Icon name="star" filled={game.favorite} /></button>
+      )}
     </div>
   );
 }
 
-/** `picked`: null when not selecting; otherwise a click ticks the tile instead of opening the game. */
-function Tile({ game, tooNew, onChange, picked, onPick }: { game: Game; tooNew: boolean; onChange: (id: string, changes: Partial<Game>) => void; picked: boolean | null; onPick: () => void }) {
-  const [colors, setColors] = useState<CSSProperties>();
-  const info = game.store;
-  const loaded = (img: HTMLImageElement) => {
-    setColors(sampleColors(img));
-    // asked once the art loads, so only tiles that have scrolled into view ask the store
-    if (game.title_id && !info) api<StoreInfo | null>(`/games/${game.id}/store`).then((i) => i && onChange(game.id, { store: i }), () => {});
-  };
-  const favorite = () => api<Game>(`/games/${game.id}`, { method: "PATCH", json: { favorite: !game.favorite } })
-    .then((g) => onChange(game.id, { favorite: g.favorite, new: false }), (e) => alert(e.message));
-  const genre = info?.genres[0] ?? game.genre;
-  const byline = [info?.publisher, (info?.release_date ?? game.release_date)?.slice(0, 4)].filter(Boolean).join(", ");
-
-  return (<>
-    <a className={picked ? "game picked" : "game"} href={`#/game/${game.id}`} style={colors}
-      onClick={picked !== null ? (e) => { e.preventDefault(); onPick(); } : undefined}
-      aria-pressed={picked ?? undefined} role={picked !== null ? "button" : undefined}>
-      {picked !== null ? <span className="pick" aria-hidden>{picked ? "✓" : ""}</span> : game.new && <span className="ribbon">New</span>}
-      <Cover game={game} onLoad={loaded} />
-      {/* poster-only cards: the name box (and its badge) is hidden, so these stand in for it */}
-      {(game.installed || tooNew) && <span className="flags" aria-hidden>
-        {game.installed && <i className="flag on-console" title="Installed on a console">
-          <svg viewBox="0 0 24 24"><path d="M3 13.5 5.5 6h13l2.5 7.5v4.5H3zM3 13.5h18M16.5 15.75h.01" /></svg>
-        </i>}
-        {tooNew && <i className="flag too-new" title="Doesn't run on this console's firmware">
-          <svg viewBox="0 0 24 24"><path d="M12 2.5 2.5 18.5h19zM12 8.5v4.5M12 16v.01" /></svg>
-        </i>}
-      </span>}
-      <div className="name">
-        <strong>{game.title}</strong>
-        {info?.rating != null && (
-          <span className="rating" title={`${info.rating_count.toLocaleString()} ratings on PlayStation Store`}>{info.rating.toFixed(1)}</span>
-        )}
-        {genre && <span className="genre">{genre}</span>}
-        {byline && <span className="byline">{byline}</span>}
-        {game.copies && <span className="byline">{game.copies.length} versions</span>}
-        {game.installed
-          ? <span className="badge installed">Installed</span>
-          : <span className={`badge ${game.compatibility_status}`}>{STATUS_LABEL[game.compatibility_status]}</span>}
-      </div>
-    </a>
-    {/* a sibling, not inside the link: a button can't be nested in a link */}
-    {picked === null && !session.readOnly && <button className="fav" aria-pressed={game.favorite} title={game.favorite ? "Remove from favorites" : "Add to favorites"}
-      aria-label={`Favorite ${game.title}`} onClick={favorite}>
-      <svg viewBox="0 0 24 24" aria-hidden><path d="M12 2.8l2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3-4.6-4.4 6.3-.9z" /></svg>
-    </button>}
-  </>);
-}
-
-/** The name box's gradient: the art's bottom edge, which it continues, into the art's most vivid patch. */
-function sampleColors(img: HTMLImageElement): CSSProperties | undefined {
-  const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
-  if (!ctx) return;
-  ctx.drawImage(img, 0, 0, 8, 8);
-  const px = ctx.getImageData(0, 0, 8, 8).data;
-  const edge = [0, 0, 0];
-  let vivid = [0, 0, 0], best = -1;
-  for (let i = 0; i < 64; i++) {
-    const rgb = [px[i * 4], px[i * 4 + 1], px[i * 4 + 2]];
-    if (i >= 48) rgb.forEach((v, k) => (edge[k] += v / 16)); // bottom two rows
-    const saturation = Math.max(...rgb) - Math.min(...rgb);
-    if (saturation > best) [best, vivid] = [saturation, rgb];
-  }
-  return { "--edge": `rgb(${edge.map(Math.round).join(" ")})`, "--vivid": `rgb(${vivid.join(" ")})` } as CSSProperties;
-}
-
-/** The store's portrait key art, else the game's own cover: filling the tile when it's a portrait too (an uploaded
- *  poster), else (a square icon) whole, on a blurred copy of itself. */
-export function Cover({ game, onLoad }: { game: Game; onLoad?: (img: HTMLImageElement) => void }) {
+/** The store's portrait key art, else the game's own cover: filling the art box when it's a portrait too (an uploaded
+ *  poster), else (a square icon) whole, on a blurred copy of itself. `children` are the overlays on the art. */
+export function Cover({ game, onLoad, children }: { game: Game; onLoad?: (img: HTMLImageElement) => void; children?: ReactNode }) {
   const cover = coverUrl(game);
   const [src, setSrc] = useState(game.title_id ? `/api/v1/games/${game.id}/poster?v=${encodeURIComponent(game.updated_at)}` : cover);
   const [portrait, setPortrait] = useState(false);
-  if (!src) return <div className="art placeholder" aria-hidden>{game.title.slice(0, 1)}</div>;
+  if (!src) return <div className="sp-cover__art"><span className="sp-cover__ph">{game.title}</span>{children}</div>;
   const square = src === cover && !portrait;
   const loaded = (img: HTMLImageElement) => {
     setPortrait(img.naturalHeight >= img.naturalWidth * 1.2);
     onLoad?.(img);
   };
   return (
-    <div className={square ? "art square" : "art"} style={square ? ({ "--art": `url("${src}")` } as CSSProperties) : undefined}>
+    <div className={square ? "sp-cover__art sp-cover__art--square" : "sp-cover__art"} style={square ? ({ "--art": `url("${src}")` } as CSSProperties) : undefined}>
       <img src={src} alt="" loading="lazy" onLoad={(e) => loaded(e.currentTarget)} onError={() => setSrc(src === cover ? null : cover)} />
+      {children}
     </div>
   );
 }

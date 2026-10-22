@@ -1,20 +1,11 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STATUS_LABEL, useConsoles, type Drive, type Game, type InstalledGame, type Job } from "./api";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STATUS_LABEL, STATUS_TONE, useConsoles, type Drive, type Game, type InstalledGame, type Job } from "./api";
 import { cart, useCart } from "./Cart";
 import { Cover } from "./Library";
-import { Art, MoveDialog, RemoveDialog, when } from "./Installed";
+import { Art, MoveDialog, RemoveDialog } from "./Installed";
+import { RESULT } from "./AuditLog";
 import { toast, toastError } from "./Toast";
-
-/** A titled card on the detail page; collapsible unless `open` is omitted-and-fixed via `fixed`. */
-function Section({ title, open = true, fixed, children }: { title?: string; open?: boolean; fixed?: boolean; children: React.ReactNode }) {
-  if (fixed) return <div className="card section">{title && <h2>{title}</h2>}{children}</div>;
-  return (
-    <details className="card section" open={open}>
-      <summary>{title}</summary>
-      {children}
-    </details>
-  );
-}
+import { Badge, Bar, Collapsible, Empty, Field, Icon, Notice, PageHead, Panel, Path, Spinner, Time, type Tone } from "./ui";
 
 /** Queues an install on a console; the job shows up on the Installed page. DLC goes onto its game's drive. */
 function Install({ game: opened }: { game: Game }) {
@@ -65,7 +56,7 @@ function Install({ game: opened }: { game: Game }) {
       "Close the game on the PS5 first. To undo it, remove the game and install it again.")) return;
     try {
       await api<Job>(`/consoles/${cid}/install`, { json: { game_id: game.id, drive_id: did || null } });
-      toast(<>Queued {game.title}. <a href="#/installed">Follow it on the Installed page</a></>);
+      toast(<>Queued {game.title}. <a className="sp-link" href="#/installed">Follow it on the Installed page</a></>);
     } catch (e) {
       toastError(e);
     }
@@ -75,46 +66,59 @@ function Install({ game: opened }: { game: Game }) {
     if (!installed || !confirm(`Move ${game.title} to the chosen drive? The console copies it, checks the copy, then deletes the original. Close the game on the PS5 first.`)) return;
     try {
       await api(`/consoles/${cid}/move`, { json: { installed_game_id: installed.id, drive_id: did } });
-      toast(<>Moving {game.title}. <a href="#/installed">Follow it on the Installed page</a></>);
+      toast(<>Moving {game.title}. <a className="sp-link" href="#/installed">Follow it on the Installed page</a></>);
     } catch (e) {
       toastError(e);
     }
   }
 
+  const choices = consoles.length > 1 || copies.length > 1 || game.kind === "game";
   return (
-    <div className="toolbar">
-      {consoles.length > 1 && (
-        <select aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
-          {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-      )}
-      {copies.length > 1 && (
-        <select aria-label="Version" value={game.id} onChange={(e) => setPick(e.target.value)}>
-          {copies.map((c) => <option key={c.id} value={c.id}>{formatLabel(c)}{c.version ? ` · v${c.version}` : ""} · {formatBytes(c.size_bytes)}{blocked[c.id] && !installed ? " · not for this console" : ""}</option>)}
-        </select>
-      )}
-      {game.kind === "game" && (
-        <select aria-label="Drive" value={did} onChange={(e) => setDid(e.target.value)}>
-          <option value="">Drive with the most free space</option>
-          {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
-        </select>
-      )}
-      {installed ? (
-        <>
-          <span className="muted">Already installed. Pick a drive to move it there.</span>
-          <button {...needsOnline(target)} disabled={!did || did === installed.drive_id || target?.state !== "online"} onClick={move}>Move</button>
-        </>
-      ) : (
-        <>
-          <button {...needsOnline(target)} {...(why ? { disabled: true, title: why } : {})} onClick={install}>{game.kind === "dlc" ? "Add to game" : "Install"}</button>
-          {why && <span className="error" role="status">{why}</span>}
-        </>
-      )}
-      <button className="secondary" aria-pressed={carted} onClick={() => (carted ? cart.remove : cart.add)([game.id])}>
-        {carted ? "In cart ✓" : "Add to cart"}
-      </button>
-      {carted && <a href="#/cart">Open cart</a>}
-    </div>
+    <Panel title={installed ? "Move to another drive" : game.kind === "dlc" ? "Add to the game" : "Install"}
+      desc={installed ? `Already installed on ${target?.name}. Pick a drive to move it there.` : game.kind === "dlc" ? "DLC goes onto its game's drive." : undefined}
+      foot={<>
+        <span className="sp-panel__note">{target && target.state !== "online" ? `${target.name} must be online.` : carted ? <a className="sp-link" href="#/cart">Open the cart</a> : null}</span>
+        <div className="sp-btngroup">
+          <button type="button" className="sp-btn" aria-pressed={carted} onClick={() => (carted ? cart.remove : cart.add)([game.id])}>
+            {carted ? <><Icon name="check" />In cart</> : <><Icon name="cart" />Add to cart</>}
+          </button>
+          {installed
+            ? <button type="button" className="sp-btn sp-btn--primary" {...needsOnline(target)} disabled={!did || did === installed.drive_id || target?.state !== "online"}
+              title={!did || did === installed.drive_id ? "Pick a different drive to move it there." : undefined} onClick={move}><Icon name="move" />Move</button>
+            : <button type="button" className="sp-btn sp-btn--primary" {...needsOnline(target)} {...(why ? { disabled: true, title: why } : {})} onClick={install}>
+              {game.kind === "dlc" ? "Add to game" : "Install"}</button>}
+        </div>
+      </>}>
+      {(choices || why) && <>
+        {choices && (
+          <div className="sp-formgrid">
+            {consoles.length > 1 && (
+              <Field label="Console">
+                <select className="sp-select" value={cid} onChange={(e) => setCid(e.target.value)}>
+                  {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </Field>
+            )}
+            {copies.length > 1 && (
+              <Field label="Version">
+                <select className="sp-select" value={game.id} onChange={(e) => setPick(e.target.value)}>
+                  {copies.map((c) => <option key={c.id} value={c.id}>{formatLabel(c)}{c.version ? ` · v${c.version}` : ""} · {formatBytes(c.size_bytes)}{blocked[c.id] && !installed ? " · not for this console" : ""}</option>)}
+                </select>
+              </Field>
+            )}
+            {game.kind === "game" && (
+              <Field label="Drive">
+                <select className="sp-select" value={did} onChange={(e) => setDid(e.target.value)}>
+                  <option value="">{installed ? "Pick a drive" : "Most free space"}</option>
+                  {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
+                </select>
+              </Field>
+            )}
+          </div>
+        )}
+        {why && !installed && <Notice tone="danger" title="This console can't run it" text={why} />}
+      </>}
+    </Panel>
   );
 }
 
@@ -138,10 +142,17 @@ function HomeLogo({ url, consoleId }: { url: string; consoleId?: string }) {
   }
 
   return (
-    <div className="toolbar">
-      {/* applies on every console the game is on; ponytail: any online console enables it, the result names the ones that failed */}
-      <button className="secondary" onClick={apply} {...needsOnline(target)} disabled={busy || target?.state !== "online"}>{busy ? "Setting logo…" : "Show logo on PS5 home screen"}</button>
-    </div>
+    <li className="sp-listrow">
+      <div className="sp-listrow__main">
+        <div className="sp-listrow__title">Home-screen logo</div>
+        <div className="sp-listrow__meta"><span>Shows the game's logo from PlayStation Store on its PS5 home-screen page, instead of its name in plain text.</span></div>
+      </div>
+      <div className="sp-listrow__aside">
+        {/* applies on every console the game is on; ponytail: any online console enables it, the result names the ones that failed */}
+        <button type="button" className="sp-btn sp-btn--sm" onClick={apply} {...needsOnline(target)} disabled={busy || target?.state !== "online"}>
+          {busy ? <><Spinner />Setting logo…</> : "Show logo"}</button>
+      </div>
+    </li>
   );
 }
 
@@ -166,23 +177,22 @@ function StoreImageBrowser({ url }: { url: string }) {
   }
 
   return (
-    <Section title="PlayStation Store images" open={false}>
-      <div className="toolbar">
-        <button className="secondary" onClick={load} disabled={busy}>{busy ? "Asking PlayStation Store…" : "Browse PlayStation Store images"}</button>
-        {error && <span className="error" role="alert">{error}</span>}
-      </div>
+    <Collapsible title="PlayStation Store images" meta="Every image the store has">
+      {!stores && <div className="sp-btngroup"><button type="button" className="sp-btn" onClick={load} disabled={busy}>
+        {busy ? <><Spinner />Asking PlayStation Store…</> : "Browse PlayStation Store images"}</button></div>}
+      {error && <p className="sp-error" role="alert">{error}</p>}
       {stores?.map((s) => (
-        <div key={s.store}>
-          <h2>{s.store} store{s.name && ` · ${s.name}`}</h2>
-          {!s.sources.length && <p className="muted">Not sold in this store.</p>}
+        <div key={s.store} className="sp-stack">
+          <h3 className="sp-subhead">{s.store} store{s.name && ` · ${s.name}`}</h3>
+          {!s.sources.length && <p className="sp-muted">Not sold in this store.</p>}
           {s.sources.map((src) => (
-            <details key={src.label} open={src.label.startsWith("Concept")}>
-              <summary>{src.label} · {src.images.length} image(s)</summary>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+            <details key={src.label} className="sp-disclosure" open={src.label.startsWith("Concept")}>
+              <summary><Icon name="chevronRight" />{src.label} · {src.images.length} {src.images.length === 1 ? "image" : "images"}</summary>
+              <div className="sp-thumbs">
                 {src.images.map((i) => (
-                  <a key={i.url} href={i.url} target="_blank" rel="noreferrer" style={{ width: 160 }}>
-                    <img src={i.url} alt={i.type ?? "image"} loading="lazy" style={{ width: 160, background: "#444" }} />
-                    <div className="muted">{i.type ?? "unknown"}</div>
+                  <a key={i.url} href={i.url} target="_blank" rel="noreferrer">
+                    <img src={i.url} alt={i.type ?? "Image"} loading="lazy" />
+                    <span>{i.type ?? "Unknown type"}</span>
                   </a>
                 ))}
               </div>
@@ -190,7 +200,7 @@ function StoreImageBrowser({ url }: { url: string }) {
           ))}
         </div>
       ))}
-    </Section>
+    </Collapsible>
   );
 }
 
@@ -224,23 +234,28 @@ function Convert({ game }: { game: Game }) {
   }
 
   return (
-    <div className="toolbar">
-      {converting ? (
-        <>
-          <progress value={conv.progress} aria-label="Conversion progress" />
-          <span className="muted" role="status">{Math.floor(conv.progress * 100)}% · {conv.message}</span>
-          <button className="secondary" onClick={() => api(`/games/${game.id}/convert/cancel`, { method: "POST" })}>Cancel</button>
-        </>
-      ) : (
-        <button className="secondary" onClick={start}>Convert to .exfat</button>
-      )}
-      {error && <span className="error" role="alert">{error}</span>}
-      {conv && !converting && (
-        <span className={conv.status === "success" ? "muted" : "error"} role="status">
-          {conv.message}{conv.image_game_id && <> <a href={`#/game/${conv.image_game_id}`}>Open the image</a></>}
-        </span>
-      )}
-    </div>
+    <li className="sp-listrow">
+      <div className="sp-listrow__main">
+        <div className="sp-listrow__title">Convert to .exfat</div>
+        {converting ? <>
+          <Bar value={conv.progress} label="Conversion progress" />
+          <div className="sp-listrow__meta" role="status"><span className="sp-num">{Math.floor(conv.progress * 100)}%</span><span className="sp-sep" /><span>{conv.message}</span></div>
+        </> : (
+          <div className="sp-listrow__meta"><span>Writes this folder dump into one disc image next to it. The folder is kept.</span></div>
+        )}
+        {error && <p className="sp-error" role="alert">{error}</p>}
+        {conv && !converting && (
+          <div className={conv.status === "success" ? "sp-listrow__meta" : "sp-error"} role="status">
+            <span>{conv.message}</span>{conv.image_game_id && <a className="sp-link" href={`#/game/${conv.image_game_id}`}>Open the image</a>}
+          </div>
+        )}
+      </div>
+      <div className="sp-listrow__aside">
+        {converting
+          ? <button type="button" className="sp-btn sp-btn--sm sp-btn--ghost" onClick={() => api(`/games/${game.id}/convert/cancel`, { method: "POST" })}>Cancel</button>
+          : <button type="button" className="sp-btn sp-btn--sm" onClick={start}>Convert</button>}
+      </div>
+    </li>
   );
 }
 
@@ -248,8 +263,8 @@ type History = {
   installed: { id: string; console_id: string; console: string; drive: string; path: string; version: string | null; status: string }[];
   events: { at: string; what: string; result: string; console: string; drive: string; message: string }[];
 };
-const WHAT: Record<string, string> = { install: "Install", uninstall: "Removed", move: "Moved" };
-const RESULT_BADGE: Record<string, string> = { success: "ready", failed: "incompatible", interrupted: "incompatible", blocked: "incompatible", canceled: "unknown" };
+const WHAT: Record<string, string> = { install: "Installed", uninstall: "Removed", move: "Moved" };
+const EVENT_RESULT: Record<string, [string, Tone]> = { ...RESULT, interrupted: ["Interrupted", "danger"] };
 
 /** Where the game is installed now, and what happened to it: installs, removals and moves. */
 function InstallHistory({ game }: { game: Game }) {
@@ -259,25 +274,43 @@ function InstallHistory({ game }: { game: Game }) {
   return (
     <>
       {h.installed.length > 0 && (
-        <Section title="On your consoles">
-          <ul>{h.installed.map((i) => (
-            <li key={i.id}>
-              <strong>{i.console}</strong> · {i.drive || "Unknown drive"}{i.version && ` · v${i.version}`} <code>{i.path}</code>{" "}
-              <a href={`#/installed/${i.console_id}/${i.id}`}>{session.readOnly ? "Details" : "Move or remove"}</a>
+        <Panel title="On your consoles" flush>
+          <ul className="sp-list">{h.installed.map((i) => (
+            <li key={i.id} className="sp-listrow">
+              <div className="sp-listrow__main">
+                <div className="sp-listrow__title">{i.console}<span className="sp-muted">· {i.drive || "Unknown drive"}</span></div>
+                <div className="sp-listrow__meta">
+                  {i.version && <><span className="sp-num">v{i.version}</span><span className="sp-sep" /></>}
+                  <Path path={i.path} />
+                </div>
+              </div>
+              <div className="sp-listrow__aside">
+                <a className="sp-btn sp-btn--sm" href={`#/installed/${i.console_id}/${i.id}`}>{session.readOnly ? "Details" : "Move or remove"}</a>
+              </div>
             </li>
           ))}</ul>
-        </Section>
+        </Panel>
       )}
       {h.events.length > 0 && (
-        <Section title={`History (${h.events.length})`} open={false}>
-          <ul>{h.events.map((e, n) => (
-            <li key={n}>
-              <span className={`badge ${RESULT_BADGE[e.result] ?? "needs_attention"}`}>{e.result}</span> {WHAT[e.what] ?? e.what}
-              {e.console && ` · ${e.console}`}{e.drive && ` · ${e.drive}`} · <span className="muted">{when(e.at)}</span>
-              {e.message && <div className="muted">{e.message}</div>}
-            </li>
-          ))}</ul>
-        </Section>
+        <Collapsible title="History" meta={`${h.events.length} ${h.events.length === 1 ? "event" : "events"}`}>
+          <ul className="sp-list sp-boxed">{h.events.map((e, n) => {
+            const [label, tone] = EVENT_RESULT[e.result] ?? [e.result, "warning"];
+            return (
+              <li key={n} className="sp-listrow sp-listrow--dense">
+                <div className="sp-listrow__lead"><Badge tone={tone}>{label}</Badge></div>
+                <div className="sp-listrow__main">
+                  <div className="sp-listrow__title">{WHAT[e.what] ?? e.what}</div>
+                  <div className="sp-listrow__meta">
+                    {e.console && <><span>{e.console}</span><span className="sp-sep" /></>}
+                    {e.drive && <><span>{e.drive}</span><span className="sp-sep" /></>}
+                    <Time t={e.at} />
+                    {e.message && <><span className="sp-sep" /><span>{e.message}</span></>}
+                  </div>
+                </div>
+              </li>
+            );
+          })}</ul>
+        </Collapsible>
       )}
     </>
   );
@@ -323,30 +356,39 @@ function SaveBackups({ tid, consoleId }: { tid: string; consoleId?: string }) {
   if (!consoles.length) return null;
   const start = () => (setError(""), api<SaveJob>(`/consoles/${cid}/save-backups`, { json: { title_id: tid } }).then(setB, (e) => setError(e.message)));
   const busy = b?.status === "copying" || r?.status === "copying";
+  const status = (j: SaveJob | null, label: string) => j && (j.status === "copying"
+    ? <div className="sp-stack sp-stack--tight"><Bar value={j.progress} label={label} /><span className="sp-hint">{j.message}</span></div>
+    : <p className={j.status === "failed" ? "sp-error" : "sp-hint"} role="status">{j.message}</p>);
 
   return (
-    <Section title="Save data" open={false}>
-      <p className="muted">Copies this game's saves from the console to this PC, for every user, and back. They stay encrypted and only
+    <Collapsible title="Save data" meta={list.length ? `${list.length} ${list.length === 1 ? "backup" : "backups"}` : "No backups yet"}>
+      <p className="sp-muted">Copies this game's saves from the console to this PC, for every user, and back. They stay encrypted and only
         work on the same console and account. Restoring over saves already on the console asks first.</p>
-      <div className="toolbar">
+      <div className="sp-row">
         {consoles.length > 1 && !consoleId && (
-          <select aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
+          <select className="sp-select sp-console-pick" aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
             {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         )}
-        <button className="secondary" {...needsOnline(target)} disabled={busy || !!needsOnline(target).disabled} onClick={start}>{b?.status === "copying" ? "Backing up…" : "Back up saves"}</button>
-        {b?.status === "copying" && <progress max={1} value={b.progress} aria-label="Backing up" />}
-        {r?.status === "copying" && <progress max={1} value={r.progress} aria-label="Restoring" />}
-        {b && <span className={b.status === "failed" ? "error" : "muted"} role="status">{b.message}</span>}
-        {r && <span className={r.status === "failed" ? "error" : "muted"} role="status">{r.message}</span>}
-        {error && <span className="error" role="alert">{error}</span>}
+        <button type="button" className="sp-btn" {...needsOnline(target)} disabled={busy || !!needsOnline(target).disabled} onClick={start}>
+          {b?.status === "copying" ? <><Spinner />Backing up…</> : "Back up saves"}</button>
       </div>
-      {list.length > 0 && <ul>{list.map((s) => (
-        <li key={s.name}><strong>{s.name}</strong> · {s.files} file(s), {formatBytes(s.bytes)} <code>{s.path}</code>{" "}
-          <button className="secondary" {...needsOnline(target)} disabled={busy || !!needsOnline(target).disabled}
-            onClick={() => restore(s.name)}>{r?.status === "copying" && r.backup === s.name ? "Restoring…" : "Restore"}</button></li>
+      {status(b, "Backing up")}
+      {status(r, "Restoring")}
+      {error && <p className="sp-error" role="alert">{error}</p>}
+      {list.length > 0 && <ul className="sp-list sp-boxed">{list.map((s) => (
+        <li key={s.name} className="sp-listrow sp-listrow--dense">
+          <div className="sp-listrow__main">
+            <div className="sp-listrow__title">{s.name}</div>
+            <div className="sp-listrow__meta"><span className="sp-num">{s.files} {s.files === 1 ? "file" : "files"} · {formatBytes(s.bytes)}</span><span className="sp-sep" /><Path path={s.path} /></div>
+          </div>
+          <div className="sp-listrow__aside">
+            <button type="button" className="sp-btn sp-btn--sm" {...needsOnline(target)} disabled={busy || !!needsOnline(target).disabled}
+              onClick={() => restore(s.name)}>{r?.status === "copying" && r.backup === s.name ? "Restoring…" : "Restore"}</button>
+          </div>
+        </li>
       ))}</ul>}
-    </Section>
+    </Collapsible>
   );
 }
 
@@ -357,8 +399,17 @@ const TEXT_FIELDS = [
   ["region", "Region"],
   ["genre", "Genre"],
 ] as const;
+const MONO = ["title_id", "version"];
 
 const BACK: Record<string, string> = { "/": "Library", "/dlc": "DLC", "/installed": "Installed", "/dashboard": "Dashboard", "/cart": "Cart" };
+const CONFIDENCE: Record<Game["metadata_confidence"], [string, Tone]> = {
+  high: ["High confidence", "success"], medium: ["Medium confidence", "info"], low: ["Low confidence", "warning"], unknown: ["Unknown confidence", "warning"],
+};
+const COPY_TYPE: Record<Game["owned_copy_type"], string> = { disc: "Disc", digital: "Digital", other: "Other", unknown: "Unknown" };
+
+/** The tools panel's rows, when there's any. */
+const Tools = ({ children }: { children: ReactNode[] }) =>
+  children.some(Boolean) ? <Panel title="More actions" flush><ul className="sp-list">{children}</ul></Panel> : null;
 
 /** `from`: the page the user came from, so ← goes back there; null (opened by link) falls back to the game's list. */
 export default function GameDetail({ id, from }: { id: string; from: string | null }) {
@@ -370,7 +421,7 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
     api<Game>(`/games/${id}`).then(setGame, (e) => setError(e.message));
   }, [id]);
 
-  if (!game) return error ? <p className="error" role="alert">{error}</p> : <p className="muted">Loading…</p>;
+  if (!game) return error ? <p className="sp-error" role="alert">{error}</p> : <p className="sp-muted">Loading…</p>;
 
   const val = <K extends keyof Game>(k: K) => (k in draft ? draft[k] : game[k]) as Game[K];
   const set = (k: keyof Game, v: unknown) => setDraft((d) => ({ ...d, [k]: v === "" ? null : v }));
@@ -404,128 +455,125 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
     location.hash = `#${back}`;
   }
 
+  const [confidence, confidenceTone] = CONFIDENCE[game.metadata_confidence];
+  const unsure = game.metadata_confidence === "low" || game.metadata_confidence === "unknown";
+
   return (
-    <div className="detail">
-      <aside>
+    <div className="sp-detail">
+      <aside className="sp-detail__aside">
         <Cover key={game.updated_at} game={game} />
         {!session.readOnly && <>
-        <label className="button secondary">
-          Change cover
-          <input type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-        </label>
-        <button className="link" onClick={() => run(api<Game>(`/games/${id}`, { method: "PATCH", json: { favorite: !game.favorite } }), game.favorite ? "Removed from favorites." : "Added to favorites.")}>
-          {game.favorite ? "★ Favorite" : "☆ Add to favorites"}
-        </button>
+          <button type="button" className="sp-btn sp-btn--ghost" aria-pressed={game.favorite}
+            onClick={() => run(api<Game>(`/games/${id}`, { method: "PATCH", json: { favorite: !game.favorite } }), game.favorite ? "Removed from favorites." : "Added to favorites.")}>
+            <Icon name="star" filled={game.favorite} />{game.favorite ? "Favorite" : "Add to favorites"}
+          </button>
+          <label className="sp-btn">
+            Change cover
+            <input type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+          </label>
         </>}
       </aside>
 
-      <section>
-        <a href={`#${back}`} className="muted">← {BACK[back]}</a>
-        <h1>{game.title}</h1>
-        <div className={`panel ${game.compatibility_status}`}>
-          <strong>{STATUS_LABEL[game.compatibility_status]}</strong>
-          {game.compatibility_reason && <span> — {game.compatibility_reason}</span>}
-        </div>
-        {!session.readOnly && (
-          <Section fixed>
-            <Install game={game} />
-            {game.installed && <HomeLogo url={`/games/${game.id}/home-logo`} />}
-            <Convert game={game} />
-          </Section>
+      <div className="sp-detail__main">
+        <PageHead back={[`#${back}`, BACK[back]]}
+          title={<>{game.title}{game.installed
+            ? <Badge tone="success" dot>Installed</Badge>
+            : <Badge tone={STATUS_TONE[game.compatibility_status]}>{STATUS_LABEL[game.compatibility_status]}</Badge>}</>}
+          desc={<>{game.title_id && <><span className="sp-code">{game.title_id}</span> · </>}{formatLabel(game)} · <span className="sp-num">{formatBytes(game.size_bytes)}</span>
+            {game.version && <> · <span className="sp-num">v{game.version}</span></>}{game.region && ` · ${game.region}`}</>} />
+
+        {game.compatibility_status !== "ready" && game.compatibility_reason && (
+          <Notice tone={STATUS_TONE[game.compatibility_status] || "warning"} title={STATUS_LABEL[game.compatibility_status]} text={game.compatibility_reason} />
+        )}
+        {unsure && (
+          <Notice tone="warning" title={game.title_id ? "Check the title ID before installing" : "No title ID found"}
+            text={game.title_id
+              ? `It was worked out from the ${SOURCE_LABEL[game.metadata_source]?.toLowerCase() ?? game.metadata_source}, because the package's own metadata couldn't be read.`
+              : "Enter it under Metadata below."}
+            action={game.title_id && !session.readOnly && (
+              <button type="button" className="sp-btn sp-btn--sm" onClick={() => run(api<Game>(`/games/${id}`, { method: "PATCH", json: { title_id: game.title_id } }), "Title ID confirmed.")}>
+                {game.title_id} is correct
+              </button>
+            )} />
         )}
 
-        {(game.metadata_confidence === "low" || game.metadata_confidence === "unknown") && (
-          <div className="panel needs_attention" role="alert">
-            <strong>Warning:</strong>{" "}
-            {game.title_id
-              ? `Title ID was derived from the ${game.metadata_source} because package metadata could not be read. Verify before installation.`
-              : "No title ID could be identified. Enter it below."}
-            {game.title_id && !session.readOnly && (
-              <div>
-                <button className="secondary" onClick={() => run(api<Game>(`/games/${id}`, { method: "PATCH", json: { title_id: game.title_id } }), "Title ID confirmed.")}>
-                  Confirm {game.title_id} is correct
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        {!session.readOnly && <Install game={game} />}
+        {!session.readOnly && <Tools>{[
+          game.installed && <HomeLogo key="logo" url={`/games/${game.id}/home-logo`} />,
+          game.format === "folder_dump" && <Convert key="convert" game={game} />,
+        ]}</Tools>}
 
         <InstallHistory game={game} />
-        {game.title_id && <StoreImageBrowser url={`/games/${game.id}/store-images`} />}
-        {!session.readOnly && game.title_id && game.kind === "game" && <SaveBackups tid={game.title_id} />}
 
-        <Section title="File details">
-        <dl className="facts">
-          <dt>Metadata source</dt>
-          <dd>
-            <span className={`badge source-${game.metadata_confidence}`}>{SOURCE_LABEL[game.metadata_source] ?? game.metadata_source}</span>{" "}
-            <span className="muted">{game.metadata_confidence} confidence</span>
-          </dd>
-          {game.content_id && <><dt>Content ID</dt><dd><code>{game.content_id}</code></dd></>}
-          <dt>Format</dt><dd>{formatLabel(game)}</dd>
-          <dt>Size</dt><dd>{formatBytes(game.size_bytes)}</dd>
-          <dt>Source</dt><dd><code>{game.source_path}</code>{game.missing && " (missing)"}</dd>
-        </dl>
-        </Section>
+        <form className="sp-stack" onSubmit={save}>
+          <Collapsible title="File details" meta={`${formatLabel(game)} · ${formatBytes(game.size_bytes)}`} open>
+            <dl className="sp-kv">
+              <dt>Metadata source</dt>
+              <dd><Badge tone={confidenceTone} mono>{SOURCE_LABEL[game.metadata_source] ?? game.metadata_source}</Badge><span className="sp-muted">{confidence}</span></dd>
+              <dt>Content ID</dt><dd>{game.content_id ? <Path path={game.content_id} /> : <span className="sp-muted">—</span>}</dd>
+              <dt>Format</dt><dd>{formatLabel(game)}</dd>
+              <dt>Size</dt><dd className="sp-num">{formatBytes(game.size_bytes)}</dd>
+              <dt>Source</dt><dd><Path path={game.source_path} copy />{game.missing && <Badge tone="danger">Missing</Badge>}</dd>
+            </dl>
+          </Collapsible>
+          {game.title_id && <StoreImageBrowser url={`/games/${game.id}/store-images`} />}
+          {!session.readOnly && game.title_id && game.kind === "game" && <SaveBackups tid={game.title_id} />}
 
-        <form className="edit" onSubmit={save}>
-          <fieldset disabled={session.readOnly}>
-          <Section title="Metadata">
-          <div className="fields">
-            {TEXT_FIELDS.map(([k, label]) => (
-              <label key={k}>
-                {label}
-                <input value={val(k) ?? ""} onChange={(e) => set(k, e.target.value)} />
-              </label>
-            ))}
-            <label>
-              Release date
-              <input type="date" value={val("release_date") ?? ""} onChange={(e) => set("release_date", e.target.value)} />
-            </label>
-          </div>
-          <label>
-            Description
-            <textarea rows={3} value={val("description") ?? ""} onChange={(e) => set("description", e.target.value)} />
-          </label>
-          </Section>
+          <fieldset className="sp-stack sp-fieldset" disabled={session.readOnly}>
+            <Collapsible title="Metadata" meta="Title, IDs, genre and description" open={unsure && !game.title_id}>
+              <div className="sp-formgrid">
+                {TEXT_FIELDS.map(([k, label]) => (
+                  <Field key={k} label={label}>
+                    <input className={MONO.includes(k) ? "sp-input sp-input--mono" : "sp-input"} value={val(k) ?? ""} onChange={(e) => set(k, e.target.value)} />
+                  </Field>
+                ))}
+                <Field label="Release date">
+                  <input className="sp-input" type="date" value={val("release_date") ?? ""} onChange={(e) => set("release_date", e.target.value)} />
+                </Field>
+                <Field wide label="Description">
+                  <textarea className="sp-textarea" rows={3} value={val("description") ?? ""} onChange={(e) => set("description", e.target.value)} />
+                </Field>
+              </div>
+            </Collapsible>
 
-          <Section title="Provenance" open={false}>
-          <div className="fields">
-            <label>
-              Owned copy
-              <select value={val("owned_copy_type")} onChange={(e) => set("owned_copy_type", e.target.value)}>
-                {["disc", "digital", "other", "unknown"].map((t) => <option key={t}>{t}</option>)}
-              </select>
-            </label>
-            <label>
-              Backup date
-              <input type="date" value={val("backup_date") ?? ""} onChange={(e) => set("backup_date", e.target.value)} />
-            </label>
-          </div>
-          <label>
-            Notes
-            <textarea rows={3} value={val("provenance_notes") ?? ""} onChange={(e) => set("provenance_notes", e.target.value)} />
-          </label>
-          </Section>
-
+            <Collapsible title="Provenance" meta={`${COPY_TYPE[game.owned_copy_type]} copy`}>
+              <div className="sp-formgrid">
+                <Field label="Owned copy">
+                  <select className="sp-select" value={val("owned_copy_type")} onChange={(e) => set("owned_copy_type", e.target.value)}>
+                    {(Object.keys(COPY_TYPE) as Game["owned_copy_type"][]).map((t) => <option key={t} value={t}>{COPY_TYPE[t]}</option>)}
+                  </select>
+                </Field>
+                <Field label="Backup date">
+                  <input className="sp-input" type="date" value={val("backup_date") ?? ""} onChange={(e) => set("backup_date", e.target.value)} />
+                </Field>
+                <Field wide label="Notes">
+                  <textarea className="sp-textarea" rows={3} value={val("provenance_notes") ?? ""} onChange={(e) => set("provenance_notes", e.target.value)} />
+                </Field>
+              </div>
+            </Collapsible>
           </fieldset>
-          {!session.readOnly && <div className="actions">
-            <button type="submit" disabled={!Object.keys(draft).length}>Save</button>
-          </div>}
+          {!session.readOnly && Object.keys(draft).length > 0 && (
+            <div className="sp-row">
+              <span className="sp-hint">Unsaved changes</span>
+              <div className="sp-btngroup sp-push">
+                <button type="button" className="sp-btn sp-btn--ghost" onClick={() => setDraft({})}>Discard</button>
+                <button type="submit" className="sp-btn sp-btn--primary">Save changes</button>
+              </div>
+            </div>
+          )}
+
+          {game.parser_warnings.length > 0 && (
+            <Collapsible title="Parser warnings" meta={`${game.parser_warnings.length}`}>
+              <ul className="sp-bullets">{game.parser_warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+            </Collapsible>
+          )}
+          <Collapsible title="Detection evidence" meta="What the scanner saw">
+            <pre className="sp-pre">{JSON.stringify(game.detection_evidence, null, 2)}</pre>
+          </Collapsible>
         </form>
 
-        {game.parser_warnings.length > 0 && (
-          <Section title={`Parser warnings (${game.parser_warnings.length})`}>
-            <ul>{game.parser_warnings.map((w) => <li key={w}>{w}</li>)}</ul>
-          </Section>
-        )}
-
-        <Section title="Detection evidence" open={false}>
-          <pre>{JSON.stringify(game.detection_evidence, null, 2)}</pre>
-        </Section>
-
-        {!session.readOnly && <button className="danger" onClick={remove}>Remove from catalog</button>}
-      </section>
+        {!session.readOnly && <div className="sp-row"><button type="button" className="sp-btn sp-btn--danger" onClick={remove}>Remove from catalog</button></div>}
+      </div>
     </div>
   );
 }
@@ -555,51 +603,57 @@ export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: st
     return () => clearInterval(t);
   }, [busy]);
 
-  if (tid === undefined) return <p className="muted">Loading…</p>;
-  const back = <a href="#/installed" className="muted">← Installed</a>;
+  if (tid === undefined) return <p className="sp-muted">Loading…</p>;
   const g = copies[0];
-  if (!g) return <section>{back}<p>This game isn't on the console any more. If you moved it to this PC, it's in the <a href="#/">Library</a>.</p></section>;
+  if (!g) return <>
+    <PageHead back={["#/installed", "Installed"]} title="Not on the console" />
+    <div className="sp-panel">
+      <Empty icon="inbox" title="This game isn't on the console any more" text="If you moved it to this PC, it's in your library.">
+        <a className="sp-btn" href="#/">Open your library</a>
+      </Empty>
+    </div>
+  </>;
   const online = c?.state === "online";
 
   return (
-    <div className="detail">
-      <aside><Art key={g.id} g={g} /></aside>
-      <section>
-        {back}
-        <h1>{g.title}</h1>
-        <p className="muted">{g.game_id ? <a href={`#/game/${g.game_id}`}>Open in your PC library</a> : "Not in your PC library."}</p>
-        {!session.readOnly && (
-          <Section fixed>
-            <HomeLogo url={`/consoles/${consoleId}/home-logo/${g.title_id}`} consoleId={consoleId} />
-          </Section>
-        )}
+    <div className="sp-detail">
+      <aside className="sp-detail__aside"><Art key={g.id} g={g} /></aside>
+      <div className="sp-detail__main">
+        <PageHead back={["#/installed", "Installed"]} title={g.title}
+          desc={<><span className="sp-code">{g.title_id}</span> · {c?.name ?? "…"}</>}
+          actions={g.game_id && <a className="sp-btn" href={`#/game/${g.game_id}`}>Open in your PC library</a>} />
+        {!g.game_id && <Notice title="Not in your PC library" text="Move it to this PC to keep a copy there." />}
+        {!session.readOnly && <Tools>{[<HomeLogo key="logo" url={`/consoles/${consoleId}/home-logo/${g.title_id}`} consoleId={consoleId} />]}</Tools>}
         {copies.map((r) => {
           const smp = r.install_route === "shadowmountplus" && !r.removing && !r.moving && !session.readOnly;
           const drive = drives.find((d) => d.id === r.drive_id)?.label ?? "Unknown drive";
           return (
-            <Section key={r.id} title={copies.length > 1 ? `On ${drive}` : "On the console"}>
-              <dl className="facts">
+            <Panel key={r.id} title={copies.length > 1 ? `On ${drive}` : "On the console"}
+              badge={(r.removing || r.moving) && <Badge tone="info"><Spinner />{r.removing ? "Removing" : "Moving"}</Badge>}
+              foot={smp && <>
+                <span className="sp-panel__note">{!online ? `${c?.name ?? "The console"} must be online.` : "Close the game on the PS5 first."}</span>
+                <div className="sp-btngroup">
+                  {r.status !== "orphaned_icon" && <button type="button" className="sp-btn" {...needsOnline(c)} disabled={!online} onClick={() => setDialog({ kind: "move", game: r })}><Icon name="move" />Move…</button>}
+                  <button type="button" className="sp-btn sp-btn--danger" {...needsOnline(c)} disabled={!online} onClick={() => setDialog({ kind: "remove", game: r })}>Remove from console…</button>
+                </div>
+              </>}>
+              <dl className="sp-kv">
                 <dt>Console</dt><dd>{c?.name ?? "…"}</dd>
                 <dt>Drive</dt><dd>{drive}</dd>
-                <dt>Title ID</dt><dd><code>{r.title_id}</code></dd>
-                <dt>Version</dt><dd>{r.version ?? "Unknown"}</dd>
-                <dt>Size</dt><dd>{r.size_bytes ? formatBytes(r.size_bytes) : "Unknown"}</dd>
-                <dt>Path</dt><dd><code>{r.source_path ?? r.installed_path}</code></dd>
-                <dt>Last checked</dt><dd>{when(r.last_verified_at)}</dd>
+                <dt>Title ID</dt><dd><Path path={r.title_id} /></dd>
+                <dt>Version</dt><dd>{r.version ? <span className="sp-num">{r.version}</span> : <span className="sp-muted">Unknown</span>}</dd>
+                <dt>Size</dt><dd>{r.size_bytes ? <span className="sp-num">{formatBytes(r.size_bytes)}</span> : <span className="sp-muted">Unknown</span>}</dd>
+                <dt>Path</dt><dd><Path path={r.source_path ?? r.installed_path} copy /></dd>
+                <dt>Last checked</dt><dd><Time t={r.last_verified_at} /></dd>
               </dl>
-              {(r.removing || r.moving) && <p className="muted">{r.removing ? "Being removed…" : "Being moved…"}</p>}
-              {smp && (
-                <div className="toolbar">
-                  {r.status !== "orphaned_icon" && <button {...needsOnline(c)} disabled={!online} onClick={() => setDialog({ kind: "move", game: r })}>Move…</button>}
-                  <button className="secondary" {...needsOnline(c)} disabled={!online} onClick={() => setDialog({ kind: "remove", game: r })}>Remove from console…</button>
-                </div>
-              )}
-            </Section>
+            </Panel>
           );
         })}
-        <StoreImageBrowser url={`/titles/${g.title_id}/store-images`} />
-        {!session.readOnly && <SaveBackups tid={g.title_id} consoleId={consoleId} />}
-      </section>
+        <div className="sp-stack">
+          <StoreImageBrowser url={`/titles/${g.title_id}/store-images`} />
+          {!session.readOnly && <SaveBackups tid={g.title_id} consoleId={consoleId} />}
+        </div>
+      </div>
       {dialog?.kind === "move" && <MoveDialog consoleId={consoleId} game={dialog.game} drives={drives} onClose={() => { setDialog(null); load(); }} />}
       {dialog?.kind === "remove" && <RemoveDialog consoleId={consoleId} game={dialog.game} onClose={() => { setDialog(null); load(); }} />}
     </div>

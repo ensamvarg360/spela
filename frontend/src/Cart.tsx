@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api, formatBytes, formatLabel, needsOnline, useConsoles, type Drive, type Game, type Job } from "./api";
+import { Empty, Icon, Notice, PageHead, Panel } from "./ui";
 
 // The cart: game ids kept in this browser, so it survives reloads and moving between pages.
 // ponytail: per browser, not shared with the PS5 app's cart; move it to the PC's database if both should see one cart.
@@ -65,7 +66,7 @@ export default function Cart() {
     if (cid) api<Drive[]>(`/consoles/${cid}/drives`).then((ds) => setDrives(ds.filter((d) => d.is_install_target)), () => setDrives([]));
   }, [cid]);
 
-  if (!games) return <p className="muted">Loading…</p>;
+  if (!games) return <p className="sp-muted">Loading…</p>;
   const byId = new Map(games.map((g) => [g.id, g]));
   const items = inCart.map((id) => byId.get(id)).filter((g): g is Game => !!g); // a game since deleted from the library drops out
   const gameBytes = items.filter((g) => g.kind === "game").reduce((n, g) => n + g.size_bytes, 0);
@@ -83,54 +84,72 @@ export default function Cart() {
   }
 
   return (
-    <section className="card cart">
-      <h2>Cart</h2>
-      {result && (
-        <div role="status">
-          {result.queued > 0 && <p className="muted">Queued {result.queued}. They install one after another; follow them on the <a href="#/installed">Installed</a> page.</p>}
-          {result.failed.length > 0 && <>
-            <p className="error">Couldn't queue {result.failed.length}:</p>
-            <ul>{result.failed.map(([g, why]) => <li key={g.id}><strong>{g.title}</strong>: {why}</li>)}</ul>
-          </>}
-        </div>
+    <>
+      <PageHead title="Cart" desc="Add the games you want, then install them all at once. They're queued in this order and copied one after another." />
+      {result && result.queued > 0 && (
+        <Notice tone="success" title={`Queued ${result.queued}`}
+          text={<>They install one after another; follow them on the <a className="sp-link" href="#/installed">Installed</a> page.</>} />
       )}
-      {!items.length ? <p className="muted">Your cart is empty. Add games from the <a href="#/">Library</a>: press Select, pick some, then Add to cart. Or use Add to cart on a game's page.</p> : <>
-        <p className="muted">Add the games you want, then install them all at once. They're queued in this order and copied one after another.</p>
-        <div className="table-wrap">
-          <table className="audit">
-            <thead><tr><th>Game</th><th>Format</th><th>Size</th><th aria-label="Remove" /></tr></thead>
-            <tbody>
-              {items.map((g) => (
-                <tr key={g.id}>
-                  <td><a href={`#/game/${g.id}`}>{g.title}</a>{g.kind === "dlc" && <span className="muted"> · DLC</span>}{g.title_id && <> <code>{g.title_id}</code></>}</td>
-                  <td>{formatLabel(g)}</td>
-                  <td>{formatBytes(g.size_bytes)}</td>
-                  <td><button className="link" onClick={() => cart.remove([g.id])} aria-label={`Remove ${g.title} from the cart`}>Remove</button></td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot><tr><th>{items.length} {items.length === 1 ? "item" : "items"}</th><th /><th>{formatBytes(total)}</th><th /></tr></tfoot>
-          </table>
-        </div>
-        <div className="toolbar">
-          {!consoles.length ? <a href="#/settings">Add a PS5 to install</a> : <>
-            {consoles.length > 1 && (
-              <select aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
-                {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            )}
-            {gameBytes > 0 && (
-              <select aria-label="Drive" value={did} onChange={(e) => setDid(e.target.value)}>
-                <option value="">Drive with the most free space, for each game</option>
-                {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
-              </select>
-            )}
-            <button {...needsOnline(target)} disabled={busy || !!needsOnline(target).disabled} onClick={installAll}>{busy ? "Queuing…" : `Install all ${items.length}`}</button>
-          </>}
-          <button className="secondary" disabled={busy} onClick={() => cart.remove(items.map((g) => g.id))}>Empty cart</button>
-        </div>
-        {tooBig && <p className="error">These games need {formatBytes(gameBytes)}, and {drive.label} has {formatBytes(drive.free_bytes)} free. The ones that don't fit will fail when their turn comes.</p>}
-      </>}
-    </section>
+      {result && result.failed.length > 0 && (
+        <Notice tone="danger" title={`Couldn't queue ${result.failed.length}`}
+          text={<ul className="sp-bullets">{result.failed.map(([g, why]) => <li key={g.id}><strong>{g.title}</strong>: {why}</li>)}</ul>} />
+      )}
+      <Panel title="In your cart" badge={items.length > 0 && <span className="sp-badge sp-num">{items.length}</span>} flush
+        actions={items.length > 0 && <button type="button" className="sp-btn sp-btn--ghost" disabled={busy} onClick={() => cart.remove(items.map((g) => g.id))}>Empty cart</button>}
+        foot={items.length > 0 && <>
+          <span className="sp-panel__note sp-num">{items.length} {items.length === 1 ? "item" : "items"} · {formatBytes(total)}</span>
+          {!consoles.length ? <a className="sp-btn sp-btn--primary" href="#/settings">Add a PS5 to install</a> : (
+            <div className="sp-btngroup">
+              {consoles.length > 1 && (
+                <select className="sp-select sp-console-pick" aria-label="Console" value={cid} onChange={(e) => setCid(e.target.value)}>
+                  {consoles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              )}
+              {gameBytes > 0 && (
+                <select className="sp-select sp-console-pick" aria-label="Drive" value={did} onChange={(e) => setDid(e.target.value)}>
+                  <option value="">Drive with the most free space, for each game</option>
+                  {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
+                </select>
+              )}
+              <button type="button" className="sp-btn sp-btn--primary" {...needsOnline(target)} disabled={busy || !!needsOnline(target).disabled} onClick={installAll}>
+                {busy ? "Queuing…" : `Install all ${items.length}`}
+              </button>
+            </div>
+          )}
+        </>}>
+        {!items.length ? (
+          <Empty icon="cart" title="Your cart is empty" text="In the Library, press Select, pick some games, then Add to cart. Or use Add to cart on a game's page.">
+            <a className="sp-btn" href="#/">Open your library</a>
+          </Empty>
+        ) : <>
+          {tooBig && <div className="sp-listrow__more sp-listrow__more--top">
+            <Notice tone="warning" title={`${drive.label} has ${formatBytes(drive.free_bytes)} free`}
+              text={`These games need ${formatBytes(gameBytes)}. The ones that don't fit will fail when their turn comes.`} />
+          </div>}
+          <div className="sp-tablewrap">
+            <table className="sp-table">
+              <thead><tr><th>Game</th><th>Format</th><th className="sp-num">Size</th><th><span className="sp-visually-hidden">Remove</span></th></tr></thead>
+              <tbody>
+                {items.map((g) => (
+                  <tr key={g.id}>
+                    <td>
+                      <a className="sp-link" href={`#/game/${g.id}`}>{g.title}</a>
+                      {g.kind === "dlc" && <span className="sp-muted"> · DLC</span>}
+                      {g.title_id && <> <span className="sp-code">{g.title_id}</span></>}
+                    </td>
+                    <td className="sp-nowrap">{formatLabel(g)}</td>
+                    <td className="sp-nowrap sp-num">{formatBytes(g.size_bytes)}</td>
+                    <td className="sp-nowrap">
+                      <button type="button" className="sp-btn sp-btn--ghost sp-btn--danger sp-btn--icon sp-btn--sm" onClick={() => cart.remove([g.id])}
+                        aria-label={`Remove ${g.title} from the cart`} title="Remove from cart"><Icon name="trash" /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>}
+      </Panel>
+    </>
   );
 }

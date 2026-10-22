@@ -1,10 +1,11 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useState, type FormEvent } from "react";
 import Problem from "./Problem";
 import { api, type Game, type Kind, type Root, type ScanStatus } from "./api";
 import AuditLog from "./AuditLog";
 import { useScan } from "./Library";
 import { toast, toastError } from "./Toast";
 import Consoles from "./Consoles";
+import { Badge, Field, Icon, Notice, PageHead, Panel, Path, Spinner, Time } from "./ui";
 
 interface Listing { path: string; parent: string | null; dirs: string[] }
 
@@ -17,25 +18,29 @@ function FolderPicker({ start, onPick, onClose }: { start: string; onPick: (path
   const name = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() || p;
 
   return (
-    <div className="picker">
-      <div className="inline">
-        <button type="button" disabled={list?.parent == null} onClick={() => open(list!.parent!)}>Up</button>
-        <code className="picker-path">{list?.path || "Drives"}</code>
-        <button type="button" disabled={!list?.path} onClick={() => onPick(list!.path)}>Add this folder</button>
-        <button type="button" className="link" onClick={onClose}>Cancel</button>
+    <div className="sp-stack sp-grow">
+      <div className="sp-row">
+        <button type="button" className="sp-btn sp-btn--sm" disabled={list?.parent == null} onClick={() => open(list!.parent!)}>Up</button>
+        {list?.path ? <Path path={list.path} /> : <span className="sp-muted">Drives</span>}
+        <div className="sp-btngroup sp-push">
+          <button type="button" className="sp-btn sp-btn--ghost sp-btn--sm" onClick={onClose}>Cancel</button>
+          <button type="button" className="sp-btn sp-btn--primary sp-btn--sm" disabled={!list?.path} onClick={() => onPick(list!.path)}>Add this folder</button>
+        </div>
       </div>
       <Problem error={error} />
-      <ul className="picker-list">
-        {list?.dirs.map((d) => <li key={d}><button type="button" className="link" onClick={() => open(d)}>{name(d)}</button></li>)}
-        {list && !list.dirs.length && <li className="muted">No subfolders</li>}
+      <ul className="sp-boxed sp-boxed--scroll">
+        {list?.dirs.map((d) => (
+          <li key={d}><button type="button" className="sp-btn sp-btn--ghost sp-btn--sm sp-picker__dir" onClick={() => open(d)}><Icon name="folder" />{name(d)}</button></li>
+        ))}
+        {list && !list.dirs.length && <li className="sp-picker__none sp-muted">No subfolders</li>}
       </ul>
-      <p className="muted">The folder and every subfolder under it are scanned.</p>
+      <span className="sp-hint">The folder and every subfolder under it are scanned.</span>
     </div>
   );
 }
 
-/** One kind's library folders. Kind only sorts them into lists: what's DLC is told by content, wherever it is.
- *  `act` runs a change and reloads the roots; its errors show under this list. */
+/** One kind's library folders, as list rows ending in an add row. Kind only sorts them into lists: what's DLC is told
+ *  by content, wherever it is. `act` runs a change and reloads the roots; its errors show under this list. */
 export function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: (p: Promise<unknown>) => Promise<void> }) {
   const [path, setPath] = useState("");
   const [browsing, setBrowsing] = useState(false);
@@ -46,39 +51,56 @@ export function Folders({ kind, roots, act }: { kind: Kind; roots: Root[]; act: 
     e.preventDefault();
     addPath(path);
   };
-  const label = kind === "dlc" ? "DLC folder" : "library folder";
+  const label = kind === "dlc" ? "DLC folder" : "game folder";
 
   return (
-    <>
-      <ul className="roots">
-        {roots.filter((r) => r.kind === kind).map((r) => (
-          <li key={r.id}>
-            <label className="check">
-              <input type="checkbox" checked={r.enabled} onChange={(e) => actHere(api(`/library/roots/${r.id}`, { method: "PATCH", json: { enabled: e.target.checked } }))} />
-              <code>{r.path}</code>
+    <ul className="sp-list">
+      {roots.filter((r) => r.kind === kind).map((r) => (
+        <li key={r.id} className="sp-listrow">
+          <div className="sp-listrow__lead">
+            <label className="sp-switch">
+              <input type="checkbox" role="switch" checked={r.enabled}
+                onChange={(e) => actHere(api(`/library/roots/${r.id}`, { method: "PATCH", json: { enabled: e.target.checked } }))} />
+              <span className="sp-switch__track" />
+              <span className="sp-visually-hidden">Include {r.path} in scans</span>
             </label>
-            {!r.reachable && <span className="badge incompatible">Unreachable</span>}
-            <input
-              aria-label={`Exclude patterns for ${r.path}`}
-              placeholder="Exclude patterns, comma-separated (e.g. *.tmp, old/*)"
+            <Icon name="folder" className="sp-icon" />
+          </div>
+          <div className="sp-listrow__main">
+            <div className="sp-listrow__title">
+              <Path path={r.path} />
+              {!r.reachable && <Badge tone="danger">Unreachable</Badge>}
+              {!r.enabled && <Badge>Not scanned</Badge>}
+            </div>
+          </div>
+          <div className="sp-listrow__aside">
+            <input className="sp-input sp-input--sm sp-input--mono sp-exclude"
+              aria-label={`Exclude patterns for ${r.path}`} title="Comma-separated patterns to skip"
+              placeholder="Exclude, e.g. *.tmp, old/*"
               defaultValue={r.exclude_patterns.join(", ")}
               onBlur={(e) => {
                 const pats = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
                 if (pats.join() !== r.exclude_patterns.join()) actHere(api(`/library/roots/${r.id}`, { method: "PATCH", json: { exclude_patterns: pats } }));
               }}
             />
-            <button className="link" onClick={() => confirm(`Stop scanning ${r.path} and remove what it holds from the library? Files on disk are not touched.`) && actHere(api(`/library/roots/${r.id}`, { method: "DELETE" }))}>Remove</button>
-          </li>
-        ))}
-      </ul>
-      <form className="inline" onSubmit={add}>
-        <input required placeholder={kind === "dlc" ? "G:\\DLC" : "G:\\"} aria-label={`New ${label}`} value={path} onChange={(e) => setPath(e.target.value)} />
-        <button type="submit">Add folder</button>
-        <button type="button" onClick={() => setBrowsing(true)}>Browse…</button>
-      </form>
-      {browsing && <FolderPicker start={path} onPick={addPath} onClose={() => setBrowsing(false)} />}
-      <Problem error={error} />
-    </>
+            <button type="button" className="sp-btn sp-btn--ghost sp-btn--danger sp-btn--icon sp-btn--sm" aria-label={`Remove ${r.path}`} title="Remove folder"
+              onClick={() => confirm(`Stop scanning ${r.path} and remove what it holds from the library? Files on disk are not touched.`) && actHere(api(`/library/roots/${r.id}`, { method: "DELETE" }))}>
+              <Icon name="trash" />
+            </button>
+          </div>
+        </li>
+      ))}
+      <li className="sp-listrow">
+        {browsing ? <FolderPicker start={path} onPick={addPath} onClose={() => setBrowsing(false)} /> : (
+          <form className="sp-inputgroup sp-grow" onSubmit={add}>
+            <input className="sp-input sp-input--mono" required placeholder={kind === "dlc" ? "G:\\DLC" : "G:\\Games"} aria-label={`New ${label}`} value={path} onChange={(e) => setPath(e.target.value)} />
+            <button type="button" className="sp-btn" onClick={() => setBrowsing(true)}>Browse…</button>
+            <button type="submit" className="sp-btn"><Icon name="plus" />Add folder</button>
+          </form>
+        )}
+        {error ? <div className="sp-grow"><Problem error={error} /></div> : null}
+      </li>
+    </ul>
   );
 }
 
@@ -92,24 +114,29 @@ function ViewOnly() {
     try {
       setEnabled((await api<{ enabled: boolean }>("/auth/viewer", { json: { password: pw } })).enabled);
       setPassword("");
-      toast(pw ? "Saved. Devices using an older view-only password were logged out." : "View-only access is off. Devices using it were logged out.");
+      toast(pw ? "Saved. Devices using an older view-only password were signed out." : "View-only access is off. Devices using it were signed out.");
     } catch (e) {
       toastError(e);
     }
   }
 
   return (
-    <section className="card">
-      <h2>View-only access</h2>
-      <p className="muted">A second password that can browse the library, the dashboard and what's installed, but can't install,
-        remove or change anything, and can't open Settings. {enabled ? "It's on." : enabled === false ? "It's off." : ""}</p>
-      <form className="inline" onSubmit={(e: FormEvent) => (e.preventDefault(), save(password))}>
-        <input type="password" required minLength={8} autoComplete="new-password" aria-label="View-only password"
-          placeholder={enabled ? "New view-only password" : "View-only password (8 or more characters)"} value={password} onChange={(e) => setPassword(e.target.value)} />
-        <button type="submit">{enabled ? "Change" : "Turn on"}</button>
-        {enabled && <button type="button" className="link" onClick={() => save(null)}>Turn off</button>}
-      </form>
-    </section>
+    <form onSubmit={(e: FormEvent) => (e.preventDefault(), save(password))}>
+      <Panel title="View-only access" badge={enabled != null && (enabled ? <Badge tone="success">On</Badge> : <Badge>Off</Badge>)}
+        desc="A second password that can browse the library, the dashboard and what's installed, but can't install, remove or open Settings."
+        foot={<>
+          <span className="sp-panel__note">Anyone with this password can see your library.</span>
+          <div className="sp-btngroup">
+            {enabled && <button type="button" className="sp-btn sp-btn--ghost" onClick={() => save(null)}>Turn off</button>}
+            <button type="submit" className="sp-btn sp-btn--primary">{enabled ? "Change password" : "Turn on"}</button>
+          </div>
+        </>}>
+        <Field label={enabled ? "New view-only password" : "View-only password"}>
+          <input className="sp-input" type="password" required minLength={8} autoComplete="new-password"
+            placeholder="At least 8 characters" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </Field>
+      </Panel>
+    </form>
   );
 }
 
@@ -117,9 +144,13 @@ function ViewOnly() {
 export function NothingFound({ report }: { report: NonNullable<ScanStatus["report"]> }) {
   return <Problem error="Nothing in these folders looks like a PS5 game." fix={"Spela recognizes game folders with sce_sys/param.json " +
     "inside, .exfat, .ffpkg, .ffpfs and .pkg files, and .zip, .7z and .rar archives that hold one of them. " +
-    (report.unknown.length ? `${report.unknown.length} files couldn't be identified; they're listed under "unknown" in Settings. ` : "") +
+    (report.unknown.length ? `${report.unknown.length} files couldn't be identified; they're listed under "Not identified" in Settings. ` : "") +
     "Check that the folder holds your backups, or add the one that does."} />;
 }
+
+const REPORT_LABEL: Record<keyof NonNullable<ScanStatus["report"]>, string> = {
+  added: "Added", updated: "Updated", missing: "Missing", unknown: "Not identified", invalid: "Invalid", errors: "Errors",
+};
 
 export default function Settings() {
   const [roots, setRoots] = useState<Root[]>([]);
@@ -137,59 +168,60 @@ export default function Settings() {
     load();
   }, []);
 
-
   const act = (p: Promise<unknown>) => p.then(load);
 
   const startScan = () => (setError(""), api("/library/scan", { method: "POST" })
     .then(() => (setFinished(false), setScan((s) => ({ ...s!, running: true }))), setError));
+  const report = !scan?.running && scan?.report;
   const counts = (r: NonNullable<ScanStatus["report"]>) =>
-    `${r.added.length} added, ${r.updated.length} updated, ${r.missing.length} missing${r.errors.length ? `, ${r.errors.length} errors` : ""}`;
+    `${r.added.length} added, ${r.updated.length} updated, ${r.missing.length} missing${r.errors.length ? `, ${r.errors.length} errors` : ""}.`;
 
   return (
-    <div className="settings">
-      <p className="muted">New here? The <a href="#/setup">setup guide</a> takes you through it step by step.</p>
-      <section className="card">
-        <h2>Game folders</h2>
-        <p className="muted">A folder or a whole drive, e.g. <code>G:\</code>. Every subfolder is scanned too. Folders are only ever read.</p>
+    <>
+      <PageHead title="Settings" desc="Spela only ever reads your folders. Console passwords are stored encrypted and never shown again."
+        actions={<a className="sp-btn" href="#/setup">Setup guide</a>} />
+
+      <Panel title="Game folders" desc="A folder or a whole drive. Every subfolder is scanned too." flush>
         <Folders kind="game" roots={roots} act={act} />
-        <h2>DLC folders</h2>
-        <p className="muted">Where you keep DLC packages and DLC unlocker folders. DLC inside game folders is found too, and
-          shows on the DLC page either way.</p>
+      </Panel>
+      <Panel title="DLC folders" desc="Where you keep DLC packages and unlocker folders. DLC inside game folders is found too." flush>
         <Folders kind="dlc" roots={roots} act={act} />
-        <Problem error={error} />
-        <div className="toolbar scan-bar">
-          <button onClick={startScan} disabled={scan?.running || !roots.length}>
-            {scan?.running ? <><span className="spinner" aria-hidden />Scanning…</> : "Scan now"}
-          </button>
-          <span role="status" className={finished && scan?.report?.errors.length ? "error" : "muted"}>
-            {scan?.running ? "Scanning every folder in both lists. A large drive can take a few minutes; you can leave this page."
-              : finished && scan?.report ? <>Scan finished: {counts(scan.report)}. See them in the <a href="#/">Library</a> or on the <a href="#/dlc">DLC</a> page.</>
-              : null}
-          </span>
-        </div>
-        {finished && empty && !scan?.running && scan?.report && (
-          <NothingFound report={scan.report} />
-        )}
-        {scan?.report && !scan.running && (
-          <>
-            <p className="muted">Last scan finished {new Date(scan.finished_at!).toLocaleString()}</p>
-            <ul className="report">
-              {Object.entries(scan.report).map(([k, v]) => (
-                <li key={k}>
-                  <details>
-                    <summary>{k}: {v.length}</summary>
-                    <ul>{v.map((p) => <li key={p}><code>{p}</code></li>)}</ul>
-                  </details>
-                </li>
+      </Panel>
+
+      <Panel title="Library scan" badge={scan?.running && <Badge tone="info"><Spinner />Scanning</Badge>}
+        desc="Reads every folder in both lists. A large drive can take a few minutes, and you can leave this page meanwhile."
+        foot={<>
+          <span className="sp-panel__note">{scan?.finished_at ? <>Last scan <Time t={scan.finished_at} /></> : "No scan since the app started."}</span>
+          <button type="button" className="sp-btn sp-btn--primary" onClick={startScan} disabled={scan?.running || !roots.length}
+            title={!roots.length ? "Add a folder first." : undefined}><Icon name="refresh" />Scan now</button>
+        </>}>
+        {(error || report) ? <>
+          <Problem error={error} />
+          {finished && report && (empty ? <NothingFound report={report} /> : (
+            <Notice tone={report.errors.length ? "warning" : "success"} title="Scan finished"
+              text={<>{counts(report)} See them in the <a className="sp-link" href="#/">Library</a> or on the <a className="sp-link" href="#/dlc">DLC</a> page.</>} />
+          ))}
+          {report && (
+            <dl className="sp-kv">
+              {(Object.keys(REPORT_LABEL) as (keyof typeof REPORT_LABEL)[]).map((k) => (
+                <Fragment key={k}>
+                  <dt>{REPORT_LABEL[k]}</dt>
+                  <dd>{report[k].length ? (
+                    <details className="sp-disclosure">
+                      <summary><Icon name="chevronRight" /><span className="sp-num">{report[k].length}</span> {report[k].length === 1 ? "item" : "items"}</summary>
+                      <div className="sp-stack sp-stack--tight">{report[k].map((p) => <Path key={p} path={p} />)}</div>
+                    </details>
+                  ) : <span className="sp-muted sp-num">0</span>}</dd>
+                </Fragment>
               ))}
-            </ul>
-          </>
-        )}
-      </section>
+            </dl>
+          )}
+        </> : null}
+      </Panel>
 
       <Consoles />
       <ViewOnly />
       <AuditLog />
-    </div>
+    </>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { Tone } from "./ui";
 
 // ponytail: hand-written types mirroring backend/app/main.py; generate from /openapi.json once the API settles.
 export type Status = "ready" | "needs_attention" | "incompatible" | "unknown";
@@ -287,5 +288,11 @@ export const SOURCE_LABEL: Record<string, string> = {
   none: "Unknown",
 };
 
+/** Each status's badge tone, in the design system's fixed vocabulary. */
+export const STATUS_TONE: Record<Status, Tone> = { ready: "success", needs_attention: "warning", incompatible: "danger", unknown: "" };
+
+const FORMAT_LABEL: Record<string, string> = {
+  folder_dump: "Folder dump", ps5_pkg: "PS5 package", ps4_pkg: "PS4 package", archive: "Archive", unlocker: "DLC unlocker",
+};
 export const formatLabel = (g: Game) =>
-  g.image_subtype ? `image · ${g.image_subtype}` : g.format === "unlocker" ? "DLC unlocker" : g.format.replace("_", " ");
+  g.image_subtype ? `Disc image (.${g.image_subtype})` : FORMAT_LABEL[g.format] ?? g.format.charAt(0).toUpperCase() + g.format.slice(1).replace(/_/g, " ");
