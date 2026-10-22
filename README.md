@@ -119,7 +119,8 @@ docker run -d --name spela --restart unless-stopped --network host \
 
 **Good to know**
 
-- **Set the password within 10 minutes** of the container's first start. After that, Spela asks for a setup code: it's in the container's log (`docker logs spela`), or restart the container to get another 10 minutes. It's only asked when no password is set yet.
+- **Set the password within 10 minutes** of the container's first start. After that, Spela asks for a setup code: it's in the container's log (`docker logs spela`), or restart the container to get another 10 minutes. It's only asked when no password is set yet. In those 10 minutes anyone on your network may set it, and with a bridge network Docker makes every visitor look like it's on your network, so never forward the port from your router.
+- **Run it as your own user** instead of root by adding `user: "1000:1000"` to the compose file (or `--user 1000:1000`), with the data folder owned by that user. A data folder an earlier root run made needs `sudo chown -R 1000:1000` on it first.
 - **Add your games as `/games/...`** in Spela, not by the NAS's own path: that's where the container sees them.
 - **Host networking** (`--network host`, already in the compose file) lets Spela find your PS5 by itself. With a bridge network (`-p 8787:8787` instead) everything still works, but you type the PS5's IP address in yourself. If the page never loads: on **Docker Desktop** (any OS), host networking is off unless you turn it on (Settings → Resources → Network), so use the bridge network there; on Linux, host networking also skips Docker's firewall rules, so allow port 8787 yourself (`sudo ufw allow 8787/tcp`).
 - **Opening Spela by name**, like `http://tower.local:8787` or through a reverse proxy, is refused unless you list the name in `ALLOWED_HOSTS` (comma-separated). That blocks a [DNS rebinding](#safety) attack.

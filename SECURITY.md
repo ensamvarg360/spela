@@ -20,6 +20,7 @@ Include the version (shown in the app's header), what you did and what happened.
 
 - Exposing the app to the internet. It's built for your LAN only and says so; don't do it.
 - Anyone who already has your Windows account or your data folder (it holds the keys).
+- Someone who can watch your home network's traffic. Spela talks to the console's helper over plain HTTP, so the helper's key travels unencrypted, as it does inside the helper sent to the console's ELF loader. With that key, the helper reads any file on the console and writes in its homebrew folders. On a home network you trust this is fine; on shared Wi-Fi it isn't.
 - The console jailbreak, the ELF loader or ShadowMountPlus themselves. Report those to their authors.
 
 ## Supported versions
