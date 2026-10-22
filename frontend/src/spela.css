@@ -237,4 +237,49 @@ a.sp-stat:hover { background: var(--row-hover); border-color: var(--border-stron
 .sp-cover__title { font-size: 13px; line-height: 18px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-cover__ph { position: absolute; inset: 0; display: grid; place-items: center; padding: var(--space-3); text-align: center; font-size: 12px; color: var(--text-muted); }
 
-@media (prefers-reduced-motion: reduce) { .sp-app * { transition: none !important; } }
+/* ---------- Game card, large (art + gradient name box) ---------- */
+.sp-gamegrid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--gamecard-min), 1fr)); gap: var(--space-6) var(--space-5); align-items: stretch; }
+.sp-gamegrid > li { position: relative; display: flex; min-width: 0; }
+.sp-gamecard { --gc-top: var(--surface); --gc-bottom: var(--surface-raised); --gc-glow: rgba(0, 0, 0, 0.6); --gc-ring: transparent;
+  position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; border-radius: var(--radius-card); overflow: hidden; isolation: isolate;
+  background: var(--bg); color: var(--text); text-decoration: none; box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.6);
+  transition: transform .5s cubic-bezier(.22, 1, .36, 1), box-shadow .5s cubic-bezier(.22, 1, .36, 1); }
+.sp-gamecard:hover, .sp-gamecard:focus-visible { transform: translateY(-4px); box-shadow: 0 22px 44px -14px var(--gc-glow), 0 0 0 1px var(--gc-ring); }
+.sp-gamecard__art { position: relative; aspect-ratio: 2 / 3; max-width: 100%; overflow: hidden; background: var(--surface-raised); }
+.sp-gamecard__art img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .9s cubic-bezier(.22, 1, .36, 1); }
+.sp-gamecard:hover .sp-gamecard__art img, .sp-gamecard:focus-visible .sp-gamecard__art img { transform: scale(1.05); }
+.sp-gamecard__art::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 38%; pointer-events: none; background: linear-gradient(180deg, rgba(7, 9, 13, 0), var(--gc-top)); }
+.sp-gamecard__art > .sp-badge--new { position: absolute; top: 10px; left: 10px; z-index: 1; box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.6); }
+.sp-gamecard__fav { position: absolute; top: 8px; right: 8px; z-index: 1; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--scrim); color: var(--text); cursor: pointer; }
+.sp-gamecard__fav svg { width: 16px; height: 16px; fill: none; }
+.sp-gamecard__fav[aria-pressed="true"] { color: var(--favorite); }
+.sp-gamecard__fav[aria-pressed="true"] svg { fill: currentColor; }
+.sp-gamecard__body { flex: 1; display: flex; flex-direction: column; gap: 10px; padding: 4px 14px 14px; background: linear-gradient(180deg, var(--gc-top), var(--gc-bottom)); }
+.sp-gamecard__head { display: flex; align-items: flex-start; gap: 10px; }
+.sp-gamecard__titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sp-gamecard__title { font: 600 15px/20px var(--font-sans); letter-spacing: -0.005em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.sp-gamecard__genre { font-size: 12px; line-height: 16px; color: rgba(255, 255, 255, 0.74); }
+.sp-gamecard__publisher { font-size: 11.5px; line-height: 16px; color: rgba(255, 255, 255, 0.56); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-gamecard__foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-top: auto; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+.sp-gamecard__size { font-size: 11.5px; color: rgba(255, 255, 255, 0.6); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* PlayStation Store score ring */
+.sp-score { flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.sp-score__ring { position: relative; width: 38px; height: 38px; }
+.sp-score__ring svg { display: block; width: 38px; height: 38px; transform: rotate(-90deg); }
+.sp-score__track { fill: rgba(7, 9, 13, 0.35); stroke: rgba(255, 255, 255, 0.14); stroke-width: 3; }
+.sp-score__arc { fill: none; stroke: var(--score-high); stroke-width: 3; stroke-linecap: round; }
+.sp-score--mid .sp-score__arc { stroke: var(--score-mid); }
+.sp-score--low .sp-score__arc { stroke: var(--score-low); }
+.sp-score__value { position: absolute; inset: 0; display: grid; place-items: center; font: 700 12px/1 var(--font-sans); color: #ffffff; font-variant-numeric: tabular-nums; }
+.sp-score__count { font-size: 10px; line-height: 12px; color: rgba(255, 255, 255, 0.56); font-variant-numeric: tabular-nums; }
+
+/* Status pill on art-tinted ground */
+.sp-statuspill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px 0 8px; border-radius: var(--radius-pill); background: rgba(255, 255, 255, 0.1); color: var(--text); font: 600 11.5px/1 var(--font-sans); white-space: nowrap; }
+.sp-statuspill .sp-dot { width: 7px; height: 7px; }
+.sp-statuspill--success .sp-dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.sp-statuspill--info .sp-dot { background: var(--accent-text); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sp-statuspill--warning .sp-dot { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
+.sp-statuspill--danger .sp-dot { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+
+@media (prefers-reduced-motion: reduce) { .sp-app * { transition: none !important; } .sp-gamecard:hover, .sp-gamecard:focus-visible { transform: none; } }

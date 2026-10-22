@@ -30,6 +30,10 @@
   --danger: #f87171;
   --danger-soft: rgba(239, 68, 68, 0.14);
   --danger-solid: #dc2626;
+  --score-high: #8ff0b0;
+  --score-mid: #fcd34d;
+  --score-low: #fca5a5;
+  --favorite: #facc15;
   --scrim: rgba(11, 14, 20, 0.72);
 
   --font-sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -47,6 +51,7 @@
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  --radius-card: 14px;
   --radius-pill: 999px;
 
   --control-sm: 32px;
@@ -55,6 +60,7 @@
   --page-max: 1200px;
   --page-narrow: 820px;
   --cover-min: 160px;
+  --gamecard-min: 190px;
 
   --ring: 0 0 0 3px rgba(59, 130, 246, 0.35);
   --popover: 0 12px 32px rgba(0, 0, 0, 0.45);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { api, appVersion, coverUrl, formatLabel, groupCopies, needsOnline, session, STATUS_LABEL, useConsoles, type Console, type Game, type Kind, type ScanStatus, type StoreInfo } from "./api";
+import { api, appVersion, coverUrl, formatBytes, formatLabel, groupCopies, needsOnline, session, STATUS_LABEL, useConsoles, type Console, type Game, type Kind, type ScanStatus, type StoreInfo } from "./api";
 import { cart, confirmBatch, queueAll } from "./Cart";
 import { STATE_LABEL, STATE_TONE } from "./Installed";
 import Problem from "./Problem";
@@ -140,12 +140,17 @@ function InstallBar({ kind, picked, shown, setPicked }: { kind: Kind; picked: Se
   );
 }
 
-// cover width in px from the size slider; GAP is .sp-covergrid's gap (--space-4)
-const TILE_MIN = 100, TILE_MAX = 200, GAP = 16;
-/** How many covers of at least `px` fit in a row `width` wide; covers then stretch to fill it. */
-const colsFor = (width: number, px: number) => Math.max(1, Math.floor((width + GAP) / (px + GAP)));
-/** The width covers get with `n` to a row, so each size step adds or removes one cover per row. */
-const tileFor = (width: number, n: number) => Math.floor((width + GAP) / n - GAP);
+// card width in px from the size slider; from TILE_LARGE up the large game card shows, below it the poster-only one
+const TILE_MIN = 80, TILE_MAX = 190, TILE_LARGE = 140;
+// the grids' column gaps in px: .sp-covergrid's --space-4, .sp-gamegrid's --space-5
+const gapFor = (px: number) => (px < TILE_LARGE ? 16 : 20);
+/** How many cards of at least `px` fit in a row `width` wide; cards then stretch to fill it. */
+const colsFor = (width: number, px: number) => Math.max(1, Math.floor((width + gapFor(px)) / (px + gapFor(px))));
+/** The width cards get with `n` to a row, so each size step adds or removes one card per row. */
+const tileFor = (width: number, n: number) => {
+  const px = Math.floor((width + 20) / n - 20);
+  return px < TILE_LARGE ? Math.min(TILE_LARGE - 1, Math.floor((width + 16) / n - 16)) : px;
+};
 
 /** The grid of games, or of DLC: DLC shares its game's title ID, so its tiles show the game's art. */
 export default function Library({ kind, view, setView }: { kind: Kind; view: View; setView: (v: View) => void }) {
@@ -155,7 +160,7 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
   const [filtersOpen, setFiltersOpen] = useState(false); // phones only: the sidebar sits behind a button
   const [picked, setPicked] = useState<Set<string> | null>(null); // null = not selecting; tiles open their game
   const [tile, setTile] = useState(() => { try { return Number(localStorage.getItem("tileSize")) || TILE_MAX; } catch { return TILE_MAX; } });
-  const [grid, setGrid] = useState<HTMLDivElement | null>(null);
+  const [grid, setGrid] = useState<HTMLElement | null>(null);
   const [width, setWidth] = useState(0); // the grid's, which decides how many cards fit a row
   useEffect(() => {
     if (!grid) return;
@@ -285,14 +290,16 @@ export default function Library({ kind, view, setView }: { kind: Kind; view: Vie
             </span>
           </div>
           {picked && <InstallBar kind={kind} picked={picked} shown={shown} setPicked={setPicked} />}
-          {shown.length
-            ? <div ref={setGrid} className="sp-covergrid" style={{ "--cover-min": `${tile}px` } as CSSProperties}>{shown.map((g) => (
-              <Tile key={g.id} game={g} tooNew={tooNew.has(g.id)} onChange={changed} picked={picked && picked.has(g.id)} onPick={() => {
-                const next = new Set(picked);
-                if (!next.delete(g.id)) next.add(g.id);
-                setPicked(next);
-              }} />
-            ))}</div>
+          {shown.length ? (() => {
+            const props = (g: Game) => ({ game: g, tooNew: tooNew.has(g.id), onChange: changed, picked: picked && picked.has(g.id), onPick: () => {
+              const next = new Set(picked);
+              if (!next.delete(g.id)) next.add(g.id);
+              setPicked(next);
+            } });
+            return tile >= TILE_LARGE
+              ? <ul ref={setGrid} className="sp-gamegrid" style={{ "--gamecard-min": `${tile}px` } as CSSProperties}>{shown.map((g) => <LargeTile key={g.id} {...props(g)} />)}</ul>
+              : <div ref={setGrid} className="sp-covergrid" style={{ "--cover-min": `${tile}px` } as CSSProperties}>{shown.map((g) => <Tile key={g.id} {...props(g)} />)}</div>;
+          })()
             : <div className="sp-panel">
               <Empty icon="filter" title={`No ${noun} match`} text="Try other filters, or another search.">
                 <button type="button" className="sp-btn" onClick={clear}>Clear filters</button>
@@ -313,22 +320,121 @@ function chip(game: Game, tooNew: boolean): [string, Tone, IconName] | null {
   return null;
 }
 
-/** `picked`: null when not selecting; otherwise a click ticks the cover instead of opening the game. */
-function Tile({ game, tooNew, onChange, picked, onPick }: { game: Game; tooNew: boolean; onChange: (id: string, changes: Partial<Game>) => void; picked: boolean | null; onPick: () => void }) {
-  const loaded = () => {
-    // asked once the art loads, so only covers that have scrolled into view ask the store
-    if (game.title_id && !game.store) api<StoreInfo | null>(`/games/${game.id}/store`).then((i) => i && onChange(game.id, { store: i }), () => {});
-  };
-  const favorite = () => api<Game>(`/games/${game.id}`, { method: "PATCH", json: { favorite: !game.favorite } })
-    .then((g) => onChange(game.id, { favorite: g.favorite, new: false }), toastError);
+/** `picked`: null when not selecting; otherwise a click ticks the card instead of opening the game. */
+type TileProps = { game: Game; tooNew: boolean; onChange: (id: string, changes: Partial<Game>) => void; picked: boolean | null; onPick: () => void };
+
+// asked once the art loads, so only cards that have scrolled into view ask the store
+const askStore = ({ game, onChange }: TileProps) => {
+  if (game.title_id && !game.store) api<StoreInfo | null>(`/games/${game.id}/store`).then((i) => i && onChange(game.id, { store: i }), () => {});
+};
+const toggleFavorite = ({ game, onChange }: TileProps) => api<Game>(`/games/${game.id}`, { method: "PATCH", json: { favorite: !game.favorite } })
+  .then((g) => onChange(game.id, { favorite: g.favorite, new: false }), toastError);
+const selecting = ({ picked, onPick }: TileProps) => ({
+  onClick: picked !== null ? (e: React.MouseEvent) => { e.preventDefault(); onPick(); } : undefined,
+  "aria-pressed": picked ?? undefined, role: picked !== null ? "button" : undefined,
+});
+
+/** The large card's one status pill. */
+const PILL: Record<Game["compatibility_status"], [string, Tone]> = {
+  ready: ["Ready to install", "info"], needs_attention: ["Needs check", "warning"], incompatible: ["Incompatible", "danger"], unknown: ["Unknown", ""],
+};
+function pill(game: Game, tooNew: boolean): [string, Tone] {
+  if (game.installed) return ["Installed", "success"];
+  if (tooNew) return ["Firmware too old", "danger"];
+  return PILL[game.compatibility_status];
+}
+
+/** "842", "3.1k", "21.5k" */
+const abbreviate = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`);
+
+/** The PlayStation Store score as a ring: mint from 4.0, amber from 3.0, red below. */
+function Score({ rating, count }: { rating: number; count: number }) {
+  const label = `${rating.toFixed(1)} out of 5 from ${count.toLocaleString()} ratings on PlayStation Store`;
+  return (
+    <div className={rating >= 4 ? "sp-score" : rating >= 3 ? "sp-score sp-score--mid" : "sp-score sp-score--low"} title={label}>
+      <div className="sp-score__ring">
+        <svg viewBox="0 0 38 38" role="img" aria-label={label}>
+          <circle className="sp-score__track" cx="19" cy="19" r="16" />
+          <circle className="sp-score__arc" cx="19" cy="19" r="16" strokeDasharray={`${((rating / 5) * 100.5).toFixed(1)} 100.5`} />
+        </svg>
+        <span className="sp-score__value" aria-hidden>{rating.toFixed(1)}</span>
+      </div>
+      <span className="sp-score__count" aria-hidden>{abbreviate(count)}</span>
+    </div>
+  );
+}
+
+/** The large card: art fading into a name box tinted from it, with genre, publisher, store score, status and size. */
+function LargeTile(props: TileProps) {
+  const { game, tooNew, picked } = props;
+  const [colors, setColors] = useState<CSSProperties>();
+  const info = game.store;
+  const genre = [info?.genres[0] ?? game.genre, year(game)].filter(Boolean).join(" · ");
+  const [status, tone] = pill(game, tooNew);
+
+  return (
+    <li>
+      <a className={picked ? "sp-gamecard sp-gamecard--picked" : "sp-gamecard"} href={`#/game/${game.id}`} style={colors} {...selecting(props)}>
+        <Cover game={game} className="sp-gamecard__art" onLoad={(img) => (setColors(sampleColors(img)), askStore(props))}>
+          {picked !== null ? <span className="sp-cover__pick sp-gamecard__pick" aria-hidden>{picked && <Icon name="check" />}</span>
+            : game.new && <span className="sp-badge sp-badge--new">New</span>}
+        </Cover>
+        <div className="sp-gamecard__body">
+          <div className="sp-gamecard__head">
+            <div className="sp-gamecard__titles">
+              <strong className="sp-gamecard__title">{game.title}</strong>
+              {genre && <span className="sp-gamecard__genre">{genre}</span>}
+              {info?.publisher && <span className="sp-gamecard__publisher">{info.publisher}</span>}
+            </div>
+            {!!info?.rating && <Score rating={info.rating} count={info.rating_count} />}
+          </div>
+          <div className="sp-gamecard__foot">
+            <span className={tone ? `sp-statuspill sp-statuspill--${tone}` : "sp-statuspill"}><span className="sp-dot" />{status}</span>
+            <span className="sp-gamecard__size">{game.copies ? `${game.copies.length} versions` : formatBytes(game.size_bytes)}</span>
+          </div>
+        </div>
+      </a>
+      {/* a sibling, not inside the link: a button can't be nested in a link */}
+      {picked === null && !session.readOnly && (
+        <button type="button" className="sp-gamecard__fav" aria-pressed={game.favorite}
+          aria-label={game.favorite ? `Remove ${game.title} from favorites` : `Add ${game.title} to favorites`} onClick={() => toggleFavorite(props)}>
+          <Icon name="star" />
+        </button>
+      )}
+    </li>
+  );
+}
+
+/** The name box's colors, as the design system's GameCardLarge sets them: the art drawn at 8×8, its bottom two rows
+ *  averaged (edge) and its most saturated pixel (vivid), each mixed into near-black. */
+function sampleColors(img: HTMLImageElement): CSSProperties | undefined {
+  const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+  if (!ctx) return;
+  ctx.drawImage(img, 0, 0, 8, 8);
+  const px = ctx.getImageData(0, 0, 8, 8).data;
+  const edge = [0, 0, 0];
+  let vivid = [0, 0, 0], best = -1;
+  for (let i = 0; i < 64; i++) {
+    const rgb = [px[i * 4], px[i * 4 + 1], px[i * 4 + 2]];
+    if (i >= 48) rgb.forEach((v, k) => (edge[k] += v / 16)); // bottom two rows
+    const saturation = Math.max(...rgb) - Math.min(...rgb);
+    if (saturation > best) [best, vivid] = [saturation, rgb];
+  }
+  const NEAR_BLACK = [7, 9, 13]; // #07090d
+  const mix = (c: number[], share: number) => `rgb(${c.map((v, k) => Math.round(v * share + NEAR_BLACK[k] * (1 - share))).join(" ")})`;
+  const alpha = (a: number) => `rgb(${vivid.join(" ")} / ${a})`;
+  return { "--gc-top": mix(edge, 0.5), "--gc-bottom": mix(vivid, 0.42), "--gc-glow": alpha(0.65), "--gc-ring": alpha(0.45) } as CSSProperties;
+}
+
+/** The small, poster-only card. */
+function Tile(props: TileProps) {
+  const { game, tooNew, picked } = props;
   const state = chip(game, tooNew);
 
   return (
     <div className="sp-coveritem">
-      <a className={picked ? "sp-cover sp-cover--picked" : "sp-cover"} href={`#/game/${game.id}`}
-        onClick={picked !== null ? (e) => { e.preventDefault(); onPick(); } : undefined}
-        aria-pressed={picked ?? undefined} role={picked !== null ? "button" : undefined}>
-        <Cover game={game} onLoad={loaded}>
+      <a className={picked ? "sp-cover sp-cover--picked" : "sp-cover"} href={`#/game/${game.id}`} {...selecting(props)}>
+        <Cover game={game} onLoad={() => askStore(props)}>
           <div className="sp-cover__top">
             {picked !== null ? <span className="sp-cover__pick" aria-hidden>{picked && <Icon name="check" />}</span>
               : game.new && <span className="sp-badge sp-badge--new">New</span>}
@@ -343,7 +449,7 @@ function Tile({ game, tooNew, onChange, picked, onPick }: { game: Game; tooNew: 
       {/* a sibling, not inside the link: a button can't be nested in a link */}
       {picked === null && !session.readOnly && (
         <button type="button" className="sp-cover__chip sp-cover__fav" aria-pressed={game.favorite} title={game.favorite ? "Remove from favorites" : "Add to favorites"}
-          aria-label={`Favorite ${game.title}`} onClick={favorite}><Icon name="star" filled={game.favorite} /></button>
+          aria-label={`Favorite ${game.title}`} onClick={() => toggleFavorite(props)}><Icon name="star" filled={game.favorite} /></button>
       )}
     </div>
   );
@@ -351,18 +457,18 @@ function Tile({ game, tooNew, onChange, picked, onPick }: { game: Game; tooNew: 
 
 /** The store's portrait key art, else the game's own cover: filling the art box when it's a portrait too (an uploaded
  *  poster), else (a square icon) whole, on a blurred copy of itself. `children` are the overlays on the art. */
-export function Cover({ game, onLoad, children }: { game: Game; onLoad?: (img: HTMLImageElement) => void; children?: ReactNode }) {
+export function Cover({ game, className = "sp-cover__art", onLoad, children }: { game: Game; className?: string; onLoad?: (img: HTMLImageElement) => void; children?: ReactNode }) {
   const cover = coverUrl(game);
   const [src, setSrc] = useState(game.title_id ? `/api/v1/games/${game.id}/poster?v=${encodeURIComponent(game.updated_at)}` : cover);
   const [portrait, setPortrait] = useState(false);
-  if (!src) return <div className="sp-cover__art"><span className="sp-cover__ph">{game.title}</span>{children}</div>;
+  if (!src) return <div className={className}><span className="sp-cover__ph">{game.title}</span>{children}</div>;
   const square = src === cover && !portrait;
   const loaded = (img: HTMLImageElement) => {
     setPortrait(img.naturalHeight >= img.naturalWidth * 1.2);
     onLoad?.(img);
   };
   return (
-    <div className={square ? "sp-cover__art sp-cover__art--square" : "sp-cover__art"} style={square ? ({ "--art": `url("${src}")` } as CSSProperties) : undefined}>
+    <div className={square ? `${className} sp-cover__art--square` : className} style={square ? ({ "--art": `url("${src}")` } as CSSProperties) : undefined}>
       <img src={src} alt="" loading="lazy" onLoad={(e) => loaded(e.currentTarget)} onError={() => setSrc(src === cover ? null : cover)} />
       {children}
     </div>
