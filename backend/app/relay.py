@@ -33,7 +33,7 @@ def _forward(method: str, path: str, auth: str) -> tuple[int, bytes]:
     except urllib.error.HTTPError as e:
         return e.code, e.read()
     except OSError:
-        return 502, b"Spela on your PC couldn't answer. Restart it from its tray icon."
+        return 502, f"Spela on your PC couldn't answer. {config.RESTART.capitalize()}.".encode()
 
 
 def serve_one(host: str, key: str, port: int = HelperConsoleAdapter.HELPER_PORT) -> bool:

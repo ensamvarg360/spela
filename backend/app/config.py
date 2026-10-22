@@ -23,6 +23,11 @@ SETUP_DISMISSED_FILE = DATA_DIR / "setup_dismissed"  # the Dashboard's setup che
 LAN_FILE = DATA_DIR / "allow_other_devices"
 HOST = os.environ.get("HOST") or ("0.0.0.0" if LAN_FILE.exists() else "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8787"))
+# Names the app may be opened by besides IP addresses and localhost (e.g. "tower.local,spela.home.lan"); any other
+# name is refused, against DNS rebinding (main.check_host).
+ALLOWED_HOSTS = {h.strip().lower() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()}
+DOCKER = bool(os.environ.get("SPELA_DOCKER"))  # set in the Docker image: messages talk about the container, not a tray icon
+RESTART = "restart the container" if DOCKER else "restart Spela from its tray icon"
 
 
 def _secret_key() -> str:

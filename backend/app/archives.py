@@ -24,7 +24,7 @@ JOB_PREFIX = "job-"  # cleanup only ever deletes these, whatever STAGING_DIR poi
 def blocker(path: str) -> str | None:
     """Why this archive can't be installed, or None."""
     if not TAR:
-        return "This PC has no archive extractor (Windows' tar.exe). Extract the archive yourself, then scan again."
+        return "There's no archive extractor (bsdtar, or Windows' tar.exe). Extract the archive yourself, then scan again."
     p = Path(path)
     if re.search(r"\.part0*1\.rar$", p.name, re.I) or p.with_suffix(".z01").exists():
         return "Multi-part RAR and spanned ZIP sets can't be extracted here. Extract it yourself, then scan again."

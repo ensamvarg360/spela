@@ -19,7 +19,7 @@ $venv = "$PSScriptRoot\build\venv"
 if (-not (Test-Path $venv)) { python -m venv $venv }
 # setuptools reuses backend\build\lib and skips files whose source looks older, which shipped stale code
 Remove-Item -Recurse -Force "$PSScriptRoot\backend\build" -ErrorAction SilentlyContinue
-& "$venv\Scripts\python" -m pip install --quiet "$PSScriptRoot\backend" pyinstaller
+& "$venv\Scripts\python" -m pip install --quiet "$PSScriptRoot\backend[desktop]" pyinstaller
 # the splash gets the version stamped on its bottom edge, so it always matches the build
 & "$venv\Scripts\python" -c @"
 from PIL import Image, ImageDraw, ImageFont

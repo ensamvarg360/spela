@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app import config
 from app.database import SessionLocal
+from app import main
 from app.main import app
 from app.models import Game
 
@@ -14,7 +15,8 @@ def test_flow(library):
         assert c.post("/api/v1/auth/login", json={"password": "password1"}).status_code == 409
         assert c.post("/api/v1/auth/setup", json={"password": "short"}).status_code == 422
         r = c.post("/api/v1/auth/setup", json={"password": "password1"})
-        assert r.status_code == 403 and "tray icon" in r.json()["fix"]  # not from loopback; says where to do it
+        assert r.status_code == 403 and "app.log" in r.json()["fix"]  # not from loopback: needs the code; says where it is
+        assert c.post("/api/v1/auth/setup", json={"password": "password1", "code": "nope"}).json()["message"] == "Wrong setup code."
     # DNS rebinding: a website that points its own name at 127.0.0.1 must not reach setup (or anything else)
     with TestClient(app, base_url="http://evil.example:8787", client=("127.0.0.1", 50000)) as rebound:
         assert rebound.post("/api/v1/auth/setup", json={"password": "password1"}).status_code == 421
@@ -22,6 +24,15 @@ def test_flow(library):
         assert local.post("/api/v1/auth/setup", json={"password": "password1"}).status_code == 200
         assert local.get("/api/v1/auth/me").json() == {"user": "admin"}
         assert local.post("/api/v1/auth/setup", json={"password": "password2"}).status_code == 409
+    with TestClient(app, base_url="http://127.0.0.1") as c:  # the right code gets past the check, to "already set up"
+        code = main.SETUP_CODE.lower()
+        assert c.post("/api/v1/auth/setup", json={"password": "password2", "code": code}).status_code == 409
+    config.ALLOWED_HOSTS.add("tower.local")  # a NAS opened by its name
+    try:
+        with TestClient(app, base_url="http://tower.local:8787") as c:
+            assert c.get("/api/v1/health").status_code == 200
+    finally:
+        config.ALLOWED_HOSTS.discard("tower.local")
     with TestClient(app, base_url="http://127.0.0.1") as c:
         assert c.get("/api/v1/games").json()["error"] == "authentication_required"
         assert c.post("/api/v1/auth/login", json={"password": "nope"}).status_code == 401

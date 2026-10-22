@@ -4,7 +4,9 @@ import hmac
 import io
 import ipaddress
 import json
+import logging
 import os
+import secrets
 import shutil
 import sys
 import threading
@@ -38,6 +40,9 @@ from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, L
 async def lifespan(app: FastAPI):
     config.COVERS_DIR.mkdir(parents=True, exist_ok=True)
     migrations.upgrade(engine)
+    if not config.PASSWORD_FILE.exists():  # on a NAS the browser is elsewhere, so setup needs this code (setup())
+        logging.getLogger(__name__).warning("First run: to set the admin password from another device, enter the "
+                                            "setup code %s", SETUP_CODE)
     tasks = [asyncio.create_task(jobs.worker())]
     if config.SCAN_INTERVAL_MINUTES > 0:
         tasks.append(asyncio.create_task(_scheduled_scans()))
@@ -70,13 +75,14 @@ def _direct_host(host: str) -> bool:
         ipaddress.ip_address(name)
         return True
     except ValueError:
-        return name == "localhost"
+        return name == "localhost" or name in config.ALLOWED_HOSTS
 
 
 @app.middleware("http")
 async def check_host(request: Request, call_next):
     if not _direct_host(request.headers.get("host", "")):
-        return JSONResponse({"error": "bad_host", "message": "Open the app by its IP address, as the tray icon shows."}, 421)
+        how = "or add this name to ALLOWED_HOSTS" if config.DOCKER else "as the tray icon shows"
+        return JSONResponse({"error": "bad_host", "message": f"Open the app by its IP address, {how}."}, 421)
     return await call_next(request)
 
 
@@ -152,6 +158,10 @@ class LoginIn(BaseModel):
 
 class SetupIn(BaseModel):
     password: str = Field(min_length=8, max_length=200)
+    code: str = ""  # SETUP_CODE, needed when setting it up from another device
+
+
+SETUP_CODE = secrets.token_hex(5).upper()  # logged at startup while no password is set; new on every start
 
 
 def _hash(password: str, salt: bytes) -> bytes:
@@ -178,10 +188,19 @@ def _require_setup_done():
 
 @public.post("/auth/setup")
 def setup(body: SetupIn, request: Request, db: Session = Depends(get_db)):
-    """First run only: sets the admin password. Allowed only from this PC, so nobody on the LAN can claim it first."""
-    if not request.client or request.client.host not in ("127.0.0.1", "::1"):
-        raise HTTPException(403, {"error": "local_only", "message": "The first password has to be set on the PC running Spela.",
-                                  "fix": "On that PC, open Spela from its tray icon and set it there. Then reload this page."})
+    """First run only: sets the admin password. From another device only with the setup code from Spela's log, so
+    nobody else on the LAN can claim it first."""
+    ip = request.client.host if request.client else "?"
+    if ip not in ("127.0.0.1", "::1") and not hmac.compare_digest(body.code.strip().upper(), SETUP_CODE):
+        recent = [t for t in _failures.get(ip, []) if time.time() - t < 60]
+        if len(recent) >= 5:
+            raise HTTPException(429, {"error": "rate_limited", "message": "Too many attempts. Wait a minute."})
+        if body.code:
+            _failures[ip] = recent + [time.time()]
+        where = ("in the container's log (docker logs spela)" if config.DOCKER else
+                 "in app.log in Spela's data folder. Or set the password on the PC running Spela, from its tray icon")
+        raise HTTPException(403, {"error": "setup_code", "message": "Wrong setup code." if body.code else "Enter the setup code.",
+                                  "fix": f"It's {where}."})
     salt = os.urandom(16)
     try:
         with open(config.PASSWORD_FILE, "x") as f:  # exclusive create: the first setup wins
@@ -201,8 +220,8 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     recent = [t for t in _failures.get(ip, []) if time.time() - t < 60]
     if len(recent) >= 5:
         raise HTTPException(429, {"error": "rate_limited", "message": "Too many attempts. Wait a minute.",
-                                  "fix": "Forgot it? On the PC running Spela, delete admin_password in %LOCALAPPDATA%\\Spela "
-                                         "and restart Spela from its tray icon to choose a new one."})
+                                  "fix": f"Forgot it? Delete admin_password in {config.DATA_DIR} and {config.RESTART} "
+                                         "to choose a new one."})
     role = next((r for r in PASSWORD_FILES if _check_password(body.password, r)), None)
     db.add(AuditLog(action="login", result="success" if role else "failed", details={"ip": ip, **({"role": role} if role else {})}))
     db.commit()
@@ -591,7 +610,8 @@ def add_root(body: RootIn, db: Session = Depends(get_db)):
     path = os.path.realpath(body.path)
     if not os.path.isabs(body.path):
         raise HTTPException(400, {"error": "invalid_root", "message": f"{body.path} isn't a full path.",
-                                  "fix": "Start it with a drive letter, like G:\\Games, or click Browse… to pick the folder."})
+                                  "fix": ("Start it with a drive letter, like G:\\Games" if os.name == "nt" else "Start it with /, like /games")
+                                         + ", or click Browse… to pick the folder."})
     if not os.path.isdir(path):
         raise HTTPException(400, {"error": "invalid_root", "message": f"There's no folder at {body.path}.",
                                   "fix": "Is the drive plugged in? Drive letters can change when it's plugged in again. "
@@ -599,8 +619,8 @@ def add_root(body: RootIn, db: Session = Depends(get_db)):
     try:
         os.scandir(path).close()
     except OSError:
-        raise HTTPException(400, {"error": "invalid_root", "message": f"Windows won't let Spela read {body.path}.",
-                                  "fix": "Pick a folder inside it instead, or check its permissions in File Explorer."})
+        raise HTTPException(400, {"error": "invalid_root", "message": f"Spela isn't allowed to read {body.path}.",
+                                  "fix": "Pick a folder inside it instead, or check its permissions."})
     if db.scalar(select(LibraryRoot).where(LibraryRoot.path == path)):
         raise HTTPException(409, {"error": "duplicate_root", "message": "That folder is already in the list."})
     r = LibraryRoot(path=path, enabled=body.enabled, exclude_patterns=body.exclude_patterns, kind=body.kind)

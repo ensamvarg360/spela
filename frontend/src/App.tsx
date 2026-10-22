@@ -138,13 +138,16 @@ function UpdateBadge({ newer }: { newer: Newer }) {
 function Login({ setup, onLogin }: { setup: boolean; onLogin: (u: string) => void }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [code, setCode] = useState("");
+  // Setting it up from another device (a NAS's, say) needs the code Spela writes to its log.
+  const remote = setup && !["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
   const [error, setError] = useState<unknown>("");
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (setup && password !== confirm) return setError("The passwords don't match.");
     try {
-      const { user } = await api<{ user: string }>(setup ? "/auth/setup" : "/auth/login", { json: { password } });
+      const { user } = await api<{ user: string }>(setup ? "/auth/setup" : "/auth/login", { json: setup ? { password, code } : { password } });
       if (setup) location.hash = "#/setup"; // first run: straight to the checklist
       onLogin(user);
     } catch (err) {
@@ -157,8 +160,13 @@ function Login({ setup, onLogin }: { setup: boolean; onLogin: (u: string) => voi
       <Panel title={<img src={wordmark} alt="Spela" />}
         desc={setup ? "Welcome! Choose an admin password. You'll use it to sign in, from other devices too." : undefined}
         foot={<button type="submit" className="sp-btn sp-btn--primary">{setup ? "Set password" : "Sign in"}</button>}>
+        {remote && (
+          <Field label="Setup code" hint="It's in Spela's log. On Docker: docker logs spela.">
+            <input className="sp-input" autoFocus required autoComplete="off" spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} />
+          </Field>
+        )}
         <Field label={setup ? "New admin password" : "Admin password"} hint={setup ? "At least 8 characters." : undefined}>
-          <input className="sp-input" type="password" autoFocus required minLength={setup ? 8 : undefined} autoComplete={setup ? "new-password" : "current-password"}
+          <input className="sp-input" type="password" autoFocus={!remote} required minLength={setup ? 8 : undefined} autoComplete={setup ? "new-password" : "current-password"}
             value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
         {setup && (
