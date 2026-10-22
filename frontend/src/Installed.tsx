@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import Problem, { StatusNote } from "./Problem";
 import { api, appVersion, formatBytes, JOB_ACTIVE, needsOnline, session, wakeConsole, type Console, type ConsoleState, type Drive, type InstalledGame, type Job, type JobStatus, type Move, type Removal, type Root } from "./api";
-import { Badge, Bar, Empty, Field, Icon, Meter, Notice, PageHead, Panel, Path, Spinner, Time, utc, type Tone } from "./ui";
+import { Badge, Bar, Empty, Field, Icon, Meter, Notice, PageHead, Panel, Path, Search, Spinner, Time, utc, type Tone } from "./ui";
 
 const JOB_LABEL: Record<JobStatus, [string, Tone]> = {
   queued: ["Waiting", "info"], preflight: ["Checking", "info"], extracting: ["Extracting", "info"], transferring: ["Copying", "info"],
@@ -421,9 +421,8 @@ export default function Installed() {
 
       {games.length > 0 ? (
         <div className="sp-stack">
-          <div className="sp-row">
-            <input className="sp-input sp-search sp-grow-field" type="search" placeholder="Search title or title ID" aria-label="Search installed games" value={q} onChange={(e) => setQ(e.target.value)} />
-            <span className="sp-muted sp-num">{shown.length === titles.length ? `${titles.length} games` : `${shown.length} of ${titles.length} games`}</span>
+          <div className="sp-toolbar">
+            <Search value={q} onChange={setQ} shown={shown.length} total={titles.length} noun="games" label="Search installed games" />
           </div>
           <div className="sp-covergrid sp-covergrid--small">
             {shown.map((copies) => {

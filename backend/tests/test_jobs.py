@@ -291,6 +291,7 @@ def test_job_runs_to_success_then_blocks_reinstall(ps5, monkeypatch):
         assert db.scalar(select(InstalledGame).where(InstalledGame.console_id == c.id, InstalledGame.title_id == "PPSA03333"))
         assert jobs.blocker(db, c, dump) == "Already installed on this console."
         assert told == [("Dump PPSA03333: installed", "Installed on USB drive 0. All 3 files checked.")]
+    assert {k: jobs.recent[0][k] for k in ("title", "ok")} == {"title": "Dump PPSA03333: installed", "ok": True}  # the bell's copy
 
 
 def test_second_copy_of_a_title_is_never_installed(ps5):

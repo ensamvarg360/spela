@@ -56,7 +56,7 @@ function Install({ game: opened }: { game: Game }) {
       "Close the game on the PS5 first. To undo it, remove the game and install it again.")) return;
     try {
       await api<Job>(`/consoles/${cid}/install`, { json: { game_id: game.id, drive_id: did || null } });
-      toast(<>Queued {game.title}. <a className="sp-link" href="#/installed">Follow it on the Installed page</a></>);
+      toast(`Queued ${game.title}.`, false, ["Follow it on the Installed page", "#/installed"]);
     } catch (e) {
       toastError(e);
     }
@@ -66,7 +66,7 @@ function Install({ game: opened }: { game: Game }) {
     if (!installed || !confirm(`Move ${game.title} to the chosen drive? The console copies it, checks the copy, then deletes the original. Close the game on the PS5 first.`)) return;
     try {
       await api(`/consoles/${cid}/move`, { json: { installed_game_id: installed.id, drive_id: did } });
-      toast(<>Moving {game.title}. <a className="sp-link" href="#/installed">Follow it on the Installed page</a></>);
+      toast(`Moving ${game.title}.`, false, ["Follow it on the Installed page", "#/installed"]);
     } catch (e) {
       toastError(e);
     }

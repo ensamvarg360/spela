@@ -8,7 +8,7 @@ import GameDetail, { ConsoleGameDetail } from "./GameDetail";
 import Installed from "./Installed";
 import Settings from "./Settings";
 import Setup from "./Setup";
-import Toasts from "./Toast";
+import Toasts, { Bell } from "./Toast";
 import { Field, Icon, Notice, Panel } from "./ui";
 import wordmark from "./wordmark.png";
 
@@ -71,6 +71,7 @@ export default function App() {
         <div className="sp-topnav__end">
           {newer && !session.readOnly && <a className="sp-badge sp-badge--info" href={newer.url} target="_blank" rel="noreferrer" title="Download the new version from GitHub">v{newer.version} available</a>}
           {session.readOnly && <span className="sp-badge" title="Logged in with the view-only password: you can look, not change anything.">View only</span>}
+          <Bell />
           {!session.readOnly && (
             <a href="#/cart" className={inCart.length ? "sp-btn sp-btn--ghost" : "sp-btn sp-btn--ghost sp-btn--icon"} title="Cart"
               aria-label={`Cart${inCart.length ? `, ${inCart.length} items` : ""}`} aria-current={route === "/cart" ? "page" : undefined}>

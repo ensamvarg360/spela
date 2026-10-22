@@ -269,6 +269,11 @@ def latest_release() -> dict | None:
     return _release
 
 
+@api.get("/notifications")
+def notifications():
+    return list(jobs.recent)  # installs, moves and conversions that ended, newest first
+
+
 @api.get("/update")
 def update():
     r = latest_release()

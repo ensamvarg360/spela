@@ -9,11 +9,13 @@ Conversions turn a folder dump into an .exfat disc image next to it, on this PC 
 Moves copy an installed game to another drive on the console itself, then delete the original."""
 import asyncio
 import filecmp
+import itertools
 import logging
 import os
 import re
 import shutil
 import threading
+from collections import deque
 import time
 from pathlib import Path
 from typing import Callable
@@ -33,7 +35,13 @@ log = logging.getLogger(__name__)
 notify: Callable[[str, str], None] | None = None  # (title, message); the launcher shows it as a Windows notification
 
 
-def _notify(title: str, message: str):
+# ponytail: memory only, a restart forgets them. The PC app's bell polls this.
+recent: deque[dict] = deque(maxlen=30)
+_notified = itertools.count()
+
+
+def _notify(title: str, message: str, ok: bool = True):
+    recent.appendleft({"id": next(_notified), "title": title, "message": message, "ok": ok, "at": time.time()})
     if notify:
         try:
             notify(title, message)
@@ -154,7 +162,7 @@ def _finish(db: Session, job: InstallJob, status: str, message: str, error: dict
     db.commit()
     if status != "canceled":  # the user canceled it, so they know
         title = game.title if game else "Install"
-        _notify(f"{title}: {'installed' if status == 'success' else status}", message)
+        _notify(f"{title}: {'installed' if status == 'success' else status}", message, status == "success")
 
 
 def _pick_drive(db: Session, console: Console, job: InstallJob, drives: list[DriveInfo], needed: int) -> DriveInfo:
@@ -601,7 +609,7 @@ async def _move(move_id: str):
                         details={"to": dest or m["drive_label"], "message": m["message"]}))
         db.commit()
         if m["status"] != "canceled":
-            _notify(f"{m['title']}: {'moved' if m['status'] == 'success' else 'move failed'}", m["message"])
+            _notify(f"{m['title']}: {'moved' if m['status'] == 'success' else 'move failed'}", m["message"], m["status"] == "success")
         if m["status"] == "success" and not m["tile_left"]:
             m["message"] += " " + await _logo_once_listed(db, console, m["title_id"])
 
@@ -701,7 +709,7 @@ async def _move_to_pc(move_id: str):
                         details={"to": str(dest), "message": m["message"]}))
         db.commit()
         if m["status"] != "canceled":
-            _notify(f"{m['title']}: {'moved to this PC' if m['status'] == 'success' else 'move failed'}", m["message"])
+            _notify(f"{m['title']}: {'moved to this PC' if m['status'] == 'success' else 'move failed'}", m["message"], m["status"] == "success")
 
 
 # ---------------------------------------------------------------- save data backups (read from the console only)
@@ -930,7 +938,7 @@ async def _convert(game_id: str):
         finally:
             _convert_stop.pop(game_id, None)
         if c["status"] != "canceled":
-            _notify(f"{dest.name}: {'converted' if c['status'] == 'success' else 'conversion failed'}", c["message"])
+            _notify(f"{dest.name}: {'converted' if c['status'] == 'success' else 'conversion failed'}", c["message"], c["status"] == "success")
         db.add(AuditLog(action="convert", title_id=title_id, target_path=str(dest),
                         result={"success": "success", "canceled": "canceled"}.get(c["status"], "failed"),
                         details={"source": source, "message": c["message"]}))

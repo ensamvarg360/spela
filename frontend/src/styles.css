@@ -50,23 +50,12 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .sp-browse { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: var(--space-6); align-items: start; }
 .sp-browse > .sp-facets { position: sticky; top: 72px; max-height: calc(100vh - 88px); overflow-y: auto; scrollbar-width: thin; }
 .sp-browse__main { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
-.sp-filters-toggle { display: none; }
 
-.sp-search { padding-left: 36px; background: var(--surface-sunken) no-repeat 12px center / 16px
-  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa3b2' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E"); }
-.sp-inputgroup > .sp-search { flex: 1 1 220px; }
 
-.sp-tilesize { display: flex; align-items: center; gap: var(--space-2); color: var(--text-muted); }
-.sp-tilesize svg { width: 14px; height: 14px; fill: currentColor; stroke: none; }
-.sp-tilesize input { -webkit-appearance: none; appearance: none; width: 100px; height: 16px; margin: 0; background: none; cursor: pointer; }
-.sp-tilesize input::-webkit-slider-runnable-track { height: 4px; border-radius: var(--radius-pill); background: var(--track); }
-.sp-tilesize input::-moz-range-track { height: 4px; border-radius: var(--radius-pill); background: var(--track); }
-.sp-tilesize input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border: none; border-radius: 50%; background: var(--accent); }
-.sp-tilesize input::-moz-range-thumb { width: 14px; height: 14px; border: none; border-radius: 50%; background: var(--accent); }
 
-.sp-sort { display: flex; align-items: center; gap: var(--space-2); }
 .sp-check__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sp-pickbar { position: sticky; top: 72px; z-index: 5; display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3) var(--space-4); box-shadow: var(--popover); }
+.sp-selectionbar { top: 72px; } /* under the sticky top bar */
+.sp-covergrid--posters-small { --cover-min: 110px; }
 
 /* a cover's buttons sit beside its link, not in it (a button can't be inside a link), placed over the art */
 .sp-coveritem { position: relative; min-width: 0; }
@@ -104,12 +93,11 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
   .sp-browse { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
   .sp-browse > .sp-facets { position: static; max-height: none; }
   .sp-browse > .sp-facets:not(.sp-facets--open) { display: none; }
-  .sp-filters-toggle { display: inline-flex; }
-  .sp-tilesize { display: none; } /* phones keep two covers per row */
+  .sp-toolbar__filters { display: inline-flex; } /* the sidebar hides from here, not from 640px */
   .sp-covergrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sp-gamegrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4) var(--space-3); }
   .sp-gamecard__foot { flex-wrap: wrap; row-gap: var(--space-1); } /* two cards to a row: the size drops under the pill */
-  .sp-pickbar { top: 0; }
+  .sp-selectionbar { top: 0; }
   .sp-topnav { position: static; }
   /* iOS zooms into any field whose text is under 16px, and stays zoomed */
   .sp-input, .sp-select, .sp-textarea { font-size: 16px; }
@@ -145,10 +133,10 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .sp-dialog { width: min(560px, calc(100vw - 32px)); padding: 0; border: 0; background: transparent; color: var(--text); border-radius: var(--radius-lg); box-shadow: var(--popover); }
 .sp-dialog::backdrop { background: var(--scrim); }
 
-.sp-toasts { position: fixed; right: var(--space-4); bottom: var(--space-4); z-index: 100; display: grid; gap: var(--space-2); width: min(420px, calc(100vw - 32px)); }
-.sp-toast { box-shadow: var(--popover); animation: sp-toast-in .18s ease-out; }
-.sp-toast .sp-notice__icon { color: var(--success); }
-.sp-toast .sp-notice__text { color: var(--text); }
-.sp-toast--danger .sp-notice__icon { color: var(--danger); }
-@keyframes sp-toast-in { from { opacity: 0; transform: translateY(8px); } }
-@media (prefers-reduced-motion: reduce) { .sp-toast { animation: none; } }
+.sp-toasts { z-index: 100; } /* over the dialog's backdrop too */
+a.sp-toast__action { display: inline-flex; align-items: center; text-decoration: none; }
+/* the bell's panel is a native popover: dropped under the top bar's right end, a full-width sheet on phones */
+.sp-ncenter[popover] { inset: 64px var(--space-4) auto auto; margin: 0; padding: 0; color: var(--text); }
+.sp-ncenter:not(:popover-open) { display: none; }
+@media (max-width: 560px) { .sp-ncenter[popover] { inset: 56px 0 auto; width: 100%; max-height: calc(100vh - 56px); border-radius: 0 0 var(--radius-lg) var(--radius-lg); } }
+@media (max-width: 560px) { .sp-toasts { right: 16px; left: 16px; width: auto; } }
