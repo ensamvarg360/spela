@@ -1,4 +1,6 @@
+import hmac
 import os
+import re
 import secrets
 import socket
 from pathlib import Path
@@ -44,6 +46,20 @@ def _secret_key() -> str:
 SECRET_KEY = os.environ.get("SECRET_KEY") or _secret_key()
 # Console passwords are encrypted with a key derived from this. Changing it makes saved passwords unreadable.
 CREDENTIALS_ENCRYPTION_KEY = os.environ.get("CREDENTIALS_ENCRYPTION_KEY") or SECRET_KEY
+# The key this install writes into the helper it sends. Paste another Spela's here (Settings → Helper key) and both
+# talk to one helper: a PC and a NAS, or a dev build. Delete the file to go back to this install's own.
+HELPER_KEY_FILE = DATA_DIR / "helper_key"
+HELPER_KEY_RE = re.compile(r"[0-9a-f]{64}")  # KEY_LEN in payload/main.c
+
+
+def helper_key() -> str:
+    """SPELA_HELPER_KEY, else a pasted key, else this install's own (derived from SECRET_KEY)."""
+    if key := os.environ.get("SPELA_HELPER_KEY"):
+        return key.strip().lower()
+    try:
+        return HELPER_KEY_FILE.read_text().strip()
+    except FileNotFoundError:
+        return hmac.new(SECRET_KEY.encode(), b"helper", "sha256").hexdigest()
 
 SCAN_INTERVAL_MINUTES = int(os.environ.get("SCAN_INTERVAL_MINUTES", "60"))  # 0 disables
 CONSOLE_CHECK_SECONDS = int(os.environ.get("CONSOLE_CHECK_SECONDS", "15"))  # console health checks; 0 disables

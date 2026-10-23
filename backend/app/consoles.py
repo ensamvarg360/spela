@@ -51,8 +51,9 @@ def other_pc(owner: str) -> str:
     return f"Another Spela ({owner}) is already connected to this PS5 and runs its helper." if owner else OTHER_PC
 
 
-OTHER_PC_FIX = ("Use that one, or click Install helper in Settings → Consoles to move the helper here. "
-                "Spela doesn't take it over by itself, or the two would keep replacing each other's.")
+OTHER_PC_FIX = ("To use it from here too, copy its key from Settings → Helper key in that Spela and paste it into this "
+                "one's. Or click Install helper in Settings → Consoles to move the helper here. Spela doesn't take it "
+                "over by itself, or the two would keep replacing each other's.")
 
 
 def not_answering(host: str) -> str:
@@ -495,9 +496,27 @@ def send_wake(host: str, credential: str):
         s.sendto(msg, (host, DDP_PORT))
 
 
-def helper_key(console_id: str | None) -> str:
-    """The key the helper on this console demands on every request. Derived, not stored: one per console and PC."""
+def helper_key() -> str:
+    """The key every helper this install sends demands on each request. One for all consoles, so installs that
+    share it (config.HELPER_KEY_FILE) share helpers too."""
+    return config.helper_key()
+
+
+def legacy_helper_key(console_id: str | None) -> str:
+    """The per-console key helpers from before v0.7.6 hold. Only used to tell such a helper is ours, so it's replaced."""
     return hmac.new(config.SECRET_KEY.encode(), f"helper:{console_id}".encode(), "sha256").hexdigest()
+
+
+def ours(helper_status: dict) -> bool:
+    """Whether this install sent the running helper. Installs sharing a key reach each other's, but only the sender
+    updates it and the PS5 app, and relays for it: the others would swap in their own version, or answer the PS5
+    app with the wrong pairing key. Helpers before the owner label say nothing, and count as ours."""
+    return helper_status.get("helper_owner", "") in ("", config.INSTANCE_NAME)
+
+
+def running(info: dict) -> dict:
+    """helper_status for a helper that answered with our key."""
+    return {"helper": info["version"], "helper_owner": str(info.get("owner") or "")}
 
 
 def helper_elf(key: str) -> bytes:
@@ -578,7 +597,7 @@ class FTPConsoleAdapter:
     def __init__(self, console: Console, password: str | None = None):
         self.host, self.port = console.ip_address, console.port
         self.user, self.password = console.username or "anonymous", password or ""
-        self.key = helper_key(console.id)
+        self.key, self.legacy_key = helper_key(), legacy_helper_key(console.id)
 
     def _session(self) -> ftplib.FTP:
         ftp = _FTP(timeout=self.TIMEOUT, encoding="utf-8")
@@ -625,13 +644,19 @@ class FTPConsoleAdapter:
     def _no_helper(self) -> dict:
         """Why _helper() got nothing: {"helper": "other_pc", "helper_owner": its name} when a helper runs but holds
         another Spela's key (another PC, or Docker on a NAS), else {"helper": "missing"}. Sending ours would push
-        theirs out, and theirs would push ours back."""
+        theirs out, and theirs would push ours back. One holding our pre-v0.7.6 key is ours: "missing", so it's replaced."""
         req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/info", headers={HELPER_KEY_HEADER: self.key})
         try:
             urllib.request.urlopen(req, timeout=3).close()
         except urllib.error.HTTPError as e:
             if e.code != 401:
                 return {"helper": "missing"}
+            old = urllib.request.Request(req.full_url, headers={HELPER_KEY_HEADER: self.legacy_key})
+            try:
+                urllib.request.urlopen(old, timeout=3).close()
+                return {"helper": "missing"}
+            except OSError:
+                pass
             try:
                 owner = str(json.loads(e.read()).get("owner") or "")
             except (OSError, ValueError, AttributeError):
@@ -720,7 +745,7 @@ class FTPConsoleAdapter:
         banner, app = await self._run(lambda f: (f.getwelcome(), f.get(f"{CONSOLE_APP_PATH}/assets/version.txt")))
         info = await asyncio.to_thread(self._helper)
         return {"ftp": "ok", "banner": banner,
-                **({"helper": info["version"]} if info else await asyncio.to_thread(self._no_helper)),
+                **(running(info) if info else await asyncio.to_thread(self._no_helper)),
                 "console_app": app.decode(errors="replace").strip() if app else "missing"}, info
 
     def _ddp(self) -> bytes:
@@ -1546,7 +1571,7 @@ class HelperConsoleAdapter(FTPConsoleAdapter):
     so it works before the helper runs."""
 
     def __init__(self, console: Console, password: str | None = None):
-        self.host, self.key = console.ip_address, helper_key(console.id)
+        self.host, self.key, self.legacy_key = console.ip_address, helper_key(), legacy_helper_key(console.id)
 
     def _session(self) -> HelperFS:
         info = self._helper()
@@ -1559,7 +1584,7 @@ class HelperConsoleAdapter(FTPConsoleAdapter):
 
     async def _helper_status(self) -> tuple[dict, dict | None]:
         info, app = await self._run(lambda fs: (fs.info, fs.get(f"{CONSOLE_APP_PATH}/assets/version.txt")))
-        return {"helper": info["version"], "console_app": app.decode(errors="replace").strip() if app else "missing"}, info
+        return {**running(info), "console_app": app.decode(errors="replace").strip() if app else "missing"}, info
 
     async def connect(self) -> ConsoleStatus:
         try:
@@ -1568,9 +1593,11 @@ class HelperConsoleAdapter(FTPConsoleAdapter):
         except AdapterError as e:
             error = e
         info = await asyncio.to_thread(self._helper)
-        helper = {"helper": info["version"]} if info else await asyncio.to_thread(self._no_helper)
+        helper = running(info) if info else await asyncio.to_thread(self._no_helper)
         if info:  # running, but outdated
-            return ConsoleStatus("degraded", error.message, helper, error.fix)
+            fix = error.fix if ours(helper) else (f"{helper['helper_owner']} sent it and updates it when it updates. "
+                                                  "Bring both to the same version, or click Install helper to move it here.")
+            return ConsoleStatus("degraded", error.message, helper, fix)
         if helper["helper"] == "other_pc":
             return ConsoleStatus("degraded", other_pc(helper["helper_owner"]), helper, OTHER_PC_FIX)
         ddp = await asyncio.to_thread(self._ddp)

@@ -16,6 +16,7 @@ services:
       TZ: Etc/UTC
       # ALLOWED_HOSTS: tower.local  # names you open Spela by, besides its IP address (comma-separated)
       # SPELA_NAME: Docker · tower  # how another Spela names this one when it finds this one's helper on the PS5
+      # SPELA_HELPER_KEY: <64 letters and digits>  # another Spela's key (its Settings → Helper key), to share its helper
     volumes:
       - type: bind
         source: /DATA/AppData/spela

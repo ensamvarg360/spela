@@ -56,10 +56,9 @@ def serve_one(host: str, key: str, port: int = HelperConsoleAdapter.HELPER_PORT)
 
 
 def _worker(console_id: str, host: str):
-    key = helper_key(console_id)
     while _wanted.get(console_id) == host:  # stops when the console is removed, or its address changes
         try:
-            serve_one(host, key)
+            serve_one(host, helper_key())  # read each time: a key pasted in Settings applies at once
         except Exception:  # whatever a request holds, the worker keeps going (a control character raised InvalidURL)
             time.sleep(RETRY_SECONDS)
 
@@ -75,5 +74,11 @@ def ensure(console_id: str, host: str):
 
 
 def forget(console_id: str):
+    with _lock:
+        _wanted.pop(console_id, None)
+
+
+def stop(console_id: str):
+    """Stops the workers for this console (after the request each one is waiting on)."""
     with _lock:
         _wanted.pop(console_id, None)

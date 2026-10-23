@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from . import __version__, config, credentials, relay
-from .consoles import CONSOLE_APP_DIR, CONSOLE_APP_LOGO, CONSOLE_APP_TITLE_ID, TITLE_ID, AdapterError, ConsoleAdapter, ConsoleStatus, HelperConsoleAdapter, get_adapter
+from .consoles import CONSOLE_APP_DIR, CONSOLE_APP_LOGO, CONSOLE_APP_TITLE_ID, TITLE_ID, AdapterError, ConsoleAdapter, ConsoleStatus, HelperConsoleAdapter, get_adapter, ours
 from .database import SessionLocal
 from .models import AuditLog, Console, Drive, Game, InstalledGame, now
 
@@ -153,7 +153,10 @@ async def check(console_id: str) -> dict:
             console.last_seen_at, console.helper_status = now(), result.helper_status
             db.commit()
             if console.connection_type in ("helper", "ftp"):  # the helper runs: the PS5 app reaches the PC through it
-                relay.ensure(console.id, console.ip_address)
+                if ours(result.helper_status):
+                    relay.ensure(console.id, console.ip_address)
+                else:  # another install that shares our key sent it, and its PS5 app pairing
+                    relay.stop(console.id)
             if prev.get("state") != "online":
                 try:
                     await refresh(db, console)
@@ -167,7 +170,7 @@ async def _auto_helper(db: Session, console: Console, adapter: ConsoleAdapter, r
     this sends the helper (or replaces an outdated one) without the user clicking Install helper. True when it did.
     The console is on when it's online or degraded; offline and rest mode can't run payloads."""
     if (not console.auto_helper or console.connection_type not in ("helper", "ftp") or result.state not in ("online", "degraded")
-            or result.helper_status.get("helper") in (__version__, "other_pc")):
+            or result.helper_status.get("helper") in (__version__, "other_pc") or not ours(result.helper_status)):
         return False
     if time.monotonic() - _auto_helper_at.get(console.id, float("-inf")) < AUTO_HELPER_SECONDS:
         return False
@@ -187,7 +190,7 @@ async def _auto_console_app(db: Session, console: Console, adapter: ConsoleAdapt
     on its home-screen page (once per run of this PC app: the home screen keeps it). Never installs it on a console
     without it, so Remove PS5 app keeps it removed."""
     app = result.helper_status.get("console_app")
-    if (console.connection_type not in ("helper", "ftp") or result.state != "online"
+    if (console.connection_type not in ("helper", "ftp") or result.state != "online" or not ours(result.helper_status)
             or app in (None, "missing") or (app == __version__ and console.id in app_logo_set) or not CONSOLE_APP_DIR.is_dir()):
         return
     if time.monotonic() - _auto_app_at.get(console.id, float("-inf")) < AUTO_HELPER_SECONDS:

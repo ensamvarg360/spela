@@ -369,7 +369,7 @@ def test_relay_answers_the_ps5_app_through_the_helper(tmp_path, monkeypatch):
 
         class Helper(BaseHTTPRequestHandler):
             def do_GET(self):
-                assert self.headers["X-Storefront-Key"] == consoles.helper_key(cid)
+                assert self.headers["X-Storefront-Key"] == consoles.helper_key()
                 if jobs_left:
                     body = json.dumps(jobs_left.pop()).encode()
                     self.send_response(200)
@@ -397,8 +397,8 @@ def test_relay_answers_the_ps5_app_through_the_helper(tmp_path, monkeypatch):
             (r := client.request(method, path, headers={"Authorization": auth})).status_code, r.content))
         try:
             port = helper.server_address[1]
-            assert relay.serve_one("127.0.0.1", consoles.helper_key(cid), port)
-            assert not relay.serve_one("127.0.0.1", consoles.helper_key(cid), port)  # nothing waiting
+            assert relay.serve_one("127.0.0.1", consoles.helper_key(), port)
+            assert not relay.serve_one("127.0.0.1", consoles.helper_key(), port)  # nothing waiting
         finally:
             helper.shutdown()
         path, body = answers[0]
@@ -424,7 +424,7 @@ def test_relay_worker_survives_a_bad_request(monkeypatch):
         relay.forget("c1")  # second round: stop the loop
     monkeypatch.setattr(relay, "serve_one", serve_one)
     monkeypatch.setattr(relay, "RETRY_SECONDS", 0)
-    monkeypatch.setattr(relay, "helper_key", lambda cid: "k")
+    monkeypatch.setattr(relay, "helper_key", lambda: "k")
     relay._wanted["c1"] = "10.0.0.5"
     relay._worker("c1", "10.0.0.5")
     assert len(calls) == 2

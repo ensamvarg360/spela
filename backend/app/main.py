@@ -322,6 +322,34 @@ def set_viewer(body: ViewerIn, db: Session = Depends(get_db)):
     return viewer_status()
 
 
+class HelperKeyIn(BaseModel):
+    key: str | None = None  # null goes back to this install's own key
+
+
+@api.get("/helper-key", dependencies=[Depends(require_admin)])
+def helper_key_status():
+    """This install's helper key, to paste into another Spela so both use one helper. `source`: own, pasted or env."""
+    source = "env" if os.environ.get("SPELA_HELPER_KEY") else "pasted" if config.HELPER_KEY_FILE.exists() else "own"
+    return {"key": config.helper_key(), "source": source}
+
+
+@api.post("/helper-key")
+def set_helper_key(body: HelperKeyIn, db: Session = Depends(get_db)):
+    if os.environ.get("SPELA_HELPER_KEY"):
+        raise HTTPException(409, {"error": "key_from_env", "message": "SPELA_HELPER_KEY sets this install's helper key.",
+                                  "fix": "Change or remove it where Spela is started, then restart it."})
+    if body.key is None:
+        config.HELPER_KEY_FILE.unlink(missing_ok=True)
+    elif not config.HELPER_KEY_RE.fullmatch(key := body.key.strip().lower()):
+        raise HTTPException(422, {"error": "invalid_key", "message": "That isn't a helper key.",
+                                  "fix": "Copy it again from Settings → Helper key in the other Spela: 64 letters and digits."})
+    else:
+        config.HELPER_KEY_FILE.write_text(key)
+    db.add(AuditLog(action="helper_key", result="success", details={"source": helper_key_status()["source"]}))
+    db.commit()
+    return helper_key_status()
+
+
 @public.get("/health")
 def health():
     return {"status": "ok", "app": APP_ID, "version": __version__}  # the launcher checks `app` to recognise a running copy

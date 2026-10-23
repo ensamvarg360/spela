@@ -17,7 +17,7 @@ from sqlalchemy import select
 from test_console_profiles import login
 
 from app import __version__, config
-from app.consoles import HELPER_ELF, HELPER_KEY_HEADER, HELPER_KEY_SLOT, AdapterError, FTPConsoleAdapter, helper_elf
+from app.consoles import HELPER_ELF, HELPER_KEY_HEADER, HELPER_KEY_SLOT, AdapterError, FTPConsoleAdapter, helper_elf, ours
 from app.database import SessionLocal
 from app.main import app
 from app.models import Console, Drive, Game, InstalledGame
@@ -158,6 +158,44 @@ def test_other_spelas_helper_is_named():
         assert a._no_helper() == {"helper": "other_pc", "helper_owner": ""}
     finally:
         helper.shutdown()
+
+
+def test_shared_helper_key():
+    """A helper holding our pre-v0.7.6 per-console key is ours, so it's replaced. One another install sent with a
+    shared key answers us, but only its sender updates it."""
+    class Old(FakeHelper):
+        def parse_request(self):
+            if not BaseHTTPRequestHandler.parse_request(self):
+                return False
+            if self.headers.get(HELPER_KEY_HEADER) != type(self).key:
+                self._send({"error": "wrong key", "owner": config.INSTANCE_NAME}, 401)
+                return False
+            return True
+
+    helper = ThreadingHTTPServer(("127.0.0.1", 0), Old)
+    threading.Thread(target=helper.serve_forever, daemon=True).start()
+    a = adapter(21)
+    a.HELPER_PORT = helper.server_address[1]
+    try:
+        Old.key = a.legacy_key
+        assert a._no_helper() == {"helper": "missing"}
+        Old.key = "someone else's"
+        assert a._no_helper()["helper"] == "other_pc"
+    finally:
+        helper.shutdown()
+    assert ours({"helper": "1.0", "helper_owner": ""}) and ours({"helper": "1.0", "helper_owner": config.INSTANCE_NAME})
+    assert not ours({"helper": "1.0", "helper_owner": "Docker · nas"})
+
+
+def test_helper_key_setting(tmp_path, monkeypatch):
+    monkeypatch.delenv("SPELA_HELPER_KEY", raising=False)
+    monkeypatch.setattr(config, "HELPER_KEY_FILE", tmp_path / "helper_key")
+    own = config.helper_key()
+    assert config.HELPER_KEY_RE.fullmatch(own)
+    (tmp_path / "helper_key").write_text("ab" * 32)
+    assert config.helper_key() == "ab" * 32
+    monkeypatch.setenv("SPELA_HELPER_KEY", "CD" * 32)
+    assert config.helper_key() == "cd" * 32
 
 
 def test_ftp_adapter_helper(ps5):

@@ -140,6 +140,48 @@ function ViewOnly() {
   );
 }
 
+/** The key in the helpers this install sends. Pasting another Spela's lets both use one helper: a PC and a NAS, or a dev build. */
+function HelperKey() {
+  const [state, setState] = useState<{ key: string; source: "own" | "pasted" | "env" } | null>(null);
+  const [key, setKey] = useState("");
+  useEffect(() => { api<NonNullable<typeof state>>("/helper-key").then(setState, () => {}); }, []);
+
+  async function save(k: string | null) {
+    try {
+      setState(await api<NonNullable<typeof state>>("/helper-key", { json: { key: k } }));
+      setKey("");
+      toast(k ? "Saved. This Spela now uses the other one's helper." : "This Spela uses its own key again. It sends its own helper within a minute.");
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  return (
+    <form onSubmit={(e: FormEvent) => (e.preventDefault(), save(key))}>
+      <Panel title="Helper key" badge={state && state.source !== "own" && <Badge tone="info">{state.source === "env" ? "From SPELA_HELPER_KEY" : "Shared"}</Badge>}
+        desc="Running Spela in two places, like on this PC and a NAS? Copy this key into the other one's Settings and both use the same helper on your PS5. The one that sent it keeps it up to date."
+        foot={<>
+          <span className="sp-panel__note">Anyone with this key can control the helper on your PS5.</span>
+          {state?.source !== "env" && <div className="sp-btngroup">
+            {state?.source === "pasted" && <button type="button" className="sp-btn sp-btn--ghost" onClick={() => save(null)}>Use own key</button>}
+            <button type="submit" className="sp-btn sp-btn--primary">Use pasted key</button>
+          </div>}
+        </>}>
+        <Field label="This Spela's key">
+          <div className="sp-inputgroup">
+            <input className="sp-input sp-input--mono" readOnly value={state?.key ?? ""} onFocus={(e) => e.target.select()} />
+            <button type="button" className="sp-btn" onClick={() => navigator.clipboard.writeText(state!.key).then(() => toast("Copied."), toastError)}>Copy</button>
+          </div>
+        </Field>
+        {state?.source !== "env" && <Field label="Key from another Spela">
+          <input className="sp-input sp-input--mono" required pattern="\s*[0-9a-fA-F]{64}\s*" autoComplete="off" spellCheck={false}
+            placeholder="Paste it here" value={key} onChange={(e) => setKey(e.target.value)} />
+        </Field>}
+      </Panel>
+    </form>
+  );
+}
+
 /** After a scan that left the library without games: what Spela looks for, and what it couldn't identify. */
 export function NothingFound({ report }: { report: NonNullable<ScanStatus["report"]> }) {
   return <Problem error="Nothing in these folders looks like a PS5 game." fix={"Spela recognizes game folders with sce_sys/param.json " +
@@ -220,6 +262,7 @@ export default function Settings() {
       </Panel>
 
       <Consoles />
+      <HelperKey />
       <ViewOnly />
       <AuditLog />
     </>
