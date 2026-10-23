@@ -1062,6 +1062,9 @@ class Storefront final : public app::Concept
             constexpr int kHalf = store::kCoverHeight / 2;
             tones_[id] = {average(rgba, 0, kHalf), average(rgba, kHalf, store::kCoverHeight)};
         }
+        while (client_.take_logo(&id, &rgba))
+            if (gfx::GlBatch *batch = store::texture_batch())
+                logos_[id] = batch->create_texture(store::kTitleLogoWidth, store::kTitleLogoHeight, rgba.data());
     }
 
     // Covers for the rows on screen and the next two, each asked for once.
@@ -1077,6 +1080,9 @@ class Storefront final : public app::Concept
             if (g.has_cover && requested_.insert(g.id).second)
                 client_.request_cover(g.id);
         }
+        // the logo only shows in the focused game's panel, so only that one's is asked for
+        if (const store::Game *g = focused(); g != nullptr && g->has_logo && logos_requested_.insert(g->id).second)
+            client_.request_logo(g->id);
     }
 
     void draw_notice(gfx::DrawList &list, const char *title, const std::string &detail) const
@@ -1415,13 +1421,13 @@ class Storefront final : public app::Concept
         const Tones colours = tones(g);
         list.shadow({panel.x, panel.y + 20, panel.w, panel.h}, 24, 50, Color::rgb(0x000000, 0.45f));
         list.rounded_rect(panel, 24, kPanel.with_alpha(0.7f));
-        // The focused game's art, fading into the panel.
+        // The focused game's art, fading into the panel. Its top part: key art keeps faces and titles near the top.
         const Rect art{panel.x, panel.y, panel.w, kArtH};
         const auto cover = covers_.find(g.id);
         if (cover != covers_.end())
         {
             const float shown = kArtH / (panel.w * store::kCoverHeight / store::kCoverWidth);
-            list.image_gradient(cover->second, art, {0, 0.12f, 1, shown}, kWhite, kWhite.with_alpha(0.0f), 24);
+            list.image_gradient(cover->second, art, {0, 0, 1, shown}, kWhite, kWhite.with_alpha(0.0f), 24);
         }
         else
         {
@@ -1434,9 +1440,21 @@ class Storefront final : public app::Concept
         const float x = panel.x + 36;
         const float width = panel.w - 72;
         float y = panel.y + kArtH + 30;
-        const auto lines = ui::paragraph_lines(fonts.semibold, g.title, 36, width, 3);
-        ui::paragraph(list, fonts.semibold, lines, x, y, 36, 46, kInk);
-        y += 46.0f * static_cast<float>(lines.lines.size()) + 8;
+        const auto logo = logos_.find(g.id);
+        if (logo != logos_.end())
+        {
+            // The store's logo instead of the title, its bottom where a one-line title's would be: the PC sets it in
+            // the bottom-left corner of its box, so a tall one reaches up into the art's faded lower edge.
+            list.image(logo->second, {x, y + 10 - store::kTitleLogoHeight, store::kTitleLogoWidth, store::kTitleLogoHeight},
+                       gfx::kFullUv, kWhite);
+            y += 46.0f + 8;
+        }
+        else
+        {
+            const auto lines = ui::paragraph_lines(fonts.semibold, g.title, 36, width, 3);
+            ui::paragraph(list, fonts.semibold, lines, x, y, 36, 46, kInk);
+            y += 46.0f * static_cast<float>(lines.lines.size()) + 8;
+        }
 
         std::string meta = g.title_id.empty() ? std::string("Title ID unknown") : g.title_id;
         if (!g.version.empty())
@@ -1519,6 +1537,8 @@ class Storefront final : public app::Concept
     std::uint32_t logo_ = 0; // the wordmark's texture, made once the GPU batch exists
     std::unordered_map<std::string, Tones> tones_;
     std::unordered_set<std::string> requested_;
+    std::unordered_map<std::string, std::uint32_t> logos_; // game id -> its store logo's texture
+    std::unordered_set<std::string> logos_requested_;
     std::string message_;
     bool message_ok_ = false;
     float message_age_ = kMessageSeconds;

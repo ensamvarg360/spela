@@ -84,6 +84,8 @@ std::vector<Game> parse_library(std::string_view text)
             for (std::string_view genre : split(f[17], '|'))
                 if (!genre.empty())
                     g.genres.emplace_back(genre);
+        if (f.size() >= 19)
+            g.has_logo = f[18] == "1";
         games.push_back(std::move(g));
     }
     return games;

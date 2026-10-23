@@ -301,6 +301,11 @@ def test_store_poster_and_info(tmp_path, monkeypatch):
         (tmp_path / "covers" / f"{euro}.png").write_bytes(b"x")
         assert client.get(f"/api/v1/games/{euro}/poster").status_code == 404  # an uploaded cover wins
 
+        asked.clear()
+        assert logos.title_logo("PPSA01111").read_bytes() == art["LOGO"]  # the concept's logo, kept
+        assert logos.title_logo("PPSA01111") and asked == ["https://image.api.playstation.com/LOGO"]
+        assert logos.title_logo("PPSA05555") is None and (tmp_path / "store" / "PPSA05555-logo.none").is_file()
+
         assert logos.concept("PPSA03333") is None  # in no store
         monkeypatch.setattr(logos, "_get", lambda url: pytest.fail("a game the store lacks is asked about once a week"))
         assert logos.concept("PPSA03333") is None
@@ -339,6 +344,17 @@ def test_console_library_genres(tmp_path, monkeypatch):
         (tmp_path / "store" / "PPSA07771.jpg").write_bytes(out.getvalue())
         assert rows()[store.id][7] == "1"
         assert len(client.get(f"/api/v1/console-app/covers/{store.id}", headers=auth).content) == 256 * 320 * 4
+        assert asked() == n
+
+        # Likewise a logo: trimmed to its lettering and set bottom-left in the panel's title box
+        assert rows()[store.id][18] == "0"
+        assert client.get(f"/api/v1/console-app/logos/{store.id}", headers=auth).status_code == 404
+        logo = Image.new("RGBA", (1000, 600))
+        logo.paste((255, 255, 255, 255), (100, 200, 900, 400))  # 800x200 of lettering in transparent padding
+        logo.save(tmp_path / "store" / "PPSA07771-logo.png")
+        assert rows()[store.id][18] == "1" and rows()[sidecar.id][18] == "0"
+        px = Image.frombytes("RGBA", (384, 112), client.get(f"/api/v1/console-app/logos/{store.id}", headers=auth).content)
+        assert px.getbbox() == (0, 112 - 96, 384, 112)  # 800x200 scaled to 384 wide, on the bottom edge
         assert asked() == n
 
 

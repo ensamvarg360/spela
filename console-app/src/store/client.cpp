@@ -208,7 +208,7 @@ bool Client::step()
         pthread_mutex_unlock(&lock_);
         return true;
     }
-    if (have_job && job.kind != Job::cover)
+    if (have_job && job.kind != Job::cover && job.kind != Job::logo)
     {
         const std::string path =
             job.kind == Job::install  ? "/api/v1/console-app/install/" + job.game_id + (job.arg.empty() ? "" : "?drive=" + job.arg)
@@ -232,12 +232,15 @@ bool Client::step()
     }
     if (have_job)
     {
-        const std::size_t size = static_cast<std::size_t>(kCoverWidth) * kCoverHeight * 4;
-        Response r = request(server_, "GET", "/api/v1/console-app/covers/" + job.game_id, size);
+        const bool logo = job.kind == Job::logo;
+        const std::size_t size = logo ? static_cast<std::size_t>(kTitleLogoWidth) * kTitleLogoHeight * 4
+                                      : static_cast<std::size_t>(kCoverWidth) * kCoverHeight * 4;
+        Response r = request(server_, "GET", std::string("/api/v1/console-app/") + (logo ? "logos/" : "covers/") + job.game_id,
+                             size);
         if (r.status == 200 && r.body.size() == size)
         {
             pthread_mutex_lock(&lock_);
-            covers_.emplace_back(job.game_id, std::vector<std::uint8_t>(r.body.begin(), r.body.end()));
+            (logo ? logos_ : covers_).emplace_back(job.game_id, std::vector<std::uint8_t>(r.body.begin(), r.body.end()));
             pthread_mutex_unlock(&lock_);
         }
         return true;
@@ -422,17 +425,45 @@ void Client::request_cover(const std::string &game_id)
     pthread_mutex_unlock(&lock_);
 }
 
+void Client::request_logo(const std::string &game_id)
+{
+    pthread_mutex_lock(&lock_);
+    jobs_.push_back({Job::logo, game_id});
+    pthread_mutex_unlock(&lock_);
+}
+
+namespace
+{
+
+bool take_image(std::deque<std::pair<std::string, std::vector<std::uint8_t>>> &images, std::string *game_id,
+                std::vector<std::uint8_t> *rgba)
+{
+    const bool have = !images.empty();
+    if (have)
+    {
+        *game_id = std::move(images.front().first);
+        *rgba = std::move(images.front().second);
+        images.pop_front();
+    }
+    return have;
+}
+
+} // namespace
+
 bool Client::take_cover(std::string *game_id, std::vector<std::uint8_t> *rgba)
 {
     drain();
     pthread_mutex_lock(&lock_);
-    const bool have = !covers_.empty();
-    if (have)
-    {
-        *game_id = std::move(covers_.front().first);
-        *rgba = std::move(covers_.front().second);
-        covers_.pop_front();
-    }
+    const bool have = take_image(covers_, game_id, rgba);
+    pthread_mutex_unlock(&lock_);
+    return have;
+}
+
+bool Client::take_logo(std::string *game_id, std::vector<std::uint8_t> *rgba)
+{
+    drain();
+    pthread_mutex_lock(&lock_);
+    const bool have = take_image(logos_, game_id, rgba);
     pthread_mutex_unlock(&lock_);
     return have;
 }

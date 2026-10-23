@@ -1418,6 +1418,7 @@ def console_from_token(request: Request, db: Session = Depends(get_db)) -> Conso
 # Plain text, one game per line, so the console app needs no JSON parser.
 console_api = APIRouter(prefix="/api/v1/console-app")
 COVER_SIZE = (256, 320)  # the console app expects exactly this many RGBA pixels
+LOGO_SIZE = (384, 112)  # likewise for a logo: the width of its game panel's text, drawn 1:1
 
 
 def _field(v) -> str:
@@ -1428,9 +1429,9 @@ _store_warming = threading.Lock()
 
 
 def _warm_store(games: list[tuple[str, str | None]]):
-    """Looks up the store pages and posters of games the PC hasn't shown yet, so their genres and covers reach the PS5
-    on a later poll. (title ID, content ID) each. Fetched while the PS5 waited, a poster would outlast the few seconds
-    the helper holds a request."""
+    """Looks up the store pages, posters and logos of games the PC hasn't shown yet, so their genres, covers and logos
+    reach the PS5 on a later poll. (title ID, content ID) each. Fetched while the PS5 waited, a poster would outlast
+    the few seconds the helper holds a request."""
     if not _store_warming.acquire(blocking=False):
         return  # a lookup from an earlier poll is still going
     try:
@@ -1439,14 +1440,25 @@ def _warm_store(games: list[tuple[str, str | None]]):
             if not (logos.STORE_DIR / f"{title_id}.json").is_file():
                 break  # offline: try again on a later poll
             logos.poster(title_id, content_id)
+            logos.title_logo(title_id)
     finally:
         _store_warming.release()
 
 
-def _poster(title_id: str | None) -> Path | None:
-    """The game's poster when it's already on this PC (logos.poster keeps it), without asking the store."""
-    path = logos.STORE_DIR / f"{title_id}.jpg"
+def _stored(title_id: str | None, suffix: str) -> Path | None:
+    """A store file of the game that's already on this PC, without asking the store: ".jpg" its poster (logos.poster),
+    "-logo.png" its logo (logos.title_logo), ".none"/"-logo.none" when the store had neither."""
+    path = logos.STORE_DIR / f"{title_id}{suffix}"
     return path if title_id and path.is_file() else None
+
+
+def _poster(title_id: str | None) -> Path | None:
+    return _stored(title_id, ".jpg")
+
+
+def _logo(g: Game) -> Path | None:
+    """A game's logo, once on this PC. Not DLC's: it shares the title ID, so the logo would be its game's."""
+    return _stored(g.title_id, "-logo.png") if g.kind == "game" else None
 
 
 @functools.lru_cache(maxsize=4096)
@@ -1468,7 +1480,8 @@ def console_library(background: BackgroundTasks, c: Console = Depends(console_fr
     """id, title, title ID, version, size, state, progress (0-1 while installing or removing), has cover (1/0; a store
     poster counts once it's on this PC, so the PS5 asks for it then), kind, format,
     then while installing or removing: bytes done, bytes total, bytes/s, seconds left, the step it's on (empty when unknown),
-    then favorite (1/0), when it was added to the library (Unix seconds) and its genres (joined by |; empty when unknown).
+    then favorite (1/0), when it was added to the library (Unix seconds), its genres (joined by |; empty when unknown)
+    and has logo (1/0; /logos/<id> then has it).
     state: installable | installed | update | queued | installing | removing | blocked:<reason>
     kind: game | dlc. DLC shares its game's title ID, so it never shows as installed or removable."""
     installed = {g.title_id: g for g in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
@@ -1495,10 +1508,10 @@ def console_library(background: BackgroundTasks, c: Console = Depends(console_fr
                                              f"{progress:.3f}" if progress is not None else "",
                                              int(bool(g.cover_path or _poster(g.title_id))), g.kind, g.format, *detail,
                                              int(g.favorite), int(g.created_at.timestamp()),
-                                             "|".join(x.replace("|", " ") for x in _genres(g))))))
+                                             "|".join(x.replace("|", " ") for x in _genres(g)), int(bool(_logo(g)))))))
+    t = lambda g, suffix: _stored(g.title_id, suffix)  # noqa: E731
     unknown = {(g.title_id, g.content_id) for g in games if g.title_id and not (
-        (logos.STORE_DIR / f"{g.title_id}.json").is_file()
-        and (g.cover_path or _poster(g.title_id) or (logos.STORE_DIR / f"{g.title_id}.none").is_file()))}
+        t(g, ".json") and (g.cover_path or t(g, ".jpg") or t(g, ".none")) and (t(g, "-logo.png") or t(g, "-logo.none")))}
     if unknown:
         background.add_task(_warm_store, sorted(unknown, key=lambda t: t[0]))
     return "".join(f"{line}\n" for line in lines)
@@ -1525,6 +1538,22 @@ def console_cover(game_id: str, c: Console = Depends(console_from_token), db: Se
     with Image.open(path) as im:
         data = ImageOps.fit(im.convert("RGBA"), COVER_SIZE).tobytes()
     return Response(data, media_type="application/octet-stream")
+
+
+@console_api.get("/logos/{game_id}")
+def console_logo(game_id: str, c: Console = Depends(console_from_token), db: Session = Depends(get_db)):
+    """The game's store logo as raw RGBA pixels, LOGO_SIZE: trimmed to its lettering, scaled to fit and set in the
+    bottom-left corner, so it sits where the game panel's title would. 404 until _warm_store has it."""
+    if not (path := _logo(_game(db, game_id))):
+        _not_found()
+    with Image.open(path) as im:
+        logo = im.convert("RGBA")
+    if box := logo.getchannel("A").getbbox():
+        logo = logo.crop(box)
+    logo = ImageOps.contain(logo, LOGO_SIZE, Image.LANCZOS)
+    canvas = Image.new("RGBA", LOGO_SIZE, (0, 0, 0, 0))
+    canvas.paste(logo, (0, LOGO_SIZE[1] - logo.height))
+    return Response(canvas.tobytes(), media_type="application/octet-stream")
 
 
 @console_api.post("/install/{game_id}", response_class=PlainTextResponse)

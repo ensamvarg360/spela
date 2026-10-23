@@ -166,6 +166,28 @@ def poster(title_id: str, content_id: str | None = None) -> Path | None:
     return path
 
 
+def title_logo(title_id: str) -> Path | None:
+    """The game's logo from its store concept (white lettering on a transparent PNG), kept in STORE_DIR as
+    <id>-logo.png, with <id>-logo.none when the store has none. None then, or when the store can't be reached."""
+    path, none = STORE_DIR / f"{title_id}-logo.png", STORE_DIR / f"{title_id}-logo.none"
+    if path.is_file():
+        return path
+    if none.is_file() and time.time() - none.stat().st_mtime < RETRY_SECONDS:
+        return None
+    if not (c := concept(title_id)):
+        return None
+    url = _url((c.get("media") or {}).get("images") or [], "LOGO")
+    try:
+        png = _get(url) if url else b""
+    except OSError:
+        return None  # offline: ask again next time
+    if not png.startswith(PNG) or len(png) > MAX_BYTES:
+        _save(none, b"")
+        return None
+    _save(path, png)
+    return path
+
+
 def store_images(title_id: str, content_id: str | None = None) -> list[dict]:
     """Every image PlayStation Store lists for the game, per store: its concept's and each edition's (its own content
     ID first). [{store, name, sources: [{label, images: [{type, url}]}]}]; a store that doesn't sell it has no sources.

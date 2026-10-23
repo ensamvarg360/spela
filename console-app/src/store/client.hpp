@@ -31,6 +31,8 @@ gfx::GlBatch *texture_batch();
 
 constexpr int kCoverWidth = 256; // the PC sends covers as raw RGBA of this size
 constexpr int kCoverHeight = 320;
+constexpr int kTitleLogoWidth = 384; // and a game's store logo as raw RGBA of this size (LOGO_SIZE in backend/app/main.py)
+constexpr int kTitleLogoHeight = 112;
 
 class Client
 {
@@ -72,6 +74,9 @@ class Client
     bool take_message(std::string *message, bool *ok);
     void request_cover(const std::string &game_id);
     bool take_cover(std::string *game_id, std::vector<std::uint8_t> *rgba);
+    // A game's store logo, for its panel's title; only for games the library says have one.
+    void request_logo(const std::string &game_id);
+    bool take_logo(std::string *game_id, std::vector<std::uint8_t> *rgba);
 
   private:
     struct Job
@@ -79,6 +84,7 @@ class Client
         enum Kind
         {
             cover,
+            logo,
             install,
             cancel,
             favorite,
@@ -113,6 +119,7 @@ class Client
     bool busy_ = false; // something installing or being removed: poll faster
     std::deque<Job> jobs_;
     std::deque<std::pair<std::string, std::vector<std::uint8_t>>> covers_;
+    std::deque<std::pair<std::string, std::vector<std::uint8_t>>> logos_;
     std::deque<std::pair<std::string, bool>> messages_;
     std::deque<Removal> removals_;
     std::vector<std::string> watching_; // removal ids started here and not ended yet

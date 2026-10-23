@@ -33,11 +33,33 @@ GENRES = {"g01": "Racing|Action", "g02": "Horror|Adventure", "g03": "Racing|Fami
           "g10": "Simulation|Family", "g11": "Action", "g12": "Shooter|Action", "d01": "Horror|Adventure"}
 
 
+LOGOS = {"g01", "g02", "g04", "g06", "g08", "g12"}  # games whose store logo the PC has; the rest show their title
+
+
 def line(i: int, g: list) -> str:
-    """The columns above, padded past the install details, then favorite, when it was added (a day apart, g01 first)
-    and genres (g07 has none: not on the store)."""
-    cols = g + [""] * (15 - len(g)) + ["1" if g[0] in FAVORITES else "0", 1_760_000_000 + i * 86_400, GENRES.get(g[0], "")]
+    """The columns above, padded past the install details, then favorite, when it was added (a day apart, g01 first),
+    genres (g07 has none: not on the store) and has logo."""
+    cols = g + [""] * (15 - len(g)) + ["1" if g[0] in FAVORITES else "0", 1_760_000_000 + i * 86_400, GENRES.get(g[0], ""),
+                                       "1" if g[0] in LOGOS else "0"]
     return "\t".join(map(str, cols)) + "\n"
+
+
+LW, LH = 384, 112  # LOGO_SIZE in backend/app/main.py
+
+
+def logo(title: str) -> bytes:
+    """An invented logo: the title in white capitals on transparency, then set in its box the way the PC app does
+    (console_logo in backend/app/main.py): trimmed, scaled to fit, bottom-left."""
+    import textwrap
+    from PIL import ImageDraw, ImageFont
+    text = textwrap.fill(title.split(":")[0].upper(), 12)  # stacked, as store logos usually are
+    im = Image.new("RGBA", (1800, 800), (0, 0, 0, 0))
+    ImageDraw.Draw(im).multiline_text((20, 20), text, font=ImageFont.load_default(size=200), fill=(255, 255, 255, 255),
+                                      align="left", spacing=10)
+    im = ImageOps.contain(im.crop(im.getchannel("A").getbbox()), (LW, LH), Image.LANCZOS)
+    canvas = Image.new("RGBA", (LW, LH), (0, 0, 0, 0))
+    canvas.paste(im, (0, LH - im.height))
+    return canvas.tobytes()
 
 
 DRIVES = [  # id, label, free, total
@@ -101,6 +123,10 @@ class Handler(BaseHTTPRequestHandler):
             if idx is not None and GAMES[idx][7] == "1":
                 data = poster(POSTERS[gid]) if gid in POSTERS else cover(idx + 3)
                 return self._send(200, data, "application/octet-stream")
+        if self.path.startswith("/api/v1/console-app/logos/"):
+            game = next((g for g in GAMES if g[0] == self.path.rsplit("/", 1)[1]), None)
+            if game and game[0] in LOGOS:
+                return self._send(200, logo(game[1]), "application/octet-stream")
         if self.path.startswith("/api/v1/console-app/removals/"):  # still running on the first ask, then done
             game = next((g for g in GAMES if g[0] == self.path.rsplit("/", 1)[1].removeprefix("rm-")), None)
             if game:
