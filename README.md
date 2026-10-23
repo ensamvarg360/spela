@@ -188,6 +188,12 @@ cd frontend && npm install && npm run dev
 
 Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), including how releases are made. The original design is in [project.md](project.md); [docs/manual-test.md](docs/manual-test.md) is the checklist run on a real PS5 before each release.
 
+## Support Spela
+
+Spela is free and open source, with no ads, accounts or paid tiers, and it stays that way. If it saves you some time and you'd like to say thanks, you can [buy me a coffee](https://www.buymeacoffee.com/ensamvarg360). It's entirely optional and helps keep the project going.
+
+<a href="https://www.buymeacoffee.com/ensamvarg360"><img src="images/qr-code.png" alt="QR code for Buy Me a Coffee" width="180"></a>
+
 ## Legal
 
 **Spela provides no game files, at any point:** not in the download, not in the app, not through any link or setting. The only things it fetches from the internet are public cover art, ratings and logos from PlayStation Store for games you already have.
