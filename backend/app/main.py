@@ -6,6 +6,7 @@ import io
 import ipaddress
 import json
 import logging
+import logging.handlers
 import os
 import secrets
 import socket
@@ -36,6 +37,12 @@ from .consoles import CONSOLE_APP_DIR, TITLE_ID, AdapterError, discover, send_wa
 from .database import SessionLocal, engine, get_db
 from .inventory import console_app_token
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id, now
+
+_log_file = logging.handlers.RotatingFileHandler(config.LOG_FILE, maxBytes=1_000_000, backupCount=1, encoding="utf-8")
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+                    handlers=[_log_file, *([logging.StreamHandler()] if sys.stderr else [])])  # the .exe has no stderr
+if not logging.getLogger("uvicorn").propagate:  # uvicorn's own log setup (Docker) keeps its errors from the root logger
+    logging.getLogger("uvicorn.error").addHandler(_log_file)
 
 
 @asynccontextmanager
@@ -324,6 +331,16 @@ def set_viewer(body: ViewerIn, db: Session = Depends(get_db)):
 
 class HelperKeyIn(BaseModel):
     key: str | None = None  # null goes back to this install's own key
+
+
+@api.get("/log", dependencies=[Depends(require_admin)])
+def log_tail():
+    """The last lines of app.log, for the bug-report button to put in the issue. Admin only: it holds IPs and paths."""
+    try:
+        lines = config.LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = []
+    return {"log": "\n".join(lines[-50:])}
 
 
 @api.get("/helper-key", dependencies=[Depends(require_admin)])

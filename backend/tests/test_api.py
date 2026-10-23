@@ -177,6 +177,14 @@ def test_audit_log():
         assert older[0]["id"] == rows[1]["id"]
 
 
+def test_log_tail():
+    config.LOG_FILE.write_text("".join(f"line {i}\n" for i in range(60)), encoding="utf-8")
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        c.post("/api/v1/auth/login", json={"password": "password1"})  # set up in test_flow
+        log = c.get("/api/v1/log").json()["log"].splitlines()
+        assert log[0] == "line 10" and log[-1] == "line 59"
+
+
 def test_setup_checklist(tmp_path):
     """The checklist reads its steps from what's already set up, and its dismissal survives a reload."""
     with TestClient(app, base_url="http://127.0.0.1") as c:

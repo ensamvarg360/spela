@@ -33,6 +33,6 @@ body:
   - type: textarea
     id: log
     attributes:
-      label: Last lines of app.log
-      description: From `%LOCALAPPDATA%\Spela\app.log`. Remove IP addresses or paths you'd rather not share.
+      label: Last lines of the log
+      description: "Filled in for you when you report from Spela's bug button. Otherwise, on Windows: right-click Spela's tray icon → **Open log**. In Docker: `docker logs spela`. Remove IP addresses or paths you'd rather not share."
       render: text

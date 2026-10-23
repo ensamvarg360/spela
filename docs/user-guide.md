@@ -118,7 +118,7 @@ Keep `secret_key` together with `app.db`. Without it, saved console passwords ca
 | Symptom | What to do |
 |---|---|
 | "Port 8787 is already in use" at start | Another program holds the port. Close it, or set `PORT` to another number. |
-| The app's window stays blank or the tray says it couldn't start | Look at `app.log` in the data folder. |
+| The app's window stays blank or the tray says it couldn't start | Right-click the tray icon → **Open log**. |
 | A phone or other PC can't open the app | Tick **Allow other devices on my network** in the tray, make sure the network is *Private* in Windows, and open the address the tray shows (an IP address, not the PC's name). |
 | "Open the app by its IP address" | You opened it by a name. Use `http://127.0.0.1:8787` on this PC, or the IP address from the tray elsewhere. |
 | Console shows *Offline* | Check the IP address, and that the PS5 is on and on the same network. The console's status says when its address isn't on this PC's network. |

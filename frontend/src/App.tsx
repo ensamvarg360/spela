@@ -33,6 +33,8 @@ export default function App() {
   const [view, setView] = useState<View>(NO_VIEW); // here, so filters survive opening a game and coming back
   const [dlcView, setDlcView] = useState<View>(NO_VIEW);
   const [newer, setNewer] = useState<Newer | null>(null);
+  const [log, setLog] = useState("");
+  const loadLog = () => { if (user && user !== "viewer") api<{ log: string }>("/log").then((r) => setLog(r.log), () => {}); };
   useEffect(() => { appVersion.then(setVersion); }, []);
 
   useEffect(() => {
@@ -44,6 +46,7 @@ export default function App() {
   useEffect(() => {
     if (user) api<{ latest: Newer | null; installable: boolean }>("/update")
       .then((r) => setNewer(r.latest && { ...r.latest, installable: r.installable }), () => {});
+    loadLog();
   }, [user]);
 
   if (user === undefined) return null;
@@ -75,8 +78,9 @@ export default function App() {
           {newer && !session.readOnly && <UpdateBadge newer={newer} />}
           {session.readOnly && <span className="sp-badge" title="Logged in with the view-only password: you can look, not change anything.">View only</span>}
           <Bell />
-          <a href={`https://github.com/ensamvarg360/spela/issues/new?template=bug_report.yml&version=${encodeURIComponent(version)}`} target="_blank" rel="noreferrer"
-            className="sp-btn sp-btn--ghost sp-btn--icon" title="Report a bug" aria-label="Report a bug (opens GitHub)"><Icon name="bug" /></a>
+          <a href={bugUrl(version, log)} target="_blank" rel="noreferrer" onPointerEnter={loadLog} onFocus={loadLog}
+            className="sp-btn sp-btn--ghost sp-btn--icon" title="Report a bug (adds the end of Spela's log for you to check)"
+            aria-label="Report a bug (opens GitHub)"><Icon name="bug" /></a>
           {!session.readOnly && (
             <a href="#/cart" className={inCart.length ? "sp-btn sp-btn--ghost" : "sp-btn sp-btn--ghost sp-btn--icon"} title="Cart"
               aria-label={`Cart${inCart.length ? `, ${inCart.length} items` : ""}`} aria-current={route === "/cart" ? "page" : undefined}>
@@ -102,6 +106,14 @@ export default function App() {
       <Toasts />
     </>
   );
+}
+
+/** GitHub's new-issue form, filled in with the version and the newest log lines that fit (it refuses URLs over ~8 KB). */
+function bugUrl(version: string, log: string) {
+  let lines = log ? log.split("\n") : [];
+  while (encodeURIComponent(lines.join("\n")).length > 6000) lines = lines.slice(1);
+  const url = `https://github.com/ensamvarg360/spela/issues/new?template=bug_report.yml&version=${encodeURIComponent(version)}`;
+  return lines.length ? `${url}&log=${encodeURIComponent(lines.join("\n"))}` : url;
 }
 
 type Newer = { version: string; url: string; installable?: boolean };

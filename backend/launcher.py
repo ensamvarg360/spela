@@ -3,7 +3,6 @@
 import base64
 import ctypes
 import json
-import logging
 import os
 import socket
 import subprocess
@@ -30,8 +29,6 @@ except ImportError:
 
 URL = f"http://127.0.0.1:{config.PORT}"
 APP_NAME = "Spela"
-logging.basicConfig(filename=config.DATA_DIR / "app.log", level=logging.WARNING,
-                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 def _icon_image() -> Image.Image:
@@ -128,7 +125,7 @@ def main():
                                          "can't start.\n\nClose that program and try again.",
                                          "Spela", 0x10)  # MB_ICONERROR
         return
-    # log_config=None: a windowed .exe has no console, so uvicorn must log through the file handler above.
+    # log_config=None: a windowed .exe has no console, so uvicorn must log through app.main's file handler.
     server = uvicorn.Server(uvicorn.Config(app, host=config.HOST, port=config.PORT, log_config=None))
 
     def serve():
@@ -137,7 +134,7 @@ def main():
         except SystemExit:  # uvicorn exits this way when it can't bind the port
             pass
         if not server.should_exit:  # stopped on its own, e.g. the port is taken by another program
-            icon.notify(f"Couldn't start. Details are in {config.DATA_DIR / 'app.log'}", "Spela")
+            icon.notify(f"Couldn't start. Details are in {config.LOG_FILE}", "Spela")
 
     thread = threading.Thread(target=serve)
     window = webview.create_window(APP_NAME, html=_loading_page(), width=1280, height=860, min_size=(720, 480))
@@ -230,6 +227,7 @@ def main():
     icon = pystray.Icon("ps5sf", _icon_image(), f"{APP_NAME}\n{lan_url or URL}", pystray.Menu(
         pystray.MenuItem("Open", open_window, default=True),
         pystray.MenuItem("Open data folder", lambda: os.startfile(config.DATA_DIR)),
+        pystray.MenuItem("Open log", lambda: os.startfile(config.LOG_FILE)),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Allow other devices on my network", lambda: when_done("restart", lambda: toggle_lan(icon)),
                          checked=lambda _: config.LAN_FILE.exists(),
