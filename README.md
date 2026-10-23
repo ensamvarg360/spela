@@ -10,6 +10,7 @@ Browse them on your PC, install them to your console over your home network, rem
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 ![Platform: Windows or Docker](https://img.shields.io/badge/runs%20on-Windows%2010%2F11%20%C2%B7%20Docker-0078d4)
 [![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-d97757)](#credits)
+[![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/buazC7u3Z)
 
 <img src="docs/screenshots/library.png" alt="The Spela library: a grid of game covers with filters" width="860">
 
