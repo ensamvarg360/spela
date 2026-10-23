@@ -75,6 +75,8 @@ export default function App() {
           {newer && !session.readOnly && <UpdateBadge newer={newer} />}
           {session.readOnly && <span className="sp-badge" title="Logged in with the view-only password: you can look, not change anything.">View only</span>}
           <Bell />
+          <a href={`https://github.com/ensamvarg360/spela/issues/new?template=bug_report.yml&version=${encodeURIComponent(version)}`} target="_blank" rel="noreferrer"
+            className="sp-btn sp-btn--ghost sp-btn--icon" title="Report a bug" aria-label="Report a bug (opens GitHub)"><Icon name="bug" /></a>
           {!session.readOnly && (
             <a href="#/cart" className={inCart.length ? "sp-btn sp-btn--ghost" : "sp-btn sp-btn--ghost sp-btn--icon"} title="Cart"
               aria-label={`Cart${inCart.length ? `, ${inCart.length} items` : ""}`} aria-current={route === "/cart" ? "page" : undefined}>
