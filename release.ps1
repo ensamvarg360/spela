@@ -58,11 +58,12 @@ if (-not $SkipTests) {
 
 # Release notes: the `Changelog: <Section>: <text>` trailers since the previous tag, grouped by section. A beta's
 # since the release or beta before it; a stable release's since the stable one before it, so they cover its betas.
-# versionsort.suffix sorts v0.7.7-beta.1 before v0.7.7.
+# versionsort.suffix sorts v0.7.7-beta.1 before v0.7.7. `Changelog: Beta: <text>` is a fix for something only a beta had:
+# listed in beta notes, left out of the stable release's, whose users never had the problem.
 $previous = git -c versionsort.suffix=- tag --list "v*" --sort=-v:refname |
     Where-Object { $_ -ne $tag -and ($prerelease -or -not $_.Contains("-")) } | Select-Object -First 1
 $range = if ($previous) { "$previous..HEAD" } else { "HEAD" }
-$sections = [ordered]@{ Added = @(); Changed = @(); Fixed = @(); Removed = @(); Security = @() }
+$sections = [ordered]@{ Added = @(); Changed = @(); Fixed = @(); Removed = @(); Security = @(); "Fixed in this beta" = @() }
 $missing = @()
 foreach ($commit in (git log $range --format="%B%x1e") -join "`n" -split "\x1e") {
     $lines = $commit.Trim() -split "\r?\n"
@@ -71,6 +72,7 @@ foreach ($commit in (git log $range --format="%B%x1e") -join "`n" -split "\x1e")
     if (-not $trailers) { $missing += $lines[0]; continue }
     foreach ($t in $trailers) {
         if ($t -match '^Changelog:\s*(Added|Changed|Fixed|Removed|Security):\s*(.+)$') { $sections[$Matches[1]] += $Matches[2].Trim() }
+        elseif ($t -match '^Changelog:\s*Beta:\s*(.+)$') { if ($prerelease) { $sections["Fixed in this beta"] += $Matches[1].Trim() } }
         elseif ($t -notmatch '^Changelog:\s*skip\s*$') { Write-Warning "Unreadable trailer in '$($lines[0])': $t" }
     }
 }

@@ -30,6 +30,7 @@ Changelog: Fixed: Pairing no longer fails after the computer wakes from sleep.
 
 - The section is one of `Added`, `Changed`, `Fixed`, `Removed`, `Security`. One trailer per user-visible change; several are fine.
 - Use `Changelog: skip` when users won't notice (refactors, tests, tooling).
+- Use `Changelog: Beta: <text>` for a fix to something that has only been in a beta (see [Betas](#betas)). It's listed under *Fixed in this beta* in the next beta's notes and left out of the stable release's, since its users never had the problem.
 - Release notes are collected from these trailers, so please don't leave one out.
 
 ## Pull requests
