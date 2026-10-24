@@ -279,6 +279,7 @@ async def apply(db: Session, console: Console, title_id: str) -> None:
         raise AdapterError("not_found", "The console's home screen has no PlayStation Store entry for this game.")
     png = await asyncio.to_thread(fetch_logo, concept)
     await adapter.set_home_logo(title_id, png)
+    _save(STORE_DIR / f"concept-{concept}.png", png)  # restore() puts back this one, not an older copy
 
 
 def cached_logo(concept: int) -> bytes | None:

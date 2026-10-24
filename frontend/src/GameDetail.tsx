@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STATUS_LABEL, STATUS_TONE, useConsoles, type Drive, type Game, type InstalledGame, type Job } from "./api";
+import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STATUS_LABEL, STATUS_TONE, useConsoles, type Console, type Drive, type Game, type InstalledGame, type Job } from "./api";
 import { cart, useCart } from "./Cart";
 import { Cover } from "./Library";
 import { Art, MoveDialog, RemoveDialog } from "./Installed";
@@ -21,19 +21,18 @@ function Install({ game: opened }: { game: Game }) {
   const { consoles, cid, setCid, console: target } = useConsoles();
   const [drives, setDrives] = useState<Drive[]>([]);
   const [did, setDid] = useState("");
-  const [installed, setInstalled] = useState<InstalledGame | null>(null);
+  const [installed, setInstalled] = useState(false);
   const carted = useCart().includes(game.id);
 
   useEffect(() => {
     setDid("");
     if (cid) api<Drive[]>(`/consoles/${cid}/drives`).then((ds) => setDrives(ds.filter((d) => d.is_install_target)), () => setDrives([]));
   }, [cid]);
-  useEffect(() => { // already on this console? Then the button moves it to the chosen drive instead
-    setInstalled(null);
+  useEffect(() => { // already on this console? It's moved from its "On <console>" panel instead
+    setInstalled(false);
     if (cid && game.kind === "game" && game.title_id)
       api<InstalledGame[]>(`/consoles/${cid}/installed`).then(
-        (rows) => setInstalled(rows.find((r) => r.title_id === game.title_id && r.install_route === "shadowmountplus" && r.status !== "orphaned_icon") ?? null),
-        () => {});
+        (rows) => setInstalled(rows.some((r) => r.title_id === game.title_id && r.status !== "orphaned_icon")), () => {});
   }, [cid, game.id]);
 
   const [blocked, setBlocked] = useState<Record<string, string>>({}); // game id -> why this console can't take it
@@ -43,8 +42,8 @@ function Install({ game: opened }: { game: Game }) {
     if (cid) api<Record<string, string>>(`/consoles/${cid}/blockers?game_ids=${ids}`).then(setBlocked, () => {});
   }, [cid, ids, target?.firmware]);
 
-  if (!consoles.length) return null;
-  const why = blocked[game.id];
+  if (!consoles.length || (installed && consoles.length === 1)) return null;
+  const why = installed ? `Already on ${target?.name}.` : blocked[game.id];
 
   async function install() {
     if (game.format === "archive" && !confirm("This archive will be extracted to the private staging folder on this PC before it's installed. Make sure the PC has room for the unpacked game.")) return;
@@ -62,31 +61,17 @@ function Install({ game: opened }: { game: Game }) {
     }
   }
 
-  async function move() {
-    if (!installed || !confirm(`Move ${game.title} to the chosen drive? The console copies it, checks the copy, then deletes the original. Close the game on the PS5 first.`)) return;
-    try {
-      await api(`/consoles/${cid}/move`, { json: { installed_game_id: installed.id, drive_id: did } });
-      toast(`Moving ${game.title}.`, false, ["Follow it on the Installed page", "#/installed"]);
-    } catch (e) {
-      toastError(e);
-    }
-  }
-
   const choices = consoles.length > 1 || copies.length > 1 || game.kind === "game";
   return (
-    <Panel title={installed ? "Move to another drive" : game.kind === "dlc" ? "Add to the game" : "Install"}
-      desc={installed ? `Already installed on ${target?.name}. Pick a drive to move it there.` : game.kind === "dlc" ? "DLC goes onto its game's drive." : undefined}
+    <Panel title={game.kind === "dlc" ? "Add to the game" : "Install"} desc={game.kind === "dlc" ? "DLC goes onto its game's drive." : undefined}
       foot={<>
         <span className="sp-panel__note">{target && target.state !== "online" ? `${target.name} must be online.` : carted ? <a className="sp-link" href="#/cart">Open the cart</a> : null}</span>
         <div className="sp-btngroup">
           <button type="button" className="sp-btn" aria-pressed={carted} onClick={() => (carted ? cart.remove : cart.add)([game.id])}>
             {carted ? <><Icon name="check" />In cart</> : <><Icon name="cart" />Add to cart</>}
           </button>
-          {installed
-            ? <button type="button" className="sp-btn sp-btn--primary" {...needsOnline(target)} disabled={!did || did === installed.drive_id || target?.state !== "online"}
-              title={!did || did === installed.drive_id ? "Pick a different drive to move it there." : undefined} onClick={move}><Icon name="move" />Move</button>
-            : <button type="button" className="sp-btn sp-btn--primary" {...needsOnline(target)} {...(why ? { disabled: true, title: why } : {})} onClick={install}>
-              {game.kind === "dlc" ? "Add to game" : "Install"}</button>}
+          <button type="button" className="sp-btn sp-btn--primary" {...needsOnline(target)} {...(why ? { disabled: true, title: why } : {})} onClick={install}>
+            {game.kind === "dlc" ? "Add to game" : "Install"}</button>
         </div>
       </>}>
       {(choices || why) && <>
@@ -102,14 +87,14 @@ function Install({ game: opened }: { game: Game }) {
             {copies.length > 1 && (
               <Field label="Version">
                 <select className="sp-select" value={game.id} onChange={(e) => setPick(e.target.value)}>
-                  {copies.map((c) => <option key={c.id} value={c.id}>{formatLabel(c)}{c.version ? ` · v${c.version}` : ""} · {formatBytes(c.size_bytes)}{blocked[c.id] && !installed ? " · not for this console" : ""}</option>)}
+                  {copies.map((c) => <option key={c.id} value={c.id}>{formatLabel(c)}{c.version ? ` · v${c.version}` : ""} · {formatBytes(c.size_bytes)}{blocked[c.id] ? " · not for this console" : ""}</option>)}
                 </select>
               </Field>
             )}
             {game.kind === "game" && (
               <Field label="Drive">
                 <select className="sp-select" value={did} onChange={(e) => setDid(e.target.value)}>
-                  <option value="">{installed ? "Pick a drive" : "Most free space"}</option>
+                  <option value="">Most free space</option>
                   {drives.map((d) => <option key={d.id} value={d.id}>{d.label}{d.total_bytes ? ` (${formatBytes(d.free_bytes)} free)` : ""}</option>)}
                 </select>
               </Field>
@@ -232,31 +217,11 @@ type History = {
 const WHAT: Record<string, string> = { install: "Installed", uninstall: "Removed", move: "Moved" };
 const EVENT_RESULT: Record<string, [string, Tone]> = { ...RESULT, interrupted: ["Interrupted", "danger"] };
 
-/** Where the game is installed now, and what happened to it: installs, removals and moves. */
-function InstallHistory({ game }: { game: Game }) {
-  const [h, setH] = useState<History | null>(null);
-  useEffect(() => { api<History>(`/games/${game.id}/history`).then(setH, () => {}); }, [game.id]);
-  if (!h || (!h.installed.length && !h.events.length)) return null;
+/** What happened to it: installs, removals and moves. */
+function InstallHistory({ h }: { h: History | null }) {
+  if (!h?.events.length) return null;
   return (
     <>
-      {h.installed.length > 0 && (
-        <Panel title="On your consoles" flush>
-          <ul className="sp-list">{h.installed.map((i) => (
-            <li key={i.id} className="sp-listrow">
-              <div className="sp-listrow__main">
-                <div className="sp-listrow__title">{i.console}<span className="sp-muted">· {i.drive || "Unknown drive"}</span></div>
-                <div className="sp-listrow__meta">
-                  {i.version && <><span className="sp-num">v{i.version}</span><span className="sp-sep" /></>}
-                  <Path path={i.path} />
-                </div>
-              </div>
-              <div className="sp-listrow__aside">
-                <a className="sp-btn sp-btn--sm" href={`#/installed/${i.console_id}/${i.id}`}>{session.readOnly ? "Details" : "Move or remove"}</a>
-              </div>
-            </li>
-          ))}</ul>
-        </Panel>
-      )}
       {h.events.length > 0 && (
         <Collapsible title="History" meta={`${h.events.length} ${h.events.length === 1 ? "event" : "events"}`}>
           <ul className="sp-list sp-boxed">{h.events.map((e, n) => {
@@ -358,6 +323,32 @@ function SaveBackups({ tid, consoleId }: { tid: string; consoleId?: string }) {
   );
 }
 
+/** Under the cover: puts the game's PlayStation Store logo on the home screen of each console it's on (`consoleIds`), now.
+ * Spela also does this by itself each time a console comes online; this is for a game that missed it, or to see why. */
+function HomeLogo({ tid, consoleIds }: { tid: string; consoleIds: string[] }) {
+  const { consoles } = useConsoles();
+  const on = consoles.filter((c) => consoleIds.includes(c.id));
+  const [busy, setBusy] = useState(false);
+  if (!on.length || session.readOnly) return null;
+  const online = on.filter((c) => c.state === "online");
+  async function push() {
+    setBusy(true);
+    try {
+      for (const c of online) await api(`/consoles/${c.id}/home-logo`, { json: { title_id: tid } });
+      toast(`Logo is on the home screen of ${online.map((c) => c.name).join(" and ")}.`);
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <>
+    <button type="button" className="sp-btn" disabled={busy || !online.length} onClick={push}
+      title={online.length ? "Shows the game's official logo from PlayStation Store on the PS5 home screen instead of its name" : "The console must be online."}>
+      {busy ? <><Spinner />Putting it there…</> : "Put logo on home screen"}</button>
+  </>;
+}
+
 const TEXT_FIELDS = [
   ["title", "Title"],
   ["title_id", "Title ID"],
@@ -386,6 +377,10 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
   useEffect(() => {
     api<Game>(`/games/${id}`).then(setGame, (e) => setError(e.message));
   }, [id]);
+  const [history, setHistory] = useState<History | null>(null);
+  useEffect(() => { setHistory(null); api<History>(`/games/${id}/history`).then(setHistory, () => {}); }, [id]);
+  const { consoles } = useConsoles();
+  const onConsoles = [...new Set(history?.installed.map((i) => i.console_id))];
 
   if (!game) return error ? <p className="sp-error" role="alert">{error}</p> : <p className="sp-muted">Loading…</p>;
 
@@ -433,6 +428,7 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
             onClick={() => run(api<Game>(`/games/${id}`, { method: "PATCH", json: { favorite: !game.favorite } }), game.favorite ? "Removed from favorites." : "Added to favorites.")}>
             <Icon name="star" filled={game.favorite} />{game.favorite ? "Favorite" : "Add to favorites"}
           </button>
+          {game.kind === "game" && game.title_id && <HomeLogo tid={game.title_id} consoleIds={onConsoles} />}
           <label className="sp-btn">
             Change cover
             <input type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
@@ -463,25 +459,26 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
             )} />
         )}
 
+        {game.title_id && onConsoles.map((cid) =>
+          <OnConsole key={cid} consoleId={cid} console={consoles.find((c) => c.id === cid)} tid={game.title_id!} />)}
         {!session.readOnly && <Install game={game} />}
+        {!session.readOnly && game.title_id && game.kind === "game" && <SaveBackups tid={game.title_id} />}
+        <Collapsible title="File details" meta={`${formatLabel(game)} · ${formatBytes(game.size_bytes)}`} open>
+          <dl className="sp-kv">
+            <dt>Metadata source</dt>
+            <dd><Badge tone={confidenceTone} mono>{SOURCE_LABEL[game.metadata_source] ?? game.metadata_source}</Badge><span className="sp-muted">{confidence}</span></dd>
+            <dt>Content ID</dt><dd>{game.content_id ? <Path path={game.content_id} /> : <span className="sp-muted">—</span>}</dd>
+            <dt>Format</dt><dd>{formatLabel(game)}</dd>
+            <dt>Size</dt><dd className="sp-num">{formatBytes(game.size_bytes)}</dd>
+            <dt>Source</dt><dd><Path path={game.source_path} copy />{game.missing && <Badge tone="danger">Missing</Badge>}</dd>
+          </dl>
+        </Collapsible>
+        <InstallHistory h={history} />
         {!session.readOnly && <Tools>{[
           game.format === "folder_dump" && <Convert key="convert" game={game} />,
         ]}</Tools>}
-        {!session.readOnly && game.title_id && game.kind === "game" && <SaveBackups tid={game.title_id} />}
-
-        <InstallHistory game={game} />
 
         <form className="sp-stack" onSubmit={save}>
-          <Collapsible title="File details" meta={`${formatLabel(game)} · ${formatBytes(game.size_bytes)}`} open>
-            <dl className="sp-kv">
-              <dt>Metadata source</dt>
-              <dd><Badge tone={confidenceTone} mono>{SOURCE_LABEL[game.metadata_source] ?? game.metadata_source}</Badge><span className="sp-muted">{confidence}</span></dd>
-              <dt>Content ID</dt><dd>{game.content_id ? <Path path={game.content_id} /> : <span className="sp-muted">—</span>}</dd>
-              <dt>Format</dt><dd>{formatLabel(game)}</dd>
-              <dt>Size</dt><dd className="sp-num">{formatBytes(game.size_bytes)}</dd>
-              <dt>Source</dt><dd><Path path={game.source_path} copy />{game.missing && <Badge tone="danger">Missing</Badge>}</dd>
-            </dl>
-          </Collapsible>
           {game.title_id && <StoreImageBrowser url={`/games/${game.id}/store-images`} />}
 
           <fieldset className="sp-stack sp-fieldset" disabled={session.readOnly}>
@@ -543,32 +540,75 @@ export default function GameDetail({ id, from }: { id: string; from: string | nu
   );
 }
 
-/** A game on a console: every copy of it there (one per drive), what the console says about each, and what can be done with it. */
-export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: string }) {
-  const { consoles } = useConsoles();
-  const c = consoles.find((x) => x.id === consoleId);
-  const [tid, setTid] = useState<string | null | undefined>(undefined);
-  const [rows, setRows] = useState<InstalledGame[]>([]);
+/** A console's inventory: its drives and installed copies. Re-read every 3 s while a removal or move runs. */
+function useConsoleInventory(consoleId: string) {
+  const [rows, setRows] = useState<InstalledGame[] | null>(null);
   const [drives, setDrives] = useState<Drive[]>([]);
-  const [dialog, setDialog] = useState<{ kind: "move" | "remove"; game: InstalledGame } | null>(null);
   const load = () => Promise.all([
     api<Drive[]>(`/consoles/${consoleId}/drives`).then(setDrives),
-    // a move to another drive gives the copy a new id, so the page follows the title ID once it's known
-    api<InstalledGame[]>(`/consoles/${consoleId}/installed`).then((rs) => {
-      setRows(rs);
-      setTid((cur) => cur ?? rs.find((r) => r.id === id)?.title_id ?? null);
-    }),
-  ]).catch(() => setTid((cur) => cur ?? null));
-  useEffect(() => { setTid(undefined); load(); }, [consoleId, id]);
-  const copies = rows.filter((r) => r.title_id === tid);
-  const busy = copies.some((r) => r.removing || r.moving);
-  useEffect(() => { // a removal or move still running after its dialog closed
+    api<InstalledGame[]>(`/consoles/${consoleId}/installed`).then(setRows),
+  ]).catch(() => setRows((cur) => cur ?? []));
+  useEffect(() => { setRows(null); load(); }, [consoleId]);
+  const busy = !!rows?.some((r) => r.removing || r.moving);
+  useEffect(() => { // still running after its dialog closed
     if (!busy) return;
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
   }, [busy]);
+  return { rows, drives, load };
+}
 
-  if (tid === undefined) return <p className="sp-muted">Loading…</p>;
+/** One panel per copy of the game on a console (one per drive): what the console says about it, Move and Remove. */
+function ConsoleCopies({ console: c, copies, drives, reload }: { console?: Console; copies: InstalledGame[]; drives: Drive[]; reload: () => void }) {
+  const [dialog, setDialog] = useState<{ kind: "move" | "remove"; game: InstalledGame } | null>(null);
+  const online = c?.state === "online";
+  const name = c?.name ?? "the console";
+  return <>
+    {copies.map((r) => {
+      const smp = r.install_route === "shadowmountplus" && !r.removing && !r.moving && !session.readOnly;
+      const drive = drives.find((d) => d.id === r.drive_id)?.label ?? "Unknown drive";
+      return (
+        <Panel key={r.id} title={copies.length > 1 ? `On ${name} · ${drive}` : `On ${name}`}
+          badge={(r.removing || r.moving) && <Badge tone="info"><Spinner />{r.removing ? "Removing" : "Moving"}</Badge>}
+          foot={smp && <>
+            <span className="sp-panel__note">{!online ? `${c?.name ?? "The console"} must be online.` : "Close the game on the PS5 first."}</span>
+            <div className="sp-btngroup">
+              {r.status !== "orphaned_icon" && <button type="button" className="sp-btn" {...needsOnline(c)} disabled={!online} onClick={() => setDialog({ kind: "move", game: r })}><Icon name="move" />Move…</button>}
+              <button type="button" className="sp-btn sp-btn--danger" {...needsOnline(c)} disabled={!online} onClick={() => setDialog({ kind: "remove", game: r })}>Remove from console…</button>
+            </div>
+          </>}>
+          <dl className="sp-kv">
+            <dt>Drive</dt><dd>{drive}</dd>
+            <dt>Version</dt><dd>{r.version ? <span className="sp-num">{r.version}</span> : <span className="sp-muted">Unknown</span>}</dd>
+            <dt>Size</dt><dd>{r.size_bytes ? <span className="sp-num">{formatBytes(r.size_bytes)}</span> : <span className="sp-muted">Unknown</span>}</dd>
+            <dt>Path</dt><dd><Path path={r.source_path ?? r.installed_path} copy /></dd>
+            <dt>Last checked</dt><dd><Time t={r.last_verified_at} /></dd>
+          </dl>
+        </Panel>
+      );
+    })}
+    {dialog?.kind === "move" && c && <MoveDialog consoleId={c.id} game={dialog.game} drives={drives} onClose={() => { setDialog(null); reload(); }} />}
+    {dialog?.kind === "remove" && c && <RemoveDialog consoleId={c.id} game={dialog.game} onClose={() => { setDialog(null); reload(); }} />}
+  </>;
+}
+
+/** A library game's copies on one console, for its page. */
+function OnConsole({ consoleId, console: c, tid }: { consoleId: string; console?: Console; tid: string }) {
+  const { rows, drives, load } = useConsoleInventory(consoleId);
+  return <ConsoleCopies console={c} copies={(rows ?? []).filter((r) => r.title_id === tid)} drives={drives} reload={load} />;
+}
+
+/** A game on a console that isn't in the PC library: the same page as a library game's, without what needs its files on
+ * this PC. A library game opens its own page instead (the Installed page links there). */
+export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: string }) {
+  const { consoles } = useConsoles();
+  const c = consoles.find((x) => x.id === consoleId);
+  const { rows, drives, load } = useConsoleInventory(consoleId);
+  const [tid, setTid] = useState<string | null>(null);
+  // a move to another drive gives the copy a new id, so the page follows the title ID once it's known
+  useEffect(() => { if (rows && !tid) setTid(rows.find((r) => r.id === id)?.title_id ?? null); }, [rows]);
+  if (!rows) return <p className="sp-muted">Loading…</p>;
+  const copies = rows.filter((r) => r.title_id === (tid ?? rows.find((r) => r.id === id)?.title_id));
   const g = copies[0];
   if (!g) return <>
     <PageHead back={["#/installed", "Installed"]} title="Not on the console" />
@@ -578,46 +618,19 @@ export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: st
       </Empty>
     </div>
   </>;
-  const online = c?.state === "online";
 
   return (
     <div className="sp-detail">
-      <aside className="sp-detail__aside"><Art key={g.id} g={g} /></aside>
+      <aside className="sp-detail__aside"><Art key={g.id} g={g} /><HomeLogo tid={g.title_id} consoleIds={[consoleId]} /></aside>
       <div className="sp-detail__main">
-        <PageHead back={["#/installed", "Installed"]} title={g.title}
-          desc={<><span className="sp-code">{g.title_id}</span> · {c?.name ?? "…"}</>}
+        <PageHead back={["#/installed", "Installed"]} title={<>{g.title}<Badge tone="success" dot>Installed</Badge></>}
+          desc={<span className="sp-code">{g.title_id}</span>}
           actions={g.game_id && <a className="sp-btn" href={`#/game/${g.game_id}`}>Open in your PC library</a>} />
         {!g.game_id && <Notice title="Not in your PC library" text="Move it to this PC to keep a copy there." />}
+        <ConsoleCopies console={c} copies={copies} drives={drives} reload={load} />
         {!session.readOnly && <SaveBackups tid={g.title_id} consoleId={consoleId} />}
-        {copies.map((r) => {
-          const smp = r.install_route === "shadowmountplus" && !r.removing && !r.moving && !session.readOnly;
-          const drive = drives.find((d) => d.id === r.drive_id)?.label ?? "Unknown drive";
-          return (
-            <Panel key={r.id} title={copies.length > 1 ? `On ${drive}` : "On the console"}
-              badge={(r.removing || r.moving) && <Badge tone="info"><Spinner />{r.removing ? "Removing" : "Moving"}</Badge>}
-              foot={smp && <>
-                <span className="sp-panel__note">{!online ? `${c?.name ?? "The console"} must be online.` : "Close the game on the PS5 first."}</span>
-                <div className="sp-btngroup">
-                  {r.status !== "orphaned_icon" && <button type="button" className="sp-btn" {...needsOnline(c)} disabled={!online} onClick={() => setDialog({ kind: "move", game: r })}><Icon name="move" />Move…</button>}
-                  <button type="button" className="sp-btn sp-btn--danger" {...needsOnline(c)} disabled={!online} onClick={() => setDialog({ kind: "remove", game: r })}>Remove from console…</button>
-                </div>
-              </>}>
-              <dl className="sp-kv">
-                <dt>Console</dt><dd>{c?.name ?? "…"}</dd>
-                <dt>Drive</dt><dd>{drive}</dd>
-                <dt>Title ID</dt><dd><Path path={r.title_id} /></dd>
-                <dt>Version</dt><dd>{r.version ? <span className="sp-num">{r.version}</span> : <span className="sp-muted">Unknown</span>}</dd>
-                <dt>Size</dt><dd>{r.size_bytes ? <span className="sp-num">{formatBytes(r.size_bytes)}</span> : <span className="sp-muted">Unknown</span>}</dd>
-                <dt>Path</dt><dd><Path path={r.source_path ?? r.installed_path} copy /></dd>
-                <dt>Last checked</dt><dd><Time t={r.last_verified_at} /></dd>
-              </dl>
-            </Panel>
-          );
-        })}
         <StoreImageBrowser url={`/titles/${g.title_id}/store-images`} />
       </div>
-      {dialog?.kind === "move" && <MoveDialog consoleId={consoleId} game={dialog.game} drives={drives} onClose={() => { setDialog(null); load(); }} />}
-      {dialog?.kind === "remove" && <RemoveDialog consoleId={consoleId} game={dialog.game} onClose={() => { setDialog(null); load(); }} />}
     </div>
   );
 }

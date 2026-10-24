@@ -1659,6 +1659,21 @@ async def install_console_app(console_id: str, db: Session = Depends(get_db)):
     return _console_out(c)
 
 
+@api.post("/consoles/{console_id}/home-logo")
+async def push_home_logo(console_id: str, body: SaveBackupIn, db: Session = Depends(get_db)):
+    """Puts the game's PlayStation Store logo on the console's home screen now, fetched fresh. {"message"}."""
+    c = db.get(Console, console_id) or _not_found()
+    try:
+        await logos.apply(db, c, body.title_id)
+    except AdapterError as e:
+        logos.audit(db, c, body.title_id, False, e.message)
+        db.commit()
+        raise _adapter_failed(502, e)
+    logos.audit(db, c, body.title_id, True, "Put the logo on the home screen.")
+    db.commit()
+    return {"message": "Logo is on the home screen."}
+
+
 @api.get("/consoles/{console_id}/leftovers")
 async def leftovers(console_id: str, db: Session = Depends(get_db)):
     """Hidden copies left on the console by installs, moves and removals that stopped partway. {"bytes", "paths"}."""

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { Empty, Icon, when } from "./ui";
 
 /** A link that follows the message, shown as a text button: [label, href]. */
@@ -18,13 +18,15 @@ const changed = () => listeners.forEach((l) => l());
 const subscribe = (l: () => void) => (listeners.add(l), () => { listeners.delete(l); });
 
 /** Tells the user how a button press went, in a corner pop-up that stays put while the page scrolls. */
-export function toast(title: ReactNode, error = false, action?: Action) {
-  const t = { id: next++, title, error, action, at: Date.now() };
+export function toast(title: ReactNode, error = false, action?: Action, text?: ReactNode) {
+  const t = { id: next++, title, text, error, action, at: Date.now() };
   history = [t, ...history].slice(0, 30);
   changed();
   push(t);
 }
-export const toastError = (e: unknown) => toast(e instanceof Error ? e.message : String(e), true);
+/** An error's message, with what to do about it underneath when the backend says (ApiError.fix). */
+export const toastError = (e: unknown) =>
+  toast(e instanceof Error ? e.message : String(e), true, undefined, (e instanceof ApiError && e.fix) || undefined);
 
 const tone = (t: Toast) => (t.error ? "danger" : "success");
 const icon = (t: Toast) => (t.error ? "xCircle" : "checkCircle");

@@ -134,8 +134,9 @@ def test_install_console_app_endpoint(tmp_path, monkeypatch):
         assert sent["assets/server.txt"].decode().startswith("url=http://127.0.0.1:7735\ntoken=")
 
 
-def test_home_logo(monkeypatch):
+def test_home_logo(tmp_path, monkeypatch):
     png = logos.PNG + b"logo"
+    monkeypatch.setattr(logos, "STORE_DIR", tmp_path)  # apply() keeps the logo there
     catalog = {"media": {"images": [{"type": "MASTER", "url": "https://image.api.playstation.com/m.png"},
                                     {"type": "LOGO", "url": "https://image.api.playstation.com/l.png"}]}}
     fetched = []
@@ -162,6 +163,27 @@ def test_home_logo(monkeypatch):
         catalog["media"]["images"].pop()
         with pytest.raises(consoles.AdapterError, match="no logo"):
             asyncio.run(logos.apply(db, con, "PPSA05678"))
+
+
+def test_push_home_logo(tmp_path, monkeypatch):
+    png = logos.PNG + b"logo"
+    monkeypatch.setattr(logos, "STORE_DIR", tmp_path)
+    monkeypatch.setattr(logos, "_get", lambda url: json.dumps(
+        {"media": {"images": [{"type": "LOGO", "url": "https://image.api.playstation.com/l.png"}]}}).encode()
+        if "/concepts/" in url else png)
+    mock = consoles.MockConsoleAdapter()
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: mock)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        cid = _console(client)
+        r = client.post(f"/api/v1/consoles/{cid}/home-logo", json={"title_id": "PPSA05678"})
+        assert r.status_code == 200 and mock.logos["PPSA05678"] == png
+        assert (tmp_path / "concept-5678.png").read_bytes() == png  # what restore() puts back after a restart
+        r = client.post(f"/api/v1/consoles/{cid}/home-logo", json={"title_id": "PPSA09999"})  # not on the home screen
+        assert r.status_code == 502 and r.json()["error"] == "not_found"
+    with SessionLocal() as db:
+        events = db.scalars(select(AuditLog).where(AuditLog.action == "home_logo")).all()
+        assert [e.result for e in events[-2:]] == ["success", "failed"]
 
 
 def test_logos_back_after_restart(monkeypatch):
