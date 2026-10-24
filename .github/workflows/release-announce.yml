@@ -1,0 +1,26 @@
+# Posts each new stable release to Discord, once it's public with its downloads (.github/scripts/announce-release.sh).
+# release.ps1 -Publish publishes with the maintainer's own gh login, which starts this workflow (one GITHUB_TOKEN made
+# wouldn't). Publishing a draft later counts too. Drafts, prereleases and non-vX.Y.Z tags are skipped, and a rerun
+# doesn't post twice. A failure here leaves the release as it is: fix the cause (often the secret) and rerun the job.
+name: Release announcement
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: release-announce-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  discord:
+    if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # to mark the release as announced
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/announce-release.sh "$TAG"
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

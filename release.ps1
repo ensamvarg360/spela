@@ -71,7 +71,7 @@ Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $out | Out-Null
 $zip = "Spela-$version.zip"
 Copy-Item "$root\dist\$zip" "$out\$zip"
-$assets = @($zip)
+$assets = @($zip)  # .github/scripts/announce-release.sh waits for these and SHA256SUMS.txt before it announces
 $sums = foreach ($a in $assets) { "{0} *{1}" -f (Get-FileHash "$out\$a" -Algorithm SHA256).Hash.ToLower(), $a }
 ($sums -join "`n") + "`n" | Set-Content "$out\SHA256SUMS.txt" -NoNewline
 

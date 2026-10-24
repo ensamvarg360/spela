@@ -68,3 +68,7 @@ For the maintainer. Needs Windows, PowerShell 7.3+, Python 3.12, Node 22, [GitHu
    ```
 
    Or do steps 3 and 4 in one go with `./release.ps1 -Bump patch -Publish`. Publishing refuses to run with other uncommitted changes, with an existing tag, or when the branch is behind `origin`.
+
+5. GitHub then posts the release in Discord as *Spela Releases* ([release-announce.yml](.github/workflows/release-announce.yml)): the version, its notes and the download link, once the release is public and both files are on it. Drafts are announced when you publish them; prereleases and tags other than `vX.Y.Z` never are. Mentions are turned off, so notes can't ping anyone. A marker in the release notes (`<!-- spela:discord-announced -->`, hidden on GitHub) stops a rerun from posting twice. If the announcement fails, the release stays as it is and the workflow run shows why in red: fix it and click **Re-run jobs**. To see the message without sending it: `bash .github/scripts/announce-release.sh v<version> --dry-run` (needs `gh` and `jq`).
+
+   One-time setup: in Discord, **Server Settings → Integrations → Webhooks → New Webhook**, pick the announcements channel, and copy its URL. On GitHub, **Settings → Secrets and variables → Actions → New repository secret**, named `DISCORD_WEBHOOK_URL`, with that URL as its value. Never put the URL in a file.
