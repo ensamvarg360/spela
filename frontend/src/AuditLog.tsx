@@ -49,6 +49,12 @@ export default function AuditLog() {
   const [games, setGames] = useState<Game[]>([]);
   const [more, setMore] = useState(false);
   const [error, setError] = useState("");
+  const [open, setOpen] = useState<Set<AuditEntry["id"]>>(new Set());
+  const toggle = (id: AuditEntry["id"]) => setOpen((s) => {
+    const n = new Set(s);
+    if (!n.delete(id)) n.add(id);
+    return n;
+  });
 
   const load = (before?: string) =>
     api<AuditEntry[]>(`/maintenance/audit-logs${before ? `?before=${encodeURIComponent(before)}` : ""}`).then(
@@ -82,8 +88,10 @@ export default function AuditLog() {
                 const g = r.title_id ? byTid.get(r.title_id) : undefined;
                 const details = Object.entries(r.details).filter(([k, v]) => !HIDDEN.includes(k) && v != null && v !== "" && !(Array.isArray(v) && !v.length));
                 const [result, tone] = RESULT[r.result] ?? [r.result, ""];
+                const isOpen = open.has(r.id);
                 return (
-                  <tr key={r.id}>
+                  <Fragment key={r.id}>
+                  <tr className={isOpen ? "sp-row--open" : undefined}>
                     <td className="sp-nowrap"><Time t={r.created_at} /></td>
                     <td>{ACTION_LABEL[r.action] ?? label(r.action)}</td>
                     <td>
@@ -94,16 +102,24 @@ export default function AuditLog() {
                     <td><Badge tone={tone}>{result}</Badge></td>
                     <td>
                       {(r.target_path || details.length > 0) && (
-                        <details className="sp-disclosure">
-                          <summary><Icon name="chevronRight" />Details</summary>
-                          <dl className="sp-kv sp-kv--compact">
-                            {r.target_path && <><dt>Path</dt><dd><Path path={r.target_path} /></dd></>}
-                            {details.map(([k, v]) => <Fragment key={k}><dt>{label(k)}</dt><dd>{value(k, v)}</dd></Fragment>)}
-                          </dl>
-                        </details>
+                        <button type="button" className="sp-disclosure-btn" aria-expanded={isOpen} onClick={() => toggle(r.id)}>
+                          <Icon name="chevronRight" />Details
+                        </button>
                       )}
                     </td>
                   </tr>
+                  {/* full table width, so long messages aren't squeezed into the last column */}
+                  {isOpen && (
+                    <tr className="sp-row--details">
+                      <td colSpan={6}>
+                        <dl className="sp-kv sp-kv--compact">
+                          {r.target_path && <><dt>Path</dt><dd><Path path={r.target_path} /></dd></>}
+                          {details.map(([k, v]) => <Fragment key={k}><dt>{label(k)}</dt><dd>{value(k, v)}</dd></Fragment>)}
+                        </dl>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>

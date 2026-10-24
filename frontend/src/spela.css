@@ -176,6 +176,12 @@ a.sp-stat:hover { background: var(--row-hover); border-color: var(--border-stron
 .sp-disclosure > summary svg { width: 14px; height: 14px; transition: transform .15s; }
 .sp-disclosure[open] > summary svg { transform: rotate(90deg); }
 .sp-disclosure > :not(summary) { margin-top: var(--space-2); }
+.sp-disclosure-btn { all: unset; display: inline-flex; align-items: center; gap: var(--space-1); cursor: pointer; font-size: 13px; color: var(--text-muted); }
+.sp-disclosure-btn:hover { color: var(--text); }
+.sp-disclosure-btn svg { width: 14px; height: 14px; transition: transform .15s; }
+.sp-disclosure-btn[aria-expanded="true"] svg { transform: rotate(90deg); }
+.sp-table .sp-row--open td { border-bottom: 0; }
+.sp-table .sp-row--details td { padding-top: 0; }
 
 /* ---------- Notice ---------- */
 .sp-notice { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--surface-raised); border: 1px solid var(--border); }
