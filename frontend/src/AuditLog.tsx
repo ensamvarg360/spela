@@ -25,6 +25,7 @@ export const ACTION_LABEL: Record<string, string> = {
   save_backup: "Saves backed up",
   save_restore: "Saves restored",
   home_logo: "Home-screen logo",
+  store_refresh: "Artwork refreshed",
 };
 
 export const RESULT: Record<AuditEntry["result"], [string, Tone]> = {

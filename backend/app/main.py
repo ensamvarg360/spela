@@ -598,7 +598,7 @@ def get_poster(game_id: str, db: Session = Depends(get_db)):
     uploaded = any(config.COVERS_DIR.glob(f"{g.id}.*"))
     if uploaded or not (path := g.title_id and logos.poster(g.title_id, g.content_id)):
         raise HTTPException(404, {"error": "not_found", "message": "No poster."})
-    return FileResponse(path)
+    return FileResponse(path, headers=NO_CACHE)
 
 
 @api.get("/games/{game_id}/store")
@@ -636,7 +636,21 @@ def get_title_poster(title_id: str):
     """The portrait key art for a title ID (logos.poster); 404 when PlayStation Store has none."""
     if not TITLE_ID.fullmatch(title_id) or not (path := logos.poster(title_id)):
         _not_found()
-    return FileResponse(path)
+    return FileResponse(path, headers=NO_CACHE)
+
+
+NO_CACHE = {"Cache-Control": "no-cache"}  # store art can be looked up again (refresh_store): browsers check their copy
+
+
+@api.post("/store/refresh", status_code=202)
+def refresh_store(background: BackgroundTasks, db: Session = Depends(get_db)):
+    """Forgets everything PlayStation Store gave this PC (store pages, posters, logos) and looks it up again for the
+    library's games, after answering. Games only on a console are looked up when next shown."""
+    shutil.rmtree(logos.STORE_DIR, ignore_errors=True)
+    games = db.execute(select(Game.title_id, Game.content_id).where(Game.title_id.is_not(None), Game.missing.is_(False)))
+    background.add_task(_warm_store, sorted(set(games), key=lambda t: t[0]))
+    db.add(AuditLog(action="store_refresh", result="success", details={"message": "Looking up all artwork again."}))
+    db.commit()
 
 
 COVER_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}

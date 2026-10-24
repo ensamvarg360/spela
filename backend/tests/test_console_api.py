@@ -466,3 +466,23 @@ def test_relay_worker_survives_a_bad_request(monkeypatch):
     relay._wanted["c1"] = "10.0.0.5"
     relay._worker("c1", "10.0.0.5")
     assert len(calls) == 2
+
+
+def test_refresh_store(tmp_path, monkeypatch):
+    """Refresh all artwork forgets every store file and looks the library's games up again."""
+    monkeypatch.setattr(logos, "STORE_DIR", tmp_path / "store")
+    (tmp_path / "store").mkdir()
+    (tmp_path / "store" / "PPSA07772.jpg").write_bytes(b"old")
+    (tmp_path / "store" / "PPSA07772-logo.none").write_bytes(b"")
+    warmed = []
+    monkeypatch.setattr(main, "_warm_store", warmed.extend)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        with SessionLocal() as db:
+            db.add(Game(title="Refresh Game", title_id="PPSA07772", content_id="UP0001-PPSA07772_00-REFRESH000000000",
+                        format="image", source_path=str(tmp_path / "r.exfat"), source_fingerprint="x", size_bytes=1,
+                        compatibility_status="ready"))
+            db.commit()
+        assert client.post("/api/v1/store/refresh").status_code == 202
+    assert not (tmp_path / "store").exists()
+    assert ("PPSA07772", "UP0001-PPSA07772_00-REFRESH000000000") in warmed

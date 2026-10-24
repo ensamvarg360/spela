@@ -261,6 +261,14 @@ export default function Settings() {
         </> : null}
       </Panel>
 
+      <Panel title="Artwork" desc="Posters, logos and store details come from PlayStation Store and are kept on this PC. Refresh them if the store's art has changed or something looks wrong."
+        foot={<>
+          <span className="sp-panel__note">Uploaded covers are kept.</span>
+          <button type="button" className="sp-btn" onClick={() => confirm("Delete all artwork from PlayStation Store and download it again?") &&
+            api("/store/refresh", { method: "POST" }).then(() => toast("Downloading artwork again. Posters fill in over the next few minutes."), toastError)}>
+            <Icon name="refresh" />Refresh all artwork</button>
+        </>} />
+
       <Consoles />
       <HelperKey />
       <ViewOnly />
