@@ -1292,12 +1292,29 @@ def game_history(game_id: str, db: Session = Depends(get_db)):
 
 
 @api.post("/games/{game_id}/convert", status_code=202)
-async def convert_game(game_id: str, db: Session = Depends(get_db)):
-    """Starts writing the folder dump into an .exfat disc image next to it (jobs.start_convert). The folder is kept."""
+async def convert_game(game_id: str, format: Literal["exfat", "lz4", "lz4_exfat"] = "exfat", db: Session = Depends(get_db)):
+    """Starts writing the folder dump next to it as an .exfat disc image, an LZ4-packed folder or an LZ4-packed .exfat
+    (jobs.start_convert). The folder is kept."""
     try:
-        return jobs.start_convert(_game(db, game_id))
+        return jobs.start_convert(_game(db, game_id), format)
     except ValueError as e:
         raise HTTPException(409, {"error": "cannot_convert", "message": str(e)})
+
+
+@api.get("/games/{game_id}/convert/formats")
+def conversion_formats(game_id: str, db: Session = Depends(get_db)):
+    """{format: why the game can't be converted to it, or null}."""
+    game = _game(db, game_id)
+    return {f: jobs.convert_blocker(game, f) for f in jobs.FORMATS}
+
+
+@api.post("/games/{game_id}/convert/delete-source")
+async def delete_converted_source(game_id: str):
+    """Deletes the folder a conversion that worked was made from (jobs.delete_source). {"deleted": path}."""
+    try:
+        return {"deleted": await jobs.delete_source(game_id)}
+    except ValueError as e:
+        raise HTTPException(409, {"error": "cannot_delete", "message": str(e)})
 
 
 @api.get("/games/{game_id}/convert")

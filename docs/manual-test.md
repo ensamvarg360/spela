@@ -299,6 +299,20 @@ Nothing in the app does this yet. Use an FTP payload and only read: don't change
 
 Paste the paths, `.schema` output and answers under *Problems found*, even if everything worked: they decide what the profile page can show.
 
+## LZ4 conversion (needs a folder dump of a game that uses AMPR)
+
+- [ ] Open a folder dump of a game that doesn't use AMPR and pick **LZ4-packed folder** under **Convert**.
+  **Expect:** the text says it doesn't use AMPR, and **Convert** is greyed out.
+- [ ] Open a game that uses AMPR, pick **LZ4-packed .exfat**, click **Convert**, and cancel halfway.
+  **Expect:** it stops, and no `.lz4.building` folder or `.exfat.building` file is left next to the folder.
+- [ ] Convert it again and let it finish.
+  **Expect:** the message gives the new and old size, the result is in the library with the folder's title and cover, and the activity log says *Converted* with the format.
+- [ ] Install the LZ4 `.exfat` and start the game, then load a save and play for a few minutes.
+  **Expect:** it starts with an *Emulators applied* notification from ShadowMountPlus, and loads about as fast as the original.
+- [ ] Do the same with **LZ4-packed folder**.
+- [ ] Click **Delete the folder** next to the result, and confirm.
+  **Expect:** the folder is gone, the page opens the converted game, the original shows as missing after a scan, and the activity log says *Original folder deleted*.
+
 ## Package install (needs a console on firmware 11.60 or lower; untested)
 
 - [ ] Update the helper on the Installed page, then queue a game `.pkg` whose title isn't installed.

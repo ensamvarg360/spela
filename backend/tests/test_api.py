@@ -1,6 +1,7 @@
 import io
 import os
 import time
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -247,6 +248,25 @@ def test_convert_folder_dump_to_exfat(tmp_path):
         r = c.post(f"/api/v1/games/{folder['id']}/convert")
         assert r.status_code == 409 and "already exists" in r.json()["message"]
         assert c.post(f"/api/v1/games/{image['id']}/convert").status_code == 409  # only folder dumps
+
+        formats = c.get(f"/api/v1/games/{folder['id']}/convert/formats").json()
+        assert "already exists" in formats["exfat"] and "doesn't use AMPR" in formats["lz4"]
+        write(dump / "eboot.bin", b"\x7fELF libSceAmpr.sprx")
+        write(dump / "data" / "level.assets", b"forest " * 100_000)
+        assert c.get(f"/api/v1/games/{folder['id']}/convert/formats").json()["lz4"] is None
+        r = c.post(f"/api/v1/games/{folder['id']}/convert", params={"format": "lz4"})
+        assert r.status_code == 202 and r.json()["image_path"].endswith("Native Game [PPSA02222] [LZ4]")
+        for _ in range(100):
+            if (conv := c.get(f"/api/v1/games/{folder['id']}/convert").json())["status"] != "converting":
+                break
+            time.sleep(0.1)
+        assert conv["status"] == "success" and "was" in conv["message"], conv
+        packed = c.get(f"/api/v1/games/{conv['image_game_id']}").json()
+        assert packed["format"] == "folder_dump" and packed["favorite"]
+        assert (Path(conv["image_path"]) / "ampr_assets.index").is_file()
+        assert not (Path(conv["image_path"]) / "data" / "level.assets").exists()
+        assert c.post(f"/api/v1/games/{folder['id']}/convert/delete-source").json() == {"deleted": str(dump)}
+        assert not dump.exists() and c.get(f"/api/v1/games/{folder['id']}").json()["missing"]
 
 
 def test_update_check(monkeypatch):

@@ -49,16 +49,28 @@ def _name_entries(name: str) -> int:
     return 2 + -(-units // 15)  # file + stream extension + one entry per 15 name characters
 
 
-def _walk(path: str, name: str, mtime: float) -> _Node:
-    node = _Node(path, name, True, mtime=mtime)
-    with os.scandir(path) as it:
-        for e in sorted(it, key=lambda e: e.name):
+def _walk(paths: list[str], name: str, mtime: float, skip: frozenset[str] = frozenset(), rel: str = "") -> _Node:
+    """The folders in `paths` laid over each other (a file in a later one wins), without the files in `skip`."""
+    node = _Node(paths[0], name, True, mtime=mtime)
+    entries: dict[str, list[os.DirEntry]] = {}
+    for path in paths:
+        with os.scandir(path) as it:
+            for e in it:
+                entries.setdefault(e.name, []).append(e)
+    for n in sorted(entries):
+        es = entries[n]
+        if rel + n in skip:
+            continue
+        for e in es:
             if e.is_symlink() or e.is_junction():
                 raise AdapterError("unsafe_link", f"{e.path} is a link. Links can't go into an image.")
-            st = e.stat()
-            child = _walk(e.path, e.name, st.st_mtime) if e.is_dir() else _Node(e.path, e.name, False, st.st_size, st.st_mtime)
-            node.children.append(child)
-            node.size += _name_entries(e.name) * ENTRY
+        if es[-1].is_dir():
+            child = _walk([e.path for e in es if e.is_dir()], n, es[-1].stat().st_mtime, skip, rel + n + "/")
+        else:
+            st = es[-1].stat()
+            child = _Node(es[-1].path, n, False, st.st_size, st.st_mtime)
+        node.children.append(child)
+        node.size += _name_entries(n) * ENTRY
     return node
 
 
@@ -155,9 +167,11 @@ def _layout(root: _Node) -> tuple[int, int, int, list[_Node], list[_Node], list[
     return heap + count * SPC, fat_sectors, count, dirs, files, [2, 2 + bitmap_clusters, -(-count // 8)]
 
 
-def build(src: Path, dest: Path, progress: ProgressCallback, stop: Event, label: str = "") -> int:
-    """Writes the image to dest (via dest.building, renamed when complete). Returns its size in bytes."""
-    root = _walk(str(src), "", os.stat(src).st_mtime)
+def build(src: Path, dest: Path, progress: ProgressCallback, stop: Event, label: str = "",
+          over: Path | None = None, skip: frozenset[str] = frozenset()) -> int:
+    """Writes the image to dest (via dest.building, renamed when complete). Returns its size in bytes. `over`: a
+    folder whose files go in too, replacing src's of the same name; `skip`: src's files (relative paths) left out."""
+    root = _walk([str(src)] + ([str(over)] if over else []), "", os.stat(src).st_mtime, skip)
     volume_sectors, fat_sectors, count, dirs, files, (bitmap_first, upcase_first, bitmap_len) = _layout(root)
     size = volume_sectors * SECTOR
     tmp = dest.with_name(dest.name + BUILDING)

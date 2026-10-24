@@ -10,6 +10,7 @@ dependencies = [
   "python-multipart>=0.0.9",
   "pillow>=10",
   "cryptography>=43",  # Fernet for console credentials
+  "lz4>=4.3.2",  # LZ4 game packing (lz4pack.py)
 ]
 
 [project.optional-dependencies]
@@ -18,7 +19,7 @@ desktop = ["pystray>=0.19", "pywebview>=5"]
 test = ["pytest>=8", "httpx>=0.27", "pyftpdlib>=2"]
 
 [tool.setuptools]
-packages = ["app"]
+packages = ["app", "app.ampr"]
 package-data = {app = ["payload/*.elf", "console_app/**/*", "assets/*"]}
 
 [tool.setuptools.dynamic]

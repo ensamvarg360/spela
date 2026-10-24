@@ -23,7 +23,7 @@ from typing import Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import archives, config, exfat, inventory, logos, scanner
+from . import archives, config, exfat, inventory, logos, lz4pack, scanner
 from .consoles import IMAGE_EXTS, AdapterError, DriveInfo, InstalledGameInfo, RemovalResult
 from .database import SessionLocal
 from .models import AuditLog, Console, Drive, Game, InstalledGame, InstallJob, LibraryRoot, _id, now
@@ -358,7 +358,7 @@ def in_progress() -> list[str]:
         rows = db.execute(select(InstallJob.status, Game.title).join(Game, Game.id == InstallJob.game_id)
                           .where(InstallJob.status.in_(ACTIVE)).order_by(InstallJob.created_at)).all()
         busy = [f"{'Waiting to install' if status == 'queued' else 'Installing'} {title}" for status, title in rows]
-        busy += [f"Converting {g.title if (g := db.get(Game, gid)) else 'a game'} to .exfat"
+        busy += [f"Converting {g.title if (g := db.get(Game, gid)) else 'a game'} to {FORMATS[c['format']]}"
                  for gid, c in conversions.items() if c["status"] == "converting"]
     busy += [f"Removing {r['title']}" for r in removals.values() if r["status"] == "removing"]
     busy += [f"Moving {m['title']} to another drive" for m in moves.values() if m["status"] == "moving"]
@@ -862,42 +862,46 @@ async def _save_restore(restore_id: str):
         db.commit()
 
 
-# ---------------------------------------------------------------- folder dump -> .exfat image (exfat.py)
+# ---------------------------------------------------------------- folder dump -> .exfat image (exfat.py) or LZ4 (lz4pack.py)
 
 # ponytail: conversions live in memory like removals; the audit log is the lasting record. One at a time: they're disk-bound.
 conversions: dict[str, dict] = {}  # game id -> status: converting|success|failed|canceled, progress, message
 _convert_stop: dict[str, threading.Event] = {}
 CARRIED = ("title", "title_id", "metadata_source", "metadata_confidence", "content_id", "version", "region", "description",
            "genre", "release_date", "owned_copy_type", "backup_date", "provenance_notes", "favorite")
+FORMATS = {"exfat": ".exfat", "lz4": "an LZ4 folder", "lz4_exfat": "an LZ4 .exfat"}
 
 
-def image_path(game: Game) -> Path:
+def image_path(game: Game, fmt: str = "exfat") -> Path:
     """Next to the folder, so the next scan finds it. Disc images get their title ID from the file name."""
     src = Path(game.source_path)
     name = src.name if not game.title_id or scanner.TITLE_ID_RE.search(src.name) else f"{src.name} [{game.title_id}]"
-    return src.with_name(name + ".exfat")
+    return src.with_name(name + ("" if fmt == "exfat" else " [LZ4]") + ("" if fmt == "lz4" else ".exfat"))
 
 
-def convert_blocker(game: Game) -> str | None:
+def convert_blocker(game: Game, fmt: str = "exfat") -> str | None:
+    if fmt not in FORMATS:
+        return f"Unknown format {fmt}."
     if game.format != "folder_dump":
-        return "Only folder dumps can be converted to a disc image."
+        return "Only folder dumps can be converted."
     if game.missing or not os.path.isdir(game.source_path):
         return f"Can't read {game.source_path}."
     if game.detection_evidence.get("partial"):
         return "The folder looks like an incomplete copy."
     if any(c["status"] == "converting" for c in conversions.values()):
         return "Another game is being converted. Wait for it to finish."
-    if image_path(game).exists():
-        return f"{image_path(game).name} already exists next to the folder."
-    return None
+    if image_path(game, fmt).exists():
+        return f"{image_path(game, fmt).name} already exists next to the folder."
+    return lz4pack.blocker(Path(game.source_path)) if fmt != "exfat" else None
 
 
-def start_convert(game: Game) -> dict:
+def start_convert(game: Game, fmt: str = "exfat") -> dict:
     """Raises ValueError with the reason when the game can't be converted."""
-    if reason := convert_blocker(game):
+    if reason := convert_blocker(game, fmt):
         raise ValueError(reason)
-    c = conversions[game.id] = {"status": "converting", "progress": 0.0, "bytes_done": 0, "bytes_total": game.size_bytes,
-                                "message": "Writing the disc image.", "image_path": str(image_path(game)), "image_game_id": None}
+    c = conversions[game.id] = {"status": "converting", "format": fmt, "progress": 0.0, "bytes_done": 0,
+                                "bytes_total": game.size_bytes, "message": "Starting.", "source": game.source_path,
+                                "image_path": str(image_path(game, fmt)), "image_game_id": None}
     _convert_stop[game.id] = threading.Event()
     _spawn(_convert(game.id))
     return c
@@ -910,17 +914,38 @@ def cancel_convert(game_id: str) -> bool:
     return False
 
 
-async def _convert(game_id: str):
-    c = conversions[game_id]
-
-    def progress(done: int, total: int):  # called from the build thread; plain assignments
+def _write(c: dict, src: Path, dest: Path, stop: threading.Event, label: str) -> int:
+    """The conversion itself, on a worker thread. Returns the size written."""
+    def progress(done: int, total: int):  # plain assignments
         c["bytes_done"], c["bytes_total"], c["progress"] = done, total, done / total if total else 1.0
 
+    def say(message: str):
+        c["message"], c["progress"] = message, 0.0
+
+    if c["format"] == "exfat":
+        say("Writing the disc image.")
+        return exfat.build(src, dest, progress, stop, label)
+    work = Path(f"{dest}.lz4{exfat.BUILDING}")  # the scanner skips it
+    shutil.rmtree(work, ignore_errors=True)  # left by a run that was cut short
+    try:
+        packed = lz4pack.pack(src, work, progress, stop, say)
+        if c["format"] == "lz4_exfat":
+            say("Writing the disc image.")
+            return exfat.build(src, dest, progress, stop, label, over=work, skip=frozenset(packed))
+        lz4pack.copy_loose(src, work, packed, stop, say)
+        os.rename(work, dest)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return sum(f.stat().st_size for f in dest.rglob("*") if f.is_file())
+
+
+async def _convert(game_id: str):
+    c = conversions[game_id]
     with SessionLocal() as db:
         game = db.get(Game, game_id)
-        dest, source, title_id = Path(c["image_path"]), game.source_path, game.title_id
+        dest, source, title_id, before = Path(c["image_path"]), game.source_path, game.title_id, game.size_bytes
         try:
-            size = await asyncio.to_thread(exfat.build, Path(source), dest, progress, _convert_stop[game_id], title_id or "")
+            size = await asyncio.to_thread(_write, c, Path(source), dest, _convert_stop[game_id], title_id or "")
             c["message"] = "Adding it to the library."
             while await asyncio.to_thread(scanner.run_scan_locked, SessionLocal) is None:
                 await asyncio.sleep(1)  # a scan was already running and may have missed the new file
@@ -932,13 +957,15 @@ async def _convert(game_id: str):
                 scanner.refresh_statuses(db)
                 c["image_game_id"] = image.id
             c["status"] = "success"
-            c["message"] = (f"Done: {dest.name} ({size / 1e9:.1f} GB). The folder is still there; delete it yourself "
-                            f"once you've checked the image.")
+            c["message"] = f"Done: {dest.name} ({size / 1e9:.1f} GB"
+            c["message"] += f", was {before / 1e9:.1f} GB)." if c["format"] != "exfat" and before else ")."
+            c["message"] += (" Install it and start it once on the PS5 before deleting the folder: some games don't run "
+                             "LZ4-packed." if c["format"] != "exfat" else " Check the image before deleting the folder.")
         except AdapterError as e:
             c["status"] = "canceled" if e.code == "canceled" else "failed"
             c["message"] = e.message
         except OSError as e:
-            c["status"], c["message"] = "failed", f"Couldn't write the image: {e.strerror or e}"
+            c["status"], c["message"] = "failed", f"Couldn't write it: {e.strerror or e}"
         except Exception as e:  # a bug must fail the conversion, not leave it "converting"
             log.exception("conversion of %s", game_id)
             c["status"], c["message"] = "failed", f"Unexpected error: {e}"
@@ -948,8 +975,35 @@ async def _convert(game_id: str):
             _notify(f"{dest.name}: {'converted' if c['status'] == 'success' else 'conversion failed'}", c["message"], c["status"] == "success")
         db.add(AuditLog(action="convert", title_id=title_id, target_path=str(dest),
                         result={"success": "success", "canceled": "canceled"}.get(c["status"], "failed"),
-                        details={"source": source, "message": c["message"]}))
+                        details={"source": source, "format": c["format"], "message": c["message"]}))
         db.commit()
+
+
+async def delete_source(game_id: str) -> str:
+    """Deletes the folder a conversion that worked was made from: offered once the user has checked the result.
+    Returns the path deleted. ValueError when there's no such conversion."""
+    c = conversions.get(game_id)
+    if not c or c["status"] != "success" or not c["image_game_id"]:
+        raise ValueError("Only the folder of a game converted since Spela started can be deleted here.")
+    src = c["source"]
+    if not os.path.isdir(src):
+        raise ValueError(f"{src} is already gone.")
+    try:
+        await asyncio.to_thread(shutil.rmtree, src)
+        result, message = "success", ""
+    except OSError as e:
+        result, message = "failed", f"Couldn't delete all of it: {e.strerror or e}"
+    with SessionLocal() as db:
+        db.add(AuditLog(action="source_delete", target_path=src, result=result,
+                        title_id=(g.title_id if (g := db.get(Game, game_id)) else None),
+                        details={"converted_to": c["image_path"], **({"message": message} if message else {})}))
+        db.commit()
+    c["source_deleted"] = result == "success"
+    while await asyncio.to_thread(scanner.run_scan_locked, SessionLocal) is None:
+        await asyncio.sleep(1)  # marks the folder's entry missing
+    if message:
+        raise ValueError(message)
+    return src
 
 
 def _carry_over(folder: Game, image: Game):

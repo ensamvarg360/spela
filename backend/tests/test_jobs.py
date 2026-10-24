@@ -888,7 +888,7 @@ def test_in_progress_lists_what_quitting_would_cut_short(ps5, monkeypatch):
                     InstallJob(console_id=c.id, game_id=b.id, status="queued"),
                     InstallJob(console_id=c.id, game_id=b.id, status="failed")])
         db.commit()
-        monkeypatch.setitem(jobs.conversions, b.id, {"status": "converting"})
+        monkeypatch.setitem(jobs.conversions, b.id, {"status": "converting", "format": "exfat"})
     monkeypatch.setitem(jobs.removals, "r", {"status": "removing", "title": "Old Game"})
     monkeypatch.setitem(jobs.moves, "m", {"status": "success", "title": "Done Game"})  # finished: not listed
     assert jobs.in_progress() == ["Installing Racer PPSA04444.exfat", "Waiting to install Dump PPSA03333",

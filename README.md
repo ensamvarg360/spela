@@ -30,7 +30,7 @@ Browse them on your PC, install them to your console over your home network, rem
 - **Finds your games.** Point it at a folder or a whole drive. It recognizes folder dumps, disc images (`.exfat`, `.ffpkg`, `.ffpfs`, `.ffpfsc`) and `.zip` / `.7z` / `.rar` archives holding them by looking *inside* the files, not just at their names. Anything it can't identify is flagged, never guessed.
 - **Looks the part.** Posters, publisher, release year, genre and rating come from PlayStation Store by title ID, no account needed. Prefer your own cover? Upload it.
 - **Keeps DLC apart.** DLC gets its own page and folders, and unlockers can be added straight into an installed game's folder.
-- **Converts folder dumps** to a single `.exfat` image in plain Python: no OSFMount, WSL or admin rights.
+- **Converts folder dumps** to a single `.exfat` image in plain Python: no OSFMount, WSL or admin rights. Games that use AMPR can be LZ4-packed too, as a folder or an `.exfat`, often to about half the size.
 
 **Your console**
 

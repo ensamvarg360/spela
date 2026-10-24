@@ -20,7 +20,8 @@ PARTIAL_SUFFIXES = (".partial", ".part", ".tmp")
 PARTIAL_MARKER = ".partial"  # marker file inside a folder dump
 SIDECAR_NAMES = ("game.json", "metadata.json")
 # OS-managed folders on drive roots; unreadable or irrelevant, never scanned or offered in the browser.
-SYSTEM_DIRS = ("$RECYCLE.BIN", "System Volume Information", "lost+found", ".Trash-*", "$Extend")
+SYSTEM_DIRS = ("$RECYCLE.BIN", "System Volume Information", "lost+found", ".Trash-*", "$Extend",
+               "*.building")  # an LZ4 conversion still writing (jobs._write)
 
 
 def is_system_dir(name: str) -> bool:

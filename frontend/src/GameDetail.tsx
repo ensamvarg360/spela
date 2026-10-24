@@ -155,16 +155,23 @@ function StoreImageBrowser({ url }: { url: string }) {
   );
 }
 
-type Conversion = { status: "converting" | "success" | "failed" | "canceled"; progress: number; message: string; image_path: string; image_game_id: string | null };
+type Format = "exfat" | "lz4_exfat" | "lz4";
+type Conversion = { status: "converting" | "success" | "failed" | "canceled"; format: Format; progress: number; message: string; image_path: string; image_game_id: string | null; source_deleted?: boolean };
+const FORMAT_LABEL: Record<Format, string> = { exfat: ".exfat disc image", lz4_exfat: "LZ4-packed .exfat", lz4: "LZ4-packed folder" };
 
-/** Writes a folder dump into one .exfat disc image next to it; the image then shows up in the library as its own game. */
+/** Writes a folder dump next to it as one .exfat disc image, or LZ4-packed (lz4pack.py) as an image or a folder; the
+ * result then shows up in the library as its own game, and the folder can be deleted from here once it's checked. */
 function Convert({ game }: { game: Game }) {
   const [conv, setConv] = useState<Conversion | null>(null);
+  const [blockers, setBlockers] = useState<Record<Format, string | null> | null>(null);
+  const [format, setFormat] = useState<Format>("exfat");
   const [error, setError] = useState("");
   const converting = conv?.status === "converting";
 
   useEffect(() => {
-    if (game.format === "folder_dump") api<Conversion>(`/games/${game.id}/convert`).then(setConv, () => {});
+    if (game.format !== "folder_dump") return;
+    api<Conversion>(`/games/${game.id}/convert`).then(setConv, () => {});
+    api<Record<Format, string | null>>(`/games/${game.id}/convert/formats`).then(setBlockers, () => {});
   }, [game.id, game.format]);
   useEffect(() => {
     if (!converting) return;
@@ -173,38 +180,61 @@ function Convert({ game }: { game: Game }) {
   }, [converting, game.id]);
 
   if (game.format !== "folder_dump") return null;
+  const lz4 = format !== "exfat";
 
   async function start() {
-    if (!confirm(`Write this game into one .exfat disc image next to its folder? It needs about ${formatBytes(game.size_bytes)} free on that drive. The folder is kept.`)) return;
+    const note = lz4 ? " LZ4 works only for some games: start the result once on the PS5 before you delete the folder." : "";
+    if (!confirm(`Write this game as an ${FORMAT_LABEL[format]} next to its folder? It needs up to ${formatBytes(game.size_bytes)} free on that drive. The folder is kept.${note}`)) return;
     setError("");
     try {
-      setConv(await api<Conversion>(`/games/${game.id}/convert`, { method: "POST" }));
+      setConv(await api<Conversion>(`/games/${game.id}/convert?format=${format}`, { method: "POST" }));
     } catch (e) {
       setError((e as Error).message);
     }
   }
 
+  async function deleteSource() {
+    if (!conv || !confirm(`Delete the folder ${game.source_path} for good?\n\nOnly do this once ${conv.image_path} works on the PS5. ` +
+      "It doesn't go to the Recycle Bin.")) return;
+    try {
+      await api(`/games/${game.id}/convert/delete-source`, { method: "POST" });
+      toast("Folder deleted", false, undefined, game.source_path);
+      if (conv.image_game_id) location.hash = `#/game/${conv.image_game_id}`;
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  const blocked = blockers?.[format];
   return (
     <li className="sp-listrow">
       <div className="sp-listrow__main">
-        <div className="sp-listrow__title">Convert to .exfat</div>
+        <div className="sp-listrow__title">Convert</div>
         {converting ? <>
           <Bar value={conv.progress} label="Conversion progress" />
           <div className="sp-listrow__meta" role="status"><span className="sp-num">{Math.floor(conv.progress * 100)}%</span><span className="sp-sep" /><span>{conv.message}</span></div>
-        </> : (
-          <div className="sp-listrow__meta"><span>Writes this folder dump into one disc image next to it. The folder is kept.</span></div>
-        )}
+        </> : <>
+          <select className="sp-select" aria-label="Convert to" value={format} onChange={(e) => setFormat(e.target.value as Format)}>
+            {(Object.keys(FORMAT_LABEL) as Format[]).map((f) => <option key={f} value={f}>{FORMAT_LABEL[f]}</option>)}
+          </select>
+          <div className="sp-listrow__meta"><span>{blocked ?? (lz4
+            ? "Packs the game's assets with LZ4, often much smaller. Only for games that use AMPR; some of those still won't start."
+            : "Writes this folder dump into one disc image next to it.")} The folder is kept.</span></div>
+        </>}
         {error && <p className="sp-error" role="alert">{error}</p>}
         {conv && !converting && (
           <div className={conv.status === "success" ? "sp-listrow__meta" : "sp-error"} role="status">
-            <span>{conv.message}</span>{conv.image_game_id && <a className="sp-link" href={`#/game/${conv.image_game_id}`}>Open the image</a>}
+            <span>{conv.message}</span>{conv.image_game_id && <a className="sp-link" href={`#/game/${conv.image_game_id}`}>Open it</a>}
+            {conv.status === "success" && !conv.source_deleted && (
+              <button type="button" className="sp-btn sp-btn--sm sp-btn--ghost" onClick={deleteSource}>Delete the folder</button>
+            )}
           </div>
         )}
       </div>
       <div className="sp-listrow__aside">
         {converting
           ? <button type="button" className="sp-btn sp-btn--sm sp-btn--ghost" onClick={() => api(`/games/${game.id}/convert/cancel`, { method: "POST" })}>Cancel</button>
-          : <button type="button" className="sp-btn sp-btn--sm" onClick={start}>Convert</button>}
+          : <button type="button" className="sp-btn sp-btn--sm" onClick={start} disabled={!!blocked}>Convert</button>}
       </div>
     </li>
   );
