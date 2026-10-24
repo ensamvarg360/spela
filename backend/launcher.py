@@ -167,7 +167,10 @@ def main():
         if update:
             cmd = ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", _swap_script(update)]
         # The new instance must not inherit the PyInstaller bootloader's settings of this one (splash, paths).
+        # The swap runs outside the app folder: Windows won't rename a folder that is a process's current directory,
+        # and Spela's is its own folder when started by double-click.
         subprocess.Popen(cmd, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+                         cwd=Path(sys.executable).parent.parent if update else None,
                          creationflags=subprocess.CREATE_NO_WINDOW if update else 0)
         icon.stop()
         window.destroy()
