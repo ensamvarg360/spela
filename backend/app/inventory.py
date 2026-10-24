@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from . import __version__, config, credentials, relay
-from .consoles import CONSOLE_APP_DIR, CONSOLE_APP_LOGO, CONSOLE_APP_TITLE_ID, TITLE_ID, AdapterError, ConsoleAdapter, ConsoleStatus, HelperConsoleAdapter, get_adapter, ours
+from .consoles import CONSOLE_APP_DIR, CONSOLE_APP_LOGO, CONSOLE_APP_TITLE_ID, TITLE_ID, AdapterError, ConsoleAdapter, ConsoleStatus, HelperConsoleAdapter, get_adapter, helper_elf, helper_key, ours
 from .database import SessionLocal
 from .models import AuditLog, Console, Drive, Game, InstalledGame, now
 
@@ -19,6 +19,8 @@ AUTO_HELPER_SECONDS = 60  # between tries to send the helper (or an update of th
 _auto_helper_at: dict[str, float] = {}
 _auto_app_at: dict[str, float] = {}
 app_logo_set: set[str] = set()  # consoles whose PS5 app tile has the wordmark as its logo
+_offered_at: dict[str, float] = {}
+helper_offered: set[str] = set()  # consoles whose Payload Manager has this version of the helper
 
 
 def adapter_for(db: Session, console: Console) -> ConsoleAdapter:
@@ -38,6 +40,8 @@ def console_app_files(console: Console) -> dict[str, bytes]:
     files["assets/server.txt"] = (f"url=http://127.0.0.1:{HelperConsoleAdapter.HELPER_PORT}\n"
                                   f"token={console_app_token(console.id)}\n").encode()
     files["assets/version.txt"] = __version__.encode()
+    if console.auto_helper:  # the app sends it when it finds the helper isn't running (Remove helper takes it out)
+        files["assets/spela.elf"] = helper_elf(helper_key())
     return files
 
 
@@ -154,6 +158,7 @@ async def check(console_id: str) -> dict:
             result.message, result.fix = "The helper is removed.", ("Spela won't send it again until you click "
                                                                   "Install helper in Settings → Consoles.")
         await _auto_console_app(db, console, adapter, result)
+        await _offer_helper(console, adapter, result)
         prev = record(console_id, result.state, result.message, result.fix)
         if result.state == "online":
             console.last_seen_at, console.helper_status = now(), result.helper_status
@@ -189,6 +194,19 @@ async def _auto_helper(db: Session, console: Console, adapter: ConsoleAdapter, r
     db.add(AuditLog(action="helper_install", console_id=console.id, result="success", details={"version": version, "automatic": True}))
     db.commit()
     return True
+
+
+async def _offer_helper(console: Console, adapter: ConsoleAdapter, result: ConsoleStatus):
+    """Puts this version of the helper in the console's Payload Manager, when it runs one, so it can start the helper
+    with no PC (adapter.offer_helper). Once per run of this PC app; tried again in a minute while it isn't running."""
+    if (not console.auto_helper or console.connection_type not in ("helper", "ftp") or result.state != "online"
+            or not ours(result.helper_status) or console.id in helper_offered):
+        return
+    if time.monotonic() - _offered_at.get(console.id, float("-inf")) < AUTO_HELPER_SECONDS:
+        return
+    _offered_at[console.id] = time.monotonic()
+    if await adapter.offer_helper():
+        helper_offered.add(console.id)
 
 
 async def _auto_console_app(db: Session, console: Console, adapter: ConsoleAdapter, result: ConsoleStatus):

@@ -6,7 +6,8 @@
  *   POST /mkdir?p=<dir>  /rename?p=<from>&to=<to>  /rm?p=<file or empty folder>
  *   POST /quit                 stops the helper, so a newer copy can take the port (a new copy sends it to an old one itself)
  *   POST /uninstall?id=<title ID>  removes a ShadowMountPlus tile whose game files are gone, now or once the console lets it (uninstall_tile())
- *   POST /logo?id=<title ID>   PNG body: the title logo on the game's home-screen page; empty body: none again (set_logo())
+ *   POST /logo?id=<title ID>   PNG body: the title logo on the game's home-screen page; empty body: none again (set_logo());
+ *                              kept on the console and put back after a restart (keep_logos())
  *   POST /copy?p=<from>&to=<to>  starts copying a file or folder on the console, e.g. to another drive (copy_start())
  *   GET  /copy                 {"running", "done", "total", "error", "to"} of that copy;  POST /copy/cancel stops it
  *   POST /install?p=<.pkg in a homebrew folder>&cid=<content ID>  starts the console's package installer (install_pkg(), untested)
@@ -14,7 +15,7 @@
  *   GET  /relay  POST /relay?id=<id>&status=<status>  the PS5 app's requests, taken and answered by the PC (relay_app())
  *   any  /api/v1/console-app/...  from this console only, without the key: the PS5 app, passed on to the PC
  * Paths are percent-encoded. Every request needs this console's key in X-Storefront-Key (authorized()); even so,
- * writes are refused outside the homebrew folders (writable()) and one title's save data (save_path(), for a restore), and /logo changes only the one file and database column it names. One thread per connection: /info still answers during a long upload.
+ * writes are refused outside the homebrew folders (writable()) and one title's save data (save_path(), for a restore), and /logo changes only the one file and database column it names (and its kept copy). One thread per connection: /info still answers during a long upload.
  * Build with ./build.ps1; VERSION comes from backend/app/__init__.py. */
 #include <dirent.h>
 #include <dlfcn.h>
@@ -352,12 +353,16 @@ static void upload(int c, const char *path, const char *head, const char *body, 
   else ok(c);
 }
 
-/* Query parameter "id" as a title ID (4 capital letters, 5 digits) into `id` (16 bytes); 0 when it isn't one. */
-static int title_id(const char *query, char *id) {
-  if (!query || !param(query, "id", id, 16) || strlen(id) != 9) return 0;
+/* 4 capital letters, then 5 digits; `id` may go on after them. */
+static int title_id_at(const char *id) {
   for (int i = 0; i < 9; i++)
     if (i < 4 ? id[i] < 'A' || id[i] > 'Z' : id[i] < '0' || id[i] > '9') return 0;
   return 1;
+}
+
+/* Query parameter "id" as a title ID into `id` (16 bytes); 0 when it isn't one. */
+static int title_id(const char *query, char *id) {
+  return query && param(query, "id", id, 16) && strlen(id) == 9 && title_id_at(id);
 }
 
 /* Asks ShadowMountPlus's API to uninstall `id`. Returns the HTTP status (its body in `out`), or 0 when nothing
@@ -726,15 +731,84 @@ static void copy_status(int c) {
   free(b.s);
 }
 
+#define LOGO_KEEP "/data/spela/logos" /* <title ID>.png: the last logo set for each title, for keep_logos() */
+static pthread_mutex_t logo_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Copies file `src` over `dst` through <dst>.partial, so a copy cut short never replaces it. NULL when done, else what
+ * went wrong. */
+static const char *copy_file(const char *src, const char *dst) {
+  char tmp[PATH_MAX], chunk[16384];
+  if (snprintf(tmp, sizeof tmp, "%s.partial", dst) >= (int)sizeof tmp) return "path too long";
+  int in = open(src, O_RDONLY), out = in < 0 ? -1 : open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+  const char *err = in < 0 || out < 0 ? strerror(errno) : NULL;
+  ssize_t r;
+  while (!err && (r = read(in, chunk, sizeof chunk)) != 0) {
+    errno = 0;
+    if (r < 0 || write(out, chunk, r) != r) err = errno ? strerror(errno) : "write cut short";
+  }
+  if (in >= 0) close(in);
+  if (out >= 0 && close(out) && !err) err = strerror(errno);
+  if (!err && rename(tmp, dst)) err = strerror(errno);
+  if (err) unlink(tmp);
+  return err;
+}
+
+/* Points `id`'s logoImageInfo in the home screen's database at `info`, or back to NULL. The rows changed (0: the home
+ * screen has no entry for it), or -1 with the reason in `why`. SQLite edits the database in place, honouring the home
+ * screen's locks. */
+static int point_logo(const char *id, const char *info, char *why, size_t n) {
+  sqlite3 *db = NULL;
+  sqlite3_stmt *st = NULL;
+  int changed = -1;
+  if (sqlite3_open_v2(APP_DB, &db, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK) {
+    sqlite3_busy_timeout(db, 10000);  /* the home screen holds its lock only briefly */
+    if (sqlite3_prepare_v2(db, "UPDATE tbl_conceptmetadata SET logoImageInfo = ?1 WHERE localConceptId = "
+                               "(SELECT localConceptId FROM tbl_contentinfo WHERE titleId = ?2)", -1, &st, NULL) == SQLITE_OK) {
+      if (info) sqlite3_bind_text(st, 1, info, -1, SQLITE_TRANSIENT);
+      else sqlite3_bind_null(st, 1);
+      sqlite3_bind_text(st, 2, id, -1, SQLITE_TRANSIENT);
+      if (sqlite3_step(st) == SQLITE_DONE) changed = sqlite3_changes(db);
+    }
+    if (changed < 0) snprintf(why, n, "%s", sqlite3_errmsg(db));
+  } else {
+    snprintf(why, n, "can't open the home screen's database");
+  }
+  sqlite3_finalize(st);
+  sqlite3_close(db);
+  return changed;
+}
+
+/* `id`'s logoImageInfo into `info`: 1 when it has one, 0 when it's NULL, -1 when the home screen has no entry for it
+ * (or the database can't be read). */
+static int logo_info(const char *id, char *info, size_t n) {
+  sqlite3 *db = NULL;
+  sqlite3_stmt *st = NULL;
+  int r = -1;
+  if (sqlite3_open_v2(APP_DB, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
+    sqlite3_busy_timeout(db, 10000);
+    if (sqlite3_prepare_v2(db, "SELECT m.logoImageInfo FROM tbl_contentinfo c JOIN tbl_conceptmetadata m "
+                               "ON m.localConceptId = c.localConceptId WHERE c.titleId = ?1", -1, &st, NULL) == SQLITE_OK) {
+      sqlite3_bind_text(st, 1, id, -1, SQLITE_TRANSIENT);
+      if (sqlite3_step(st) == SQLITE_ROW) {
+        const unsigned char *v = sqlite3_column_text(st, 0);
+        r = v != NULL;
+        snprintf(info, n, "%s", v ? (const char *)v : "");
+      }
+    }
+  }
+  sqlite3_finalize(st);
+  sqlite3_close(db);
+  return r;
+}
+
 /* Shows a title logo on `id`'s home-screen page instead of its name in plain text: writes the PNG body to
  * /user/appmeta/<id>/logo.png and points the title's logoImageInfo in the home screen's database at it. The home
  * screen can't read files under /data/homebrew, hence appmeta. An empty body undoes that: logoImageInfo back to NULL,
  * as the console leaves it, and the file gone. Only that one file and that one column change, and only for a title
- * the console already has. SQLite edits the database in place, honouring the home screen's locks. */
+ * the console already has. A copy is kept in LOGO_KEEP, so the logo comes back after a restart without the PC. */
 static void set_logo(int c, const char *query, const char *head, const char *body, size_t have) {
-  static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
   static const char not_png[] = "not a PNG";
-  char id[16], dir[64], tmp[96], dest[96], info[128];
+  char id[16], dir[64], tmp[96], dest[96], info[128], keep[64], why[256];
   unsigned char sig[8] = {0};
   long long len = content_length(head);
   if (!title_id(query, id)) {
@@ -753,8 +827,9 @@ static void set_logo(int c, const char *query, const char *head, const char *bod
   snprintf(tmp, sizeof tmp, "%s/.logo.png.partial", dir);
   snprintf(dest, sizeof dest, "%s/logo.png", dir);
   snprintf(info, sizeof info, "%s?ts=%lld", dest, (long long)time(NULL));  /* ts: the home screen reloads the image */
+  snprintf(keep, sizeof keep, LOGO_KEEP "/%s.png", id);
 
-  pthread_mutex_lock(&lock);
+  pthread_mutex_lock(&logo_lock);
   const char *err = NULL;
   if (len) {
     err = receive(c, tmp, len, body, have);
@@ -764,34 +839,51 @@ static void set_logo(int c, const char *query, const char *head, const char *bod
     if (!err && rename(tmp, dest)) err = strerror(errno);
     if (err) unlink(tmp);
   }
-
-  sqlite3 *db = NULL;
-  sqlite3_stmt *st = NULL;
   int changed = 0;
-  if (!err) {
-    if (sqlite3_open_v2(APP_DB, &db, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK) {
-      sqlite3_busy_timeout(db, 10000);  /* the home screen holds its lock only briefly */
-      if (sqlite3_prepare_v2(db, "UPDATE tbl_conceptmetadata SET logoImageInfo = ?1 WHERE localConceptId = "
-                                 "(SELECT localConceptId FROM tbl_contentinfo WHERE titleId = ?2)", -1, &st, NULL) == SQLITE_OK) {
-        if (len) sqlite3_bind_text(st, 1, info, -1, SQLITE_TRANSIENT);
-        else sqlite3_bind_null(st, 1);
-        sqlite3_bind_text(st, 2, id, -1, SQLITE_TRANSIENT);
-        if (sqlite3_step(st) == SQLITE_DONE) changed = sqlite3_changes(db);
-      }
-      if (!changed && sqlite3_errcode(db) != SQLITE_OK && sqlite3_errcode(db) != SQLITE_DONE) err = sqlite3_errmsg(db);
-    } else {
-      err = "can't open the home screen's database";
-    }
-  }
+  if (!err && (changed = point_logo(id, len ? info : NULL, why, sizeof why)) < 0) err = why;
   if (err) fail(c, err == not_png ? "400 Bad Request" : "500 Internal Server Error", err);
   else if (!changed) fail(c, "404 Not Found", "the home screen has no entry for this game");
   else {
-    if (!len) unlink(dest);  /* already gone is fine */
+    if (!len) {
+      unlink(dest);  /* already gone is fine */
+      unlink(keep);
+    } else {
+      mkdir("/data/spela", 0777);
+      mkdir(LOGO_KEEP, 0777);
+      copy_file(dest, keep);  /* ponytail: a copy that fails only means no logo after the next restart */
+    }
     ok(c);
   }
-  sqlite3_finalize(st);
-  sqlite3_close(db);  /* after fail(): err may point into db */
-  pthread_mutex_unlock(&lock);
+  pthread_mutex_unlock(&logo_lock);
+}
+
+/* A restart of the PS5 registers its games again, which drops their logos. Every minute (ShadowMountPlus adds games
+ * back a few minutes after a restart, or any time) this puts back each logo kept in LOGO_KEEP whose title is on the home
+ * screen without one, so they come back with no PC around. A title showing another logo (its own from PlayStation
+ * Network) is left alone. */
+static void *keep_logos(void *arg) {
+  (void)arg;
+  for (;; sleep(60)) {
+    DIR *d = opendir(LOGO_KEEP);
+    struct dirent *e;
+    while (d && (e = readdir(d))) {
+      if (strlen(e->d_name) != 13 || !title_id_at(e->d_name) || strcmp(e->d_name + 9, ".png")) continue;
+      char id[16], keep[64], dest[96], info[256], why[256];
+      struct stat st;
+      snprintf(id, sizeof id, "%.9s", e->d_name);
+      snprintf(keep, sizeof keep, LOGO_KEEP "/%s", e->d_name);
+      snprintf(dest, sizeof dest, "/user/appmeta/%s/logo.png", id);
+      pthread_mutex_lock(&logo_lock);
+      int has = logo_info(id, info, sizeof info);
+      if (has == 0 || (has == 1 && !strncmp(info, dest, strlen(dest)) && stat(dest, &st))) {
+        snprintf(info, sizeof info, "%s?ts=%lld", dest, (long long)time(NULL));
+        if (!copy_file(keep, dest)) point_logo(id, info, why, sizeof why);  /* what fails is tried next minute */
+      }
+      pthread_mutex_unlock(&logo_lock);
+    }
+    if (d) closedir(d);
+  }
+  return NULL;
 }
 
 /* The value of header `name` (any case) in `head`, which ends at the blank line; NULL without one. */
@@ -1143,6 +1235,8 @@ int main(void) {
   notify(msg);
   pthread_t retry;
   if (!pthread_create(&retry, NULL, retry_tiles, NULL)) pthread_detach(retry);
+  pthread_t logos;
+  if (!pthread_create(&logos, NULL, keep_logos, NULL)) pthread_detach(logos);
 
   struct timeval timeout = {30, 0};  /* a client that stops sending gives up its thread */
   for (;;) {

@@ -163,6 +163,7 @@ class ConsoleAdapter(Protocol):
                                       cancel: threading.Event | None = None) -> tuple[str, RemovalResult]: ...
     async def install_helper(self) -> str: ...
     async def stop_helper(self) -> None: ...  # until the PS5 restarts, or Install helper sends it again
+    async def offer_helper(self, keep: bool = True) -> bool: ...  # into Payload Manager's list (or out); False when it isn't running
     async def install_console_app(self, files: dict[str, bytes]) -> None: ...  # relative path -> content
     async def remove_console_app(self) -> RemovalResult: ...  # its folder, then its tile (ok False: tile left)
     # Hidden `.<name>.partial` copies in the drives' homebrew folders, left by installs, moves and removals that
@@ -337,6 +338,10 @@ class MockConsoleAdapter:
 
     async def stop_helper(self) -> None:
         self._check()
+
+    async def offer_helper(self, keep: bool = True) -> bool:
+        self._check()
+        return False
 
     async def install_console_app(self, files: dict[str, bytes]) -> None:
         self._check()
@@ -539,6 +544,7 @@ def helper_elf(key: str) -> bytes:
 CONSOLE_APP_TITLE_ID = "PPSA99787"
 CONSOLE_APP_DIR = Path(__file__).parent / "console_app" / CONSOLE_APP_TITLE_ID
 CONSOLE_APP_PATH = f"/data/homebrew/{CONSOLE_APP_TITLE_ID}"
+CONSOLE_APP_HELPER = f"{CONSOLE_APP_PATH}/assets/spela.elf"  # the app starts the helper with it when it isn't running
 CONSOLE_APP_LOGO = CONSOLE_APP_DIR.parent / "logo.png"  # the wordmark, for its home-screen page (not copied with it)
 HOME_DB = "/system_data/priv/mms/app.db"  # the home screen's database: titles, concept IDs, tile images
 SAVE_HOME = "/user/home"  # one folder per user, holding their save data (FTPConsoleAdapter._backup_saves)
@@ -599,6 +605,7 @@ class FTPConsoleAdapter:
     TIMEOUT = 10
     HELPER_PORT = 7735  # our helper payload (payload/main.c)
     LOADER_PORT = 9021  # the jailbreak's ELF loader
+    PLDMGR_PORT = 8084  # Payload Manager (offer_helper)
     DDP_PORT = DDP_PORT  # answers in rest mode too
 
     def __init__(self, console: Console, password: str | None = None):
@@ -816,6 +823,29 @@ class FTPConsoleAdapter:
     async def stop_helper(self) -> None:
         """Asks the helper payload to exit. It's only in the console's memory, so nothing is left on the PS5."""
         await asyncio.to_thread(self._stop_helper)
+
+    def _offer_helper(self, keep: bool) -> bool:
+        route = "upload?filename=spela.elf&mode=replace" if keep else "delete?filename=spela.elf"
+        req = urllib.request.Request(f"http://{self.host}:{self.PLDMGR_PORT}/manage:{route}", helper_elf(self.key) if keep else b"",
+                                     {"Content-Type": "application/octet-stream", "X-PLDMGR-Request": "1"},  # the marker: not a browser
+                                     method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=self.TIMEOUT).close()
+            return True
+        except OSError:  # not running, an older one that refuses, or nothing to delete
+            return False
+
+    async def offer_helper(self, keep: bool = True) -> bool:
+        """Puts the helper in Payload Manager's list (github.com/itsPLK/ps5-payload-manager), replacing the copy from an
+        older version under the same name, so the user can start it there or have Payload Manager load it at every
+        start, with no PC. `keep` False takes it out again, and the PS5 app's copy (CONSOLE_APP_HELPER) too: call it
+        while the helper still runs. False when Payload Manager isn't running."""
+        if not keep:
+            try:
+                await self._run(lambda ftp: ftp.delete(CONSOLE_APP_HELPER))
+            except AdapterError:
+                pass  # no PS5 app, or an older one without it
+        return await asyncio.to_thread(self._offer_helper, keep)
 
     async def list_drives(self) -> list[DriveInfo]:
         return [d for d, _, _ in await self._run(self._drives)]

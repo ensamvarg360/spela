@@ -42,54 +42,72 @@ struct Response
     std::string body;
 };
 
-// One HTTP/1.0 request; the PC closes the connection after answering, so the
-// body is everything after the headers. The host is an IPv4 address (the PC
-// writes it), so there is no name lookup.
+#ifdef MSG_NOSIGNAL
+constexpr int kSendFlags = MSG_NOSIGNAL;
+#else
+constexpr int kSendFlags = 0;
+#endif
+
+// A connected socket with 5-second timeouts, or -1. The host is an IPv4
+// address (the PC writes it), so there is no name lookup.
 // ponytail: blocking connect; a PC that's off makes the first poll wait for the
 // system's connect timeout. It's on the worker thread, so the screen keeps going.
-Response request(const Server &server, const char *method, const std::string &path,
-                 std::size_t limit)
+int dial(const std::string &host, int port)
 {
-    Response response;
     sockaddr_in address{};
 #if !defined(__linux__)
     address.sin_len = sizeof(address);
 #endif
     address.sin_family = AF_INET;
-    address.sin_port = htons(static_cast<std::uint16_t>(server.port));
-    if (inet_pton(AF_INET, server.host.c_str(), &address.sin_addr) != 1)
-        return response;
+    address.sin_port = htons(static_cast<std::uint16_t>(port));
+    if (inet_pton(AF_INET, host.c_str(), &address.sin_addr) != 1)
+        return -1;
     const int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
-        return response;
+        return -1;
     timeval timeout{5, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-    int flags = 0;
 #ifdef SO_NOSIGPIPE
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
 #endif
-#ifdef MSG_NOSIGNAL
-    flags = MSG_NOSIGNAL;
-#endif
     if (connect(fd, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) != 0)
     {
         close(fd);
-        return response;
+        return -1;
     }
+    return fd;
+}
+
+bool send_all(int fd, const std::string &data)
+{
+    for (std::size_t sent = 0; sent < data.size();)
+    {
+        const ssize_t n = send(fd, data.data() + sent, data.size() - sent, kSendFlags);
+        if (n <= 0)
+            return false;
+        sent += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+
+// One HTTP/1.0 request; the PC closes the connection after answering, so the
+// body is everything after the headers.
+Response request(const Server &server, const char *method, const std::string &path,
+                 std::size_t limit)
+{
+    Response response;
+    const int fd = dial(server.host, server.port);
+    if (fd < 0)
+        return response;
     const std::string head = std::string(method) + " " + path + " HTTP/1.0\r\nHost: " +
                              server.host + "\r\nAuthorization: Bearer " + server.token +
                              "\r\nContent-Length: 0\r\n\r\n";
-    for (std::size_t sent = 0; sent < head.size();)
+    if (!send_all(fd, head))
     {
-        const ssize_t n = send(fd, head.data() + sent, head.size() - sent, flags);
-        if (n <= 0)
-        {
-            close(fd);
-            return response;
-        }
-        sent += static_cast<std::size_t>(n);
+        close(fd);
+        return response;
     }
     std::string data;
     char buffer[16384];
@@ -124,6 +142,28 @@ std::string unpaired_message()
 
 // The app asks the helper on this console (server.txt: 127.0.0.1:7735), which passes requests on to the PC.
 // No answer at all means the helper isn't running; a PC that doesn't answer is a 503 with the helper's reason.
+// The helper stops whenever the PS5 restarts. The PC keeps a copy of it next to this app, which the jailbreak's ELF
+// loader on this console starts, so the app needn't wait for the PC to send it. False without a copy or a loader, or
+// when it was tried less than half a minute ago. Worker thread only.
+bool start_helper()
+{
+    static std::int64_t tried_at = -1;
+    if (tried_at >= 0 && sys::monotonic_us() - tried_at < 30 * kSecond)
+        return false;
+    tried_at = sys::monotonic_us();
+    std::string elf;
+    if (!save::read_file("/app0/assets/spela.elf", &elf, 16u << 20))
+        return false;
+    const int fd = dial("127.0.0.1", 9021);
+    if (fd < 0)
+        return false;
+    const bool sent = send_all(fd, elf);
+    close(fd);
+    if (sent)
+        sys::log("[STORE] sent the helper to the ELF loader");
+    return sent;
+}
+
 const char *const kCantReach = "The Spela helper isn't running on this PS5. Run your jailbreak: Spela sends it again.";
 
 } // namespace
@@ -257,7 +297,12 @@ bool Client::step()
 
 void Client::fetch_library()
 {
-    const Response r = request(server_, "GET", "/api/v1/console-app/library", 8u << 20);
+    Response r = request(server_, "GET", "/api/v1/console-app/library", 8u << 20);
+    if (r.status == 0 && start_helper())
+    {
+        sys::sleep_us(3 * kSecond); // it takes a moment to start listening
+        r = request(server_, "GET", "/api/v1/console-app/library", 8u << 20);
+    }
     // An older PC has no drive list (404): installs then go to its automatic pick.
     const Response d = r.status == 200 ? request(server_, "GET", "/api/v1/console-app/drives", 65536) : Response{};
     pthread_mutex_lock(&lock_);
@@ -279,8 +324,8 @@ void Client::fetch_library()
     {
         // First sentence first: once the list is up, a failed poll shows this cut to one line.
         error_ = "The Spela helper isn't running on this PS5. It stops whenever the PS5 restarts: run your "
-                 "jailbreak's ELF loader, and Spela on your PC sends the helper again within a minute, as long as "
-                 "it's running there.";
+                 "jailbreak's ELF loader, and this app starts it again (or Spela on your PC does, within a minute, "
+                 "as long as it's running there).";
     }
     else if (r.status == 503) // the helper's own words: Spela on the PC isn't taking requests
     {

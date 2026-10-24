@@ -1026,19 +1026,23 @@ async def install_helper(console_id: str, db: Session = Depends(get_db)):
 
 @api.delete("/consoles/{console_id}/helper", response_model=ConsoleOut)
 async def remove_helper(console_id: str, db: Session = Depends(get_db)):
-    """Stops the helper payload and stops sending it by itself, for someone moving to other tools. Nothing of it stays
-    on the PS5: it lives in memory. Games, the PS5 app and logos are left alone. Install helper turns it back on."""
+    """Stops the helper payload and stops sending it by itself, for someone moving to other tools. Its copies for
+    Payload Manager and the PS5 app go too, so nothing starts it again. Games, the PS5 app and logos are left alone.
+    Install helper turns it back on."""
     c = db.get(Console, console_id) or _not_found()
     if db.scalar(select(InstallJob.id).where(InstallJob.console_id == c.id, InstallJob.status.in_(jobs.ACTIVE))):
         raise HTTPException(409, {"error": "job_active", "message": "This console has installs waiting or running.",
                                   "fix": "Cancel them on the Installed page first."})
     try:
-        await inventory.adapter_for(db, c).stop_helper()
+        adapter = inventory.adapter_for(db, c)
+        await adapter.offer_helper(keep=False)
+        await adapter.stop_helper()
     except AdapterError as e:
         db.add(AuditLog(action="helper_remove", console_id=c.id, result="failed", details={"error": e.code}))
         db.commit()
         raise _adapter_failed(502, e)
     c.auto_helper = False
+    inventory.helper_offered.discard(c.id)  # Install helper offers it to Payload Manager again
     db.add(AuditLog(action="helper_remove", console_id=c.id, result="success", details={"name": c.name}))
     db.commit()
     await inventory.check(c.id)

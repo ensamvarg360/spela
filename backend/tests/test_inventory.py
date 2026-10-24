@@ -187,6 +187,34 @@ def test_shared_helper_key():
     assert not ours({"helper": "1.0", "helper_owner": "Docker · nas"})
 
 
+def test_helper_offered_to_payload_manager():
+    """The helper goes into Payload Manager's list under one name (replacing an older copy), with the marker Payload
+    Manager wants from a non-browser; keep=False takes it out. No Payload Manager is no error."""
+    got = []
+
+    class PayloadManager(BaseHTTPRequestHandler):
+        def do_POST(self):
+            got.append((self.path, self.headers.get("X-PLDMGR-Request"), self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    pm = ThreadingHTTPServer(("127.0.0.1", 0), PayloadManager)
+    threading.Thread(target=pm.serve_forever, daemon=True).start()
+    a = adapter(21)
+    a.PLDMGR_PORT = pm.server_address[1]
+    try:
+        assert a._offer_helper(True) and a._offer_helper(False)
+    finally:
+        pm.shutdown()
+    (up, marker, elf), (down, _, _) = got
+    assert up == "/manage:upload?filename=spela.elf&mode=replace" and marker == "1" and elf.startswith(b"\x7fELF")
+    assert down == "/manage:delete?filename=spela.elf"
+    assert not a._offer_helper(True)  # nothing listens any more
+
+
 def test_helper_key_setting(tmp_path, monkeypatch):
     monkeypatch.delenv("SPELA_HELPER_KEY", raising=False)
     monkeypatch.setattr(config, "HELPER_KEY_FILE", tmp_path / "helper_key")

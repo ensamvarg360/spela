@@ -228,7 +228,7 @@ export default function Consoles() {
   async function act(c: Console, path: string) {
     const removing = path === "remove-helper";
     if (removing && !confirm(`Remove the helper from ${c.name}?\n\nIt stops now, and Spela stops sending it by itself, so the ` +
-      "PS5 is free for other tools. Nothing of it stays on the PS5. Installed games, the PS5 app and logos are kept.\n\n" +
+      "PS5 is free for other tools. Its copies in Payload Manager and the PS5 app are deleted too. Installed games, the PS5 app and logos are kept.\n\n" +
       "Spela can't read or install to this console until you click Install helper again.")) return;
     if (path === "remove-console-app" && !confirm(`Remove the PS5 app from ${c.name}?\n\nIts folder and its home-screen tile ` +
       "are deleted. If it's open on the PS5, close it first. Install PS5 app puts it back.")) return;
