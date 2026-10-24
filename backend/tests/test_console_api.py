@@ -186,33 +186,86 @@ def test_push_home_logo(tmp_path, monkeypatch):
         assert [e.result for e in events[-2:]] == ["success", "failed"]
 
 
-def test_logos_back_after_restart(monkeypatch):
-    png = logos.PNG + b"logo"
+def test_logos_back_after_restart(tmp_path, monkeypatch):
+    """Each time the console comes online, every game gets the logo picked for it where the console's differs."""
+    png, own = logos.PNG + b"logo", logos.PNG + b"own"
     fetched = []
 
     def get(url):
         fetched.append(url)
-        return json.dumps({"media": {"images": [{"type": "LOGO", "url": "https://image.api.playstation.com/l.png"}]}}).encode() \
-            if "/concepts/" in url else png
+        return json.dumps({"media": {"images": [{"type": "LOGO", "url": "https://image.api.playstation.com/l.png"}]}}).encode()             if "/concepts/" in url else png
     monkeypatch.setattr(logos, "_get", get)
-    monkeypatch.setattr(logos, "RESTORE_AGAIN_SECONDS", 0)
+    monkeypatch.setattr(logos, "STORE_DIR", tmp_path / "store")
+    monkeypatch.setattr(config, "COVERS_DIR", tmp_path / "covers")
     mock = consoles.MockConsoleAdapter()
     mock.logos["PPSA01234"] = png  # still there
+    reads = []
+    read_file = mock.read_file
+    mock.read_file = lambda path: reads.append(path) or read_file(path)
     monkeypatch.setattr(inventory, "adapter_for", lambda db, c: mock)
+
+    def sweeps():
+        with SessionLocal() as db:
+            return [e.details["title_ids"] for e in db.scalars(select(AuditLog).where(
+                AuditLog.action == "home_logo", AuditLog.console_id == cid).order_by(AuditLog.created_at))]
     with TestClient(app, base_url="http://127.0.0.1") as client:
         login(client)
         cid = _console(client)
         asyncio.run(logos.restore(cid))
-        assert set(mock.logos) == {"PPSA01234", "PPSA05678"}
-        assert fetched == [logos.CATALOG.format(5678), "https://image.api.playstation.com/l.png"]  # once: kept on the PC
-
-        mock.has_file = lambda path: asyncio.sleep(0, False)  # the restart deleted the files, the entries still point at them
-        mock.logos.clear()
+        assert mock.logos == {"PPSA01234": png, "PPSA05678": png} and sweeps() == [["PPSA05678"]]  # 1234's was right
+        assert len(fetched) == 4  # each concept's logo once: kept on the PC
         asyncio.run(logos.restore(cid))
-        assert set(mock.logos) == {"PPSA01234", "PPSA05678"} and len(fetched) == 4  # 1234's logo is new, 5678's kept
-    with SessionLocal() as db:
-        events = db.scalars(select(AuditLog).where(AuditLog.action == "home_logo")).all()
-        assert events[-1].details["title_ids"] == ["PPSA01234", "PPSA05678"]  # one entry per sweep
+        reads.clear()
+        asyncio.run(logos.restore(cid))
+        assert not reads and sweeps() == [["PPSA05678"]]  # nothing changed: no logo file read, nothing written
+
+        mock.logos.clear()  # a restart drops them all
+        asyncio.run(logos.restore(cid))
+        assert mock.logos == {"PPSA01234": png, "PPSA05678": png} and len(fetched) == 4
+
+        logos.choose("PPSA01234", "custom", own)  # picked while the console was away
+        logos.choose("PPSA05678", "none")
+        asyncio.run(logos.restore(cid))
+        assert mock.logos == {"PPSA01234": own}
+        n = len(sweeps())
+        asyncio.run(logos.restore(cid))
+        assert len(sweeps()) == n  # nothing left to change
+
+        logos.choose("PPSA05678", "store")  # back to the store's
+        asyncio.run(logos.restore(cid))
+        assert mock.logos == {"PPSA01234": own, "PPSA05678": png}
+
+
+def test_home_logo_choice(tmp_path, monkeypatch):
+    """A logo of the user's own, or none, by title ID; the push and new installs follow it. Editions sharing a concept
+    share one logo: the first that has a pick decides."""
+    monkeypatch.setattr(config, "COVERS_DIR", tmp_path / "covers")
+    monkeypatch.setattr(logos, "STORE_DIR", tmp_path / "store")
+    monkeypatch.setattr(logos, "_get", lambda url: pytest.fail("a logo of the user's own doesn't ask the store"))
+    mock = consoles.MockConsoleAdapter()
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: mock)
+    out = io.BytesIO()
+    Image.new("RGB", (5000, 500), "white").save(out, "JPEG")
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        cid = _console(client)
+        assert client.get("/api/v1/titles/PPSA05678/home-logo").json() == {"use": "store"}
+        r = client.post("/api/v1/titles/PPSA05678/home-logo", files={"file": ("l.jpg", out.getvalue(), "image/jpeg")})
+        assert r.json() == {"use": "custom"}
+        assert client.post(f"/api/v1/consoles/{cid}/home-logo", json={"title_id": "PPSA05678"}).json()["message"] ==             "Logo is on the home screen."
+        logo = Image.open(io.BytesIO(mock.logos["PPSA05678"]))
+        assert logo.format == "PNG" and logo.mode == "RGBA" and logo.size == (2880, 288)  # shrunk to fit
+
+        assert client.put("/api/v1/titles/PPSA05678/home-logo", json={"use": "none"}).json() == {"use": "none"}
+        assert client.post(f"/api/v1/consoles/{cid}/home-logo", json={"title_id": "PPSA05678"}).json()["message"] ==             "Logo removed from the home screen."
+        assert "PPSA05678" not in mock.logos
+        assert client.put("/api/v1/titles/PPSA05678/home-logo", json={"use": "custom"}).status_code == 422  # upload it
+
+    logos.choose("PPSA00002", "custom", b"two")
+    assert logos.wanted(["PPSA00003", "PPSA00002", "PPSA00001"], lambda: b"store") == ("PPSA00002", "custom", b"two")
+    logos.choose("PPSA00001", "none")
+    assert logos.wanted(["PPSA00003", "PPSA00002", "PPSA00001"], lambda: b"store") == ("PPSA00001", "none", None)
+    assert logos.wanted(["PPSA00009"], lambda: b"store") == ("PPSA00009", "store", b"store")
 
 
 def test_logo_after_install(tmp_path, monkeypatch):
@@ -502,3 +555,53 @@ def test_title_cover_upload(tmp_path, monkeypatch):
         assert client.get("/api/v1/titles/PPSA07773/poster").content == out.getvalue()
         assert client.post("/api/v1/titles/PPSA07773/cover", files={"file": ("c.png", b"nope", "image/png")}).status_code == 415
         assert client.post("/api/v1/titles/nope/cover", files={"file": ("c.png", out.getvalue(), "image/png")}).status_code == 404
+
+
+def test_upload_only_real_images(tmp_path, monkeypatch):
+    """Whatever the browser claims, only JPEG, PNG and WebP decoders see an upload, and only up to MAX_IMAGE_PIXELS."""
+    monkeypatch.setattr(config, "COVERS_DIR", tmp_path / "covers")
+
+    def image(fmt, size=(40, 60), mode="RGB"):
+        out = io.BytesIO()
+        Image.new(mode, size).save(out, fmt)
+        return out.getvalue()
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        up = lambda data, kind="image/png": client.post("/api/v1/titles/PPSA07774/home-logo",  # noqa: E731
+                                                        files={"file": ("x.png", data, kind)}).status_code
+        assert up(image("TIFF")) == 415 and up(image("BMP")) == 415 and up(image("GIF")) == 415  # disguised as PNG
+        assert up(b"<svg onload=alert(1)>", "image/svg+xml") == 415
+        assert up(image("PNG", (8000, 6000), "1")) == 413  # 48 megapixels in a few kB
+        assert up(image("WEBP"), "image/jpeg") == 200  # a real image of an allowed kind, mislabelled, is fine
+        r = client.post("/api/v1/titles/PPSA07775/cover", files={"file": ("c.jpg", image("PNG"), "image/jpeg")})
+        assert r.status_code == 204 and (tmp_path / "covers" / "titles" / "PPSA07775.png").is_file()  # named by content
+
+
+def test_logos_on_ftp_console(monkeypatch):
+    """A console added over FTP runs the helper too, so its logos are kept up as well."""
+    mock = consoles.MockConsoleAdapter()
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: mock)
+    monkeypatch.setattr(logos, "cached_logo", lambda concept: logos.PNG + b"logo")
+    with SessionLocal() as db:
+        con = Console(name="FTP one", ip_address="127.0.0.2", connection_type="ftp", port=2121)
+        db.add(con)
+        db.commit()
+        asyncio.run(logos.restore(con.id))
+    assert set(mock.logos) == {"PPSA01234", "PPSA05678"}
+
+
+def test_logo_sync_schedule(monkeypatch):
+    """Logos are checked as a console comes online, then every SYNC_SECONDS while it stays online."""
+    started = []
+    monkeypatch.setattr(main.jobs, "_spawn", lambda coro: (started.append(1), coro.close()))
+    clock = [1000.0]
+    monkeypatch.setattr(inventory.time, "monotonic", lambda: clock[0])
+
+    async def go():
+        inventory.record("sched", "offline")
+        inventory.record("sched", "online")  # back on
+        inventory.record("sched", "online")  # 15 s later: too soon
+        clock[0] += logos.SYNC_SECONDS
+        inventory.record("sched", "online")  # due again
+    asyncio.run(go())
+    assert len(started) == 2

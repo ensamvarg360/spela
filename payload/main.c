@@ -6,7 +6,7 @@
  *   POST /mkdir?p=<dir>  /rename?p=<from>&to=<to>  /rm?p=<file or empty folder>
  *   POST /quit                 stops the helper, so a newer copy can take the port (a new copy sends it to an old one itself)
  *   POST /uninstall?id=<title ID>  removes a ShadowMountPlus tile whose game files are gone, now or once the console lets it (uninstall_tile())
- *   POST /logo?id=<title ID>   PNG body: the title logo on the game's home-screen page (set_logo())
+ *   POST /logo?id=<title ID>   PNG body: the title logo on the game's home-screen page; empty body: none again (set_logo())
  *   POST /copy?p=<from>&to=<to>  starts copying a file or folder on the console, e.g. to another drive (copy_start())
  *   GET  /copy                 {"running", "done", "total", "error", "to"} of that copy;  POST /copy/cancel stops it
  *   POST /install?p=<.pkg in a homebrew folder>&cid=<content ID>  starts the console's package installer (install_pkg(), untested)
@@ -728,8 +728,9 @@ static void copy_status(int c) {
 
 /* Shows a title logo on `id`'s home-screen page instead of its name in plain text: writes the PNG body to
  * /user/appmeta/<id>/logo.png and points the title's logoImageInfo in the home screen's database at it. The home
- * screen can't read files under /data/homebrew, hence appmeta. Only that one file and that one column change, and
- * only for a title the console already has. SQLite edits the database in place, honouring the home screen's locks. */
+ * screen can't read files under /data/homebrew, hence appmeta. An empty body undoes that: logoImageInfo back to NULL,
+ * as the console leaves it, and the file gone. Only that one file and that one column change, and only for a title
+ * the console already has. SQLite edits the database in place, honouring the home screen's locks. */
 static void set_logo(int c, const char *query, const char *head, const char *body, size_t have) {
   static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
   static const char not_png[] = "not a PNG";
@@ -740,7 +741,7 @@ static void set_logo(int c, const char *query, const char *head, const char *bod
     fail(c, "400 Bad Request", "id must be a title ID");
     return;
   }
-  if (len < 8 || len > LOGO_MAX) {
+  if (len && (len < 8 || len > LOGO_MAX)) {  /* an older helper answers an empty body here: the PC tells it by that */
     fail(c, "413 Content Too Large", "the logo must be a PNG of at most 16 MB");
     return;
   }
@@ -754,12 +755,15 @@ static void set_logo(int c, const char *query, const char *head, const char *bod
   snprintf(info, sizeof info, "%s?ts=%lld", dest, (long long)time(NULL));  /* ts: the home screen reloads the image */
 
   pthread_mutex_lock(&lock);
-  const char *err = receive(c, tmp, len, body, have);
-  int fd = err ? -1 : open(tmp, O_RDONLY);
-  if (!err && (fd < 0 || read(fd, sig, 8) != 8 || memcmp(sig, "\x89PNG\r\n\x1a\n", 8))) err = not_png;
-  if (fd >= 0) close(fd);
-  if (!err && rename(tmp, dest)) err = strerror(errno);
-  if (err) unlink(tmp);
+  const char *err = NULL;
+  if (len) {
+    err = receive(c, tmp, len, body, have);
+    int fd = err ? -1 : open(tmp, O_RDONLY);
+    if (!err && (fd < 0 || read(fd, sig, 8) != 8 || memcmp(sig, "\x89PNG\r\n\x1a\n", 8))) err = not_png;
+    if (fd >= 0) close(fd);
+    if (!err && rename(tmp, dest)) err = strerror(errno);
+    if (err) unlink(tmp);
+  }
 
   sqlite3 *db = NULL;
   sqlite3_stmt *st = NULL;
@@ -769,7 +773,8 @@ static void set_logo(int c, const char *query, const char *head, const char *bod
       sqlite3_busy_timeout(db, 10000);  /* the home screen holds its lock only briefly */
       if (sqlite3_prepare_v2(db, "UPDATE tbl_conceptmetadata SET logoImageInfo = ?1 WHERE localConceptId = "
                                  "(SELECT localConceptId FROM tbl_contentinfo WHERE titleId = ?2)", -1, &st, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(st, 1, info, -1, SQLITE_TRANSIENT);
+        if (len) sqlite3_bind_text(st, 1, info, -1, SQLITE_TRANSIENT);
+        else sqlite3_bind_null(st, 1);
         sqlite3_bind_text(st, 2, id, -1, SQLITE_TRANSIENT);
         if (sqlite3_step(st) == SQLITE_DONE) changed = sqlite3_changes(db);
       }
@@ -780,7 +785,10 @@ static void set_logo(int c, const char *query, const char *head, const char *bod
   }
   if (err) fail(c, err == not_png ? "400 Bad Request" : "500 Internal Server Error", err);
   else if (!changed) fail(c, "404 Not Found", "the home screen has no entry for this game");
-  else ok(c);
+  else {
+    if (!len) unlink(dest);  /* already gone is fine */
+    ok(c);
+  }
   sqlite3_finalize(st);
   sqlite3_close(db);  /* after fail(): err may point into db */
   pthread_mutex_unlock(&lock);

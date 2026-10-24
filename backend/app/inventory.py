@@ -120,14 +120,20 @@ def record(console_id: str, state: str, message: str = "", fix: str = "") -> dic
     prev = status.get(console_id, {})
     failures = 0 if state == "online" else prev.get("failures", 0) + 1
     status[console_id] = {"state": state, "message": message, "fix": fix, "checked_at": now(), "failures": failures}
-    if state == "online" and prev.get("state") != "online":  # back on, often after a restart, which drops the logos
+    if state == "online":  # home-screen logos: right as it's back on (often after a restart, which drops them), then regularly
         from . import jobs, logos  # they import this module
+        if prev.get("state") == "online" and time.monotonic() - _logos_at.get(console_id, float("-inf")) < logos.SYNC_SECONDS:
+            return prev
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             return prev  # not in the app's event loop (tests)
+        _logos_at[console_id] = time.monotonic()
         jobs._spawn(logos.restore(console_id))
     return prev
+
+
+_logos_at: dict[str, float] = {}  # when logos.restore last started per console
 
 
 async def check(console_id: str) -> dict:

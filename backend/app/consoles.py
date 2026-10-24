@@ -170,7 +170,7 @@ class ConsoleAdapter(Protocol):
     async def list_leftovers(self) -> dict[str, int]: ...
     async def remove_leftovers(self) -> int: ...  # AdapterError("busy") while the helper copies a game between drives
     async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
-    async def has_file(self, path: str) -> bool: ...  # raises AdapterError
+    async def read_file(self, path: str) -> bytes | None: ...  # None when it's missing; raises AdapterError
     # Copies every save folder of `title_id` (all users) under `dest`, mirroring console paths. Reads only. Returns files copied.
     async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int: ...
     # Writes a backup_saves folder back to the same console paths. A save already there raises AdapterError("saves_exist")
@@ -181,6 +181,7 @@ class ConsoleAdapter(Protocol):
     async def copy_to_pc(self, source_path: str, dest: Path, progress_callback: ProgressCallback,
                          cancel: threading.Event | None = None) -> int: ...
     async def set_home_logo(self, title_id: str, png: bytes) -> None: ...  # raises AdapterError
+    async def clear_home_logo(self, title_id: str) -> None: ...  # its name in plain text again; raises AdapterError
 
 
 GiB = 1024**3
@@ -392,18 +393,24 @@ class MockConsoleAdapter:
         for i, g in enumerate(sorted(self.icons)):  # concept = digits
             db.execute("INSERT INTO tbl_contentinfo VALUES (?, ?, ?)", (g, int(g[4:]), i))
             db.execute("INSERT INTO tbl_conceptmetadata VALUES (?, ?)",
-                       (i, f"/user/appmeta/{g}/logo.png?ts=1" if g in self.logos else ""))
+                       (i, f"/user/appmeta/{g}/logo.png?ts=1" if g in self.logos else None))
         return db.serialize()
 
-    async def has_file(self, path: str) -> bool:
+    async def read_file(self, path: str) -> bytes | None:
         self._check()
-        return any(path == f"/user/appmeta/{t}/logo.png" for t in self.logos)
+        return next((png for t, png in self.logos.items() if path == f"/user/appmeta/{t}/logo.png"), None)
 
     async def set_home_logo(self, title_id: str, png: bytes) -> None:
         self._check()
         if title_id not in self.icons:
             raise AdapterError("not_found", "The home screen has no entry for this game.")
         self.logos[title_id] = png
+
+    async def clear_home_logo(self, title_id: str) -> None:
+        self._check()
+        if title_id not in self.icons:
+            raise AdapterError("not_found", "The home screen has no entry for this game.")
+        self.logos.pop(title_id, None)
 
 
 # ponytail: PS5 paths from community docs, not yet checked on a real console. Adjust them here after the
@@ -1409,9 +1416,8 @@ class FTPConsoleAdapter:
             raise AdapterError("home_db_unreadable", "Can't read the home screen's database on the console.")
         return data
 
-    async def has_file(self, path: str) -> bool:
-        folder, _, name = path.rpartition("/")
-        return name in await self._run(lambda fs: fs.ls(folder))
+    async def read_file(self, path: str) -> bytes | None:
+        return await self._run(lambda fs: fs.get(path))
 
     def _set_logo(self, title_id: str, png: bytes):
         req = urllib.request.Request(f"http://{self.host}:{self.HELPER_PORT}/logo?id={title_id}", data=png, method="POST",
@@ -1424,7 +1430,7 @@ class FTPConsoleAdapter:
                 why = json.loads(e.read())["error"]
             except (ValueError, KeyError, TypeError):
                 why = e.reason
-            if why == "not_found":  # the helper's answer to an endpoint it doesn't have
+            if why == "not_found" or (e.code == 413 and not png):  # an endpoint it lacks; an older one can't clear
                 raise AdapterError("helper_outdated", "The helper is too old to do this.", UPDATE_HELPER)
             if e.code == 404:  # the game isn't on the home screen (yet)
                 raise AdapterError("not_found", f"The console says {why}.")
@@ -1435,6 +1441,10 @@ class FTPConsoleAdapter:
     async def set_home_logo(self, title_id: str, png: bytes) -> None:
         """Has the helper put `png` on the game's home-screen page as its title logo (payload/main.c, set_logo)."""
         await asyncio.to_thread(self._set_logo, title_id, png)
+
+    async def clear_home_logo(self, title_id: str) -> None:
+        """Has the helper take the logo off the game's home-screen page, as the console leaves it (set_logo)."""
+        await asyncio.to_thread(self._set_logo, title_id, b"")
 
     INSTALL_POLL_SECONDS = 5  # ponytail: a full inventory scan per poll; fine at this rate, a helper status call if it hurts
     INSTALL_STALL_SECONDS = 180  # no sign of the game, or its size not settling, for this long = give up waiting

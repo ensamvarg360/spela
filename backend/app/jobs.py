@@ -295,7 +295,9 @@ LOGO_RETRY_SECONDS = 10
 
 async def _logo_once_listed(db: Session, console: Console, title_id: str) -> str:
     """Once ShadowMountPlus has added the game to the home screen, puts its PlayStation Store logo there too
-    (logos.apply). Returns a note for the install's or move's message."""
+    (logos.apply), or the user's own. Returns a note for the install's or move's message."""
+    if logos.choice(title_id) == "none":
+        return ""  # a new home-screen page has no logo already
     deadline = time.monotonic() + LOGO_WAIT_SECONDS
     while True:
         try:
@@ -320,7 +322,7 @@ async def _add_logo(job_id: str, console_id: str, title_id: str):
         note = await _logo_once_listed(db, db.get(Console, console_id), title_id)
         job = db.get(InstallJob, job_id)
         if job:
-            job.message = f"{job.message} {note}"
+            job.message = f"{job.message} {note}".rstrip()
         db.commit()
 
 
@@ -616,7 +618,7 @@ async def _move(move_id: str):
         if m["status"] != "canceled":
             _notify(f"{m['title']}: {'moved' if m['status'] == 'success' else 'move failed'}", m["message"], m["status"] == "success")
         if m["status"] == "success" and not m["tile_left"]:
-            m["message"] += " " + await _logo_once_listed(db, console, m["title_id"])
+            m["message"] = f"{m['message']} {await _logo_once_listed(db, console, m['title_id'])}".rstrip()
 
 
 def pc_destination(row: InstalledGame, root: LibraryRoot) -> Path:

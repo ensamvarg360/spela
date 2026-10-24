@@ -656,23 +656,29 @@ def refresh_store(background: BackgroundTasks, db: Session = Depends(get_db)):
     db.commit()
 
 
-COVER_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+COVER_TYPES = {"image/jpeg", "image/png", "image/webp"}  # what the browser says; IMAGE_FORMATS decides
+IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}  # what the file really is: its extension
+MAX_IMAGE_PIXELS = 40_000_000
 
 
-async def _read_cover(file: UploadFile) -> tuple[bytes, str]:
-    """An uploaded cover's bytes and file extension, once it's checked to be a JPEG, PNG or WebP under 10 MB."""
-    ext = COVER_TYPES.get(file.content_type or "")
-    if not ext:
+async def _read_cover(file: UploadFile, what: str = "Cover") -> tuple[bytes, str]:
+    """An uploaded image's bytes and file extension, once it's checked to be a JPEG, PNG or WebP under 10 MB and
+    MAX_IMAGE_PIXELS."""
+    if file.content_type not in COVER_TYPES:
         raise HTTPException(415, {"error": "unsupported_media", "message": "Use JPEG, PNG or WebP."})
     data = await file.read(10 * 1024 * 1024 + 1)
     if len(data) > 10 * 1024 * 1024:
-        raise HTTPException(413, {"error": "too_large", "message": "Cover must be under 10 MB."})
+        raise HTTPException(413, {"error": "too_large", "message": f"{what} must be under 10 MB."})
     try:
-        with Image.open(io.BytesIO(data)) as im:
+        # only these decoders, whatever the browser claimed: none of Pillow's others (TIFF, PSD, EPS...) see the file
+        with Image.open(io.BytesIO(data), formats=list(IMAGE_FORMATS)) as im:
+            ext, pixels = IMAGE_FORMATS[im.format], im.width * im.height  # from the header, nothing decoded yet
             im.verify()
     except Exception:  # Pillow raises many kinds for a broken or disguised file
         raise HTTPException(415, {"error": "unsupported_media", "message": "That file isn't a readable image.",
                                   "fix": "Use a JPEG, PNG or WebP picture."})
+    if pixels > MAX_IMAGE_PIXELS:  # a small file can unpack to gigabytes
+        raise HTTPException(413, {"error": "too_large", "message": f"{what} must be at most {MAX_IMAGE_PIXELS // 10**6} megapixels."})
     return data, ext
 
 
@@ -1696,17 +1702,56 @@ async def install_console_app(console_id: str, db: Session = Depends(get_db)):
 
 @api.post("/consoles/{console_id}/home-logo")
 async def push_home_logo(console_id: str, body: SaveBackupIn, db: Session = Depends(get_db)):
-    """Puts the game's PlayStation Store logo on the console's home screen now, fetched fresh. {"message"}."""
+    """Gives the game's home-screen page on the console the logo picked for it now (logos.apply): PlayStation Store's,
+    fetched fresh, the user's own, or none. {"message"}."""
     c = db.get(Console, console_id) or _not_found()
     try:
-        await logos.apply(db, c, body.title_id)
+        use = await logos.apply(db, c, body.title_id)
     except AdapterError as e:
         logos.audit(db, c, body.title_id, False, e.message)
         db.commit()
         raise _adapter_failed(502, e)
-    logos.audit(db, c, body.title_id, True, "Put the logo on the home screen.")
+    message = "Logo removed from the home screen." if use == "none" else "Logo is on the home screen."
+    logos.audit(db, c, body.title_id, True, message)
     db.commit()
-    return {"message": "Logo is on the home screen."}
+    return {"message": message}
+
+
+@api.get("/titles/{title_id}/home-logo")
+def get_home_logo(title_id: str):
+    """{"use": "store" | "custom" | "none"}: the home-screen logo picked for the game (logos.choice)."""
+    TITLE_ID.fullmatch(title_id) or _not_found()
+    return {"use": logos.choice(title_id)}
+
+
+class HomeLogoIn(BaseModel):
+    use: Literal["store", "none"]
+
+
+@api.put("/titles/{title_id}/home-logo")
+def set_home_logo(title_id: str, body: HomeLogoIn):
+    """Back to PlayStation Store's logo, or none at all. Consoles get it from /consoles/<id>/home-logo, or when they're
+    next online, or within logos.SYNC_SECONDS (logos.restore)."""
+    TITLE_ID.fullmatch(title_id) or _not_found()
+    logos.choose(title_id, body.use)
+    return {"use": body.use}
+
+
+HOME_LOGO_MAX = (2880, 1184)  # PlayStation Store's widest logos; smaller ones are kept as they are
+
+
+@api.post("/titles/{title_id}/home-logo")
+async def upload_home_logo(title_id: str, file: UploadFile):
+    """The user's own home-screen logo, kept as a PNG (the helper takes nothing else) of at most HOME_LOGO_MAX."""
+    TITLE_ID.fullmatch(title_id) or _not_found()
+    data, _ = await _read_cover(file, "Logo")
+    with Image.open(io.BytesIO(data)) as im:
+        im = ImageOps.exif_transpose(im).convert("RGBA")
+    im.thumbnail(HOME_LOGO_MAX)
+    out = io.BytesIO()
+    im.save(out, "PNG")
+    logos.choose(title_id, "custom", out.getvalue())
+    return {"use": "custom"}
 
 
 @api.get("/consoles/{console_id}/leftovers")

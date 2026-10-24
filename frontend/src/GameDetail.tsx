@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STATUS_LABEL, STATUS_TONE, useConsoles, type Console, type Drive, type Game, type InstalledGame, type Job } from "./api";
 import { cart, useCart } from "./Cart";
 import { Cover } from "./Library";
@@ -323,29 +323,55 @@ function SaveBackups({ tid, consoleId }: { tid: string; consoleId?: string }) {
   );
 }
 
-/** Under the cover: puts the game's PlayStation Store logo on the home screen of each console it's on (`consoleIds`), now.
- * Spela also does this by itself each time a console comes online; this is for a game that missed it, or to see why. */
+type LogoUse = "store" | "custom" | "none";
+
+/** Under the cover: the game's logo on the home screen of each console it's on (`consoleIds`): PlayStation Store's, an
+ * image of the user's own, or none (its name in plain text). A pick reaches online consoles now and the others when
+ * they next come online, as Spela checks each time; the button puts it there again, for a game that missed it. */
 function HomeLogo({ tid, consoleIds }: { tid: string; consoleIds: string[] }) {
   const { consoles } = useConsoles();
   const on = consoles.filter((c) => consoleIds.includes(c.id));
   const [busy, setBusy] = useState(false);
+  const [use, setUse] = useState<LogoUse>("store");
+  const file = useRef<HTMLInputElement>(null);
+  useEffect(() => { api<{ use: LogoUse }>(`/titles/${tid}/home-logo`).then((r) => setUse(r.use), () => {}); }, [tid]);
   if (!on.length || session.readOnly) return null;
   const online = on.filter((c) => c.state === "online");
-  async function push() {
+  async function push(pick?: Promise<{ use: LogoUse }>) {
     setBusy(true);
     try {
+      const now = pick ? (await pick).use : use;
+      setUse(now);
       for (const c of online) await api(`/consoles/${c.id}/home-logo`, { json: { title_id: tid } });
-      toast(`Logo is on the home screen of ${online.map((c) => c.name).join(" and ")}.`);
+      const where = online.map((c) => c.name).join(" and ");
+      toast(!online.length ? "Saved. The console gets it when it's next online."
+        : now === "none" ? `Logo removed from the home screen of ${where}.` : `Logo is on the home screen of ${where}.`);
     } catch (e) {
       toastError(e);
     } finally {
       setBusy(false);
     }
   }
+  const upload = (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    push(api(`/titles/${tid}/home-logo`, { body }));
+  };
   return <>
-    <button type="button" className="sp-btn" disabled={busy || !online.length} onClick={push}
-      title={online.length ? "Shows the game's official logo from PlayStation Store on the PS5 home screen instead of its name" : "The console must be online."}>
-      {busy ? <><Spinner />Putting it there…</> : "Put logo on home screen"}</button>
+    <Field label="Home-screen logo" hint="Editions that share a home-screen page get the same logo.">
+      <select className="sp-select" value={use} disabled={busy} onChange={(e) => e.target.value === "upload"
+        ? file.current!.click()
+        : push(api(`/titles/${tid}/home-logo`, { method: "PUT", json: { use: e.target.value } }))}>
+        <option value="store">PlayStation Store logo</option>
+        {use === "custom" && <option value="custom">Your own image</option>}
+        <option value="upload">Upload an image…</option>
+        <option value="none">No logo</option>
+      </select>
+      <input ref={file} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => (e.target.files?.[0] && upload(e.target.files[0]), e.target.value = "")} />
+    </Field>
+    <button type="button" className="sp-btn" disabled={busy || !online.length} onClick={() => push()}
+      title={online.length ? "Puts the logo picked above on the PS5 home screen again" : "The console must be online."}>
+      {busy ? <><Spinner />Updating…</> : use === "none" ? "Remove logo from home screen" : "Put logo on home screen"}</button>
   </>;
 }
 
