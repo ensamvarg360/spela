@@ -8,6 +8,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import secrets
 import socket
 import shutil
@@ -403,9 +404,16 @@ def notifications():
 apply_update = None
 
 
+def release_order(version: str) -> tuple:
+    """Sorts Spela versions: "0.7.7-beta.2" -> ((0, 7, 7), False, 2). A beta comes after the release before it and
+    before its own final release: 0.7.6 < 0.7.7-beta.1 < 0.7.7-beta.2 < 0.7.7."""
+    core, _, pre = version.partition("-")
+    return tuple(int(n) for n in re.findall(r"\d+", core)), not pre, int((re.findall(r"\d+", pre) or [0])[-1])
+
+
 def _newer_release() -> dict | None:
     r = latest_release()
-    return r if r and inventory._ver(r["version"]) > inventory._ver(__version__) else None
+    return r if r and release_order(r["version"]) > release_order(__version__) else None
 
 
 @api.get("/update")

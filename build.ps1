@@ -1,14 +1,25 @@
 # Builds "dist\Spela-<version>.zip" (a Spela folder with Spela.exe), no Python or Node needed to run it.
 # A folder, not one .exe: Defender scans a 48 MB one-file exe for ~6 s before it starts, and it unpacks on every launch.
 # -Bump patch|minor|major first raises the version in backend\app\__init__.py and rebuilds the helper payload (needs Docker).
-param([ValidateSet("patch", "minor", "major")][string]$Bump)
+# Betas: -Bump patch -Beta makes 0.7.6 into 0.7.7-beta.1, -Bump beta the next beta (0.7.7-beta.2), and -Bump stable
+# releases it (0.7.7). Every build people run needs its own version: consoles only get a new helper when it changes.
+param([ValidateSet("patch", "minor", "major", "beta", "stable")][string]$Bump, [switch]$Beta)
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true  # stop when npm/pip/pyinstaller fail too
 $init = "$PSScriptRoot\backend\app\__init__.py"
+if ($Beta -and $Bump -notin "patch", "minor", "major") { throw "-Beta starts the first beta of a new version: add -Bump patch, minor or major." }
 if ($Bump) {
-    $major, $minor, $patch = [int[]][regex]::Match((Get-Content $init -Raw), '__version__ = "(\d+)\.(\d+)\.(\d+)"').Groups[1..3].Value
-    $next = switch ($Bump) { "major" { "$($major + 1).0.0" } "minor" { "$major.$($minor + 1).0" } "patch" { "$major.$minor.$($patch + 1)" } }
-    (Get-Content $init -Raw) -replace '__version__ = "[\d.]+"', "__version__ = `"$next`"" | Set-Content $init -NoNewline
+    $m = [regex]::Match((Get-Content $init -Raw), '__version__ = "(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?"')
+    $major, $minor, $patch = [int[]]$m.Groups[1..3].Value
+    $betaOf = if ($m.Groups[4].Success) { [int]$m.Groups[4].Value } else { 0 }
+    if ($betaOf -and $Bump -in "patch", "minor", "major") { throw "$major.$minor.$patch-beta.$betaOf is a beta: -Bump beta makes the next one, -Bump stable releases it." }
+    if (-not $betaOf -and $Bump -in "beta", "stable") { throw "$major.$minor.$patch isn't a beta. Start one with -Bump patch -Beta." }
+    $next = switch ($Bump) {
+        "major" { "$($major + 1).0.0" } "minor" { "$major.$($minor + 1).0" } "patch" { "$major.$minor.$($patch + 1)" }
+        "beta" { "$major.$minor.$patch-beta.$($betaOf + 1)" } "stable" { "$major.$minor.$patch" }
+    }
+    if ($Beta) { $next += "-beta.1" }
+    (Get-Content $init -Raw) -replace '__version__ = "[^"]+"', "__version__ = `"$next`"" | Set-Content $init -NoNewline
     & "$PSScriptRoot\payload\build.ps1"  # the helper's version must equal the app's
 }
 $version = [regex]::Match((Get-Content $init -Raw), '__version__ = "([^"]+)"').Groups[1].Value

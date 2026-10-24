@@ -6,10 +6,15 @@
 #                                          the bump stays uncommitted in your working tree until -Publish
 #   ./release.ps1 -Bump patch -Publish     also commit the bump, tag v<version>, push, and create the GitHub release (needs gh)
 #   ./release.ps1 -Publish -Draft          create the release as a draft, to look it over on GitHub before it goes live
+# Betas (a GitHub prerelease: not offered as an update to stable users, not announced, not Docker's :latest):
+#   ./release.ps1 -Bump patch -Beta -Publish   0.7.6 -> 0.7.7-beta.1
+#   ./release.ps1 -Bump beta -Publish          the next beta, 0.7.7-beta.2
+#   ./release.ps1 -Bump stable -Publish        the final 0.7.7; its notes cover everything since 0.7.6
 # The helper and PS5 app committed under backend\app are bundled in the app (rebuild them with payload\build.ps1 and console-app\build.ps1).
 # They aren't separate downloads: both only work once Spela has paired them with a console, which only the app can do.
 param(
-    [ValidateSet("patch", "minor", "major")][string]$Bump,
+    [ValidateSet("patch", "minor", "major", "beta", "stable")][string]$Bump,
+    [switch]$Beta,
     [switch]$Publish,
     [switch]$Draft,
     [switch]$SkipTests
@@ -37,9 +42,11 @@ if ($Draft -and -not $Publish) { throw "-Draft only makes sense with -Publish." 
 # The version bump and the rebuild of the helper (a test fails if its version differs from the app's).
 $buildArgs = @{}
 if ($Bump) { $buildArgs.Bump = $Bump }
+if ($Beta) { $buildArgs.Beta = $true }
 & "$root\build.ps1" @buildArgs
 $version = Get-Version
 $tag = "v$version"
+$prerelease = $version.Contains("-")
 if ($Publish -and (git tag --list $tag)) { throw "Tag $tag already exists. Use -Bump to make a new version." }
 
 if (-not $SkipTests) {
@@ -49,8 +56,11 @@ if (-not $SkipTests) {
     try { & "$venv\Scripts\python" -m pytest -q } finally { Pop-Location }
 }
 
-# Release notes: the `Changelog: <Section>: <text>` trailers since the previous tag, grouped by section.
-$previous = git tag --list "v*" --sort=-v:refname | Where-Object { $_ -ne $tag } | Select-Object -First 1
+# Release notes: the `Changelog: <Section>: <text>` trailers since the previous tag, grouped by section. A beta's
+# since the release or beta before it; a stable release's since the stable one before it, so they cover its betas.
+# versionsort.suffix sorts v0.7.7-beta.1 before v0.7.7.
+$previous = git -c versionsort.suffix=- tag --list "v*" --sort=-v:refname |
+    Where-Object { $_ -ne $tag -and ($prerelease -or -not $_.Contains("-")) } | Select-Object -First 1
 $range = if ($previous) { "$previous..HEAD" } else { "HEAD" }
 $sections = [ordered]@{ Added = @(); Changed = @(); Fixed = @(); Removed = @(); Security = @() }
 $missing = @()
@@ -76,6 +86,10 @@ $sums = foreach ($a in $assets) { "{0} *{1}" -f (Get-FileHash "$out\$a" -Algorit
 ($sums -join "`n") + "`n" | Set-Content "$out\SHA256SUMS.txt" -NoNewline
 
 $notes = [Collections.Generic.List[string]]::new()
+if ($prerelease) {
+    $notes.Add("**This is a beta**, for testing what comes next. Keep a copy of your Spela data folder, and tell us what breaks. It isn't offered as an update to people on the stable version.")
+    $notes.Add("")
+}
 foreach ($s in $sections.Keys) {
     if ($sections[$s].Count) { $notes.Add("### $s"); $notes.AddRange([string[]]($sections[$s] | ForEach-Object { "- $_" })); $notes.Add("") }
 }
@@ -104,5 +118,5 @@ if (git diff --cached --name-only) { git commit -m "chore: release $tag" -m "Cha
 git tag -a $tag -m "Spela $tag"
 git push origin HEAD
 git push origin $tag
-$flags = @(if ($Draft) { "--draft" })
+$flags = @(if ($Draft) { "--draft" }) + @(if ($prerelease) { "--prerelease" })
 gh release create $tag @flags --title "Spela $tag" --notes-file "$out\RELEASE_NOTES.md" ($assets + "SHA256SUMS.txt" | ForEach-Object { "$out\$_" })

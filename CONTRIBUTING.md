@@ -72,3 +72,17 @@ For the maintainer. Needs Windows, PowerShell 7.3+, Python 3.12, Node 22, [GitHu
 5. GitHub then posts the release in Discord as *Spela Releases* ([release-announce.yml](.github/workflows/release-announce.yml)): the version, its notes and the download link, once the release is public and both files are on it. Drafts are announced when you publish them; prereleases and tags other than `vX.Y.Z` never are. Mentions are turned off, so notes can't ping anyone. A marker in the release notes (`<!-- spela:discord-announced -->`, hidden on GitHub) stops a rerun from posting twice. If the announcement fails, the release stays as it is and the workflow run shows why in red: fix it and click **Re-run jobs**. To see the message without sending it: `bash .github/scripts/announce-release.sh v<version> --dry-run` (needs `gh` and `jq`).
 
    One-time setup: in Discord, **Server Settings → Integrations → Webhooks → New Webhook**, pick the announcements channel, and copy its URL. On GitHub, **Settings → Secrets and variables → Actions → New repository secret**, named `DISCORD_WEBHOOK_URL`, with that URL as its value. Never put the URL in a file.
+
+### Betas
+
+Bigger changes go out as a beta first, from `master`, so testers can try them while everyone else stays on the stable version:
+
+```powershell
+./release.ps1 -Bump patch -Beta -Publish   # 0.7.6 -> 0.7.7-beta.1 (or -Bump minor -Beta for 0.8.0-beta.1)
+./release.ps1 -Bump beta -Publish          # a fix for testers: 0.7.7-beta.2
+./release.ps1 -Bump stable -Publish        # the final 0.7.7
+```
+
+A beta is published as a GitHub prerelease. That keeps it out of the in-app update check for people on a stable version (it asks GitHub for the latest release, which skips prereleases), out of Discord, and off Docker's `:latest` (it only gets its own `:0.7.7-beta.1` tag). Testers download it from the release page. Once on a beta, they're offered the final version when it's out: a beta counts as older than its own release (`release_order` in [backend/app/main.py](backend/app/main.py)). Every beta needs its own number, even for a one-line fix, because consoles only get a new helper and PS5 app when the version changes. Release notes for a beta cover what changed since the beta before it; the final release's cover everything since the last stable one.
+
+**Fixing the stable version while a beta is out:** branch from the last stable tag (`git switch -c release/0.7 v0.7.6`), fix it there, and release from that branch. That makes `0.7.7`, so on `master` the beta line has to move up: merge the fix into `master`, set `__version__` in [backend/app/__init__.py](backend/app/__init__.py) to `0.7.7`, commit, and start the next beta with `-Bump patch -Beta` (`0.7.8-beta.1`).

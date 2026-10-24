@@ -283,6 +283,9 @@ def test_update_check(monkeypatch):
     monkeypatch.setattr(main.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
     monkeypatch.setattr(main, "_release_checked", None)
     assert main.latest_release() is None
+    # a beta sorts between the release before it and its own final release, so a tester is offered the final
+    order = ["0.7.6", "0.7.7-beta.1", "0.7.7-beta.2", "0.7.7-beta.10", "0.7.7", "0.7.8-beta.1", "0.8.0"]
+    assert sorted(order[::-1], key=main.release_order) == order
 
 
 def test_update_install(monkeypatch, tmp_path):
