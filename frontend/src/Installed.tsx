@@ -211,9 +211,14 @@ export function MoveDialog({ consoleId, game, drives, onClose }: { consoleId: st
   );
 }
 
-/** The portrait poster from PlayStation Store, else the console's square icon. `children` are the overlays on the art. */
+/** Per title ID, when its cover was last uploaded on this page load: part of the poster's URL so the browser asks again. */
+export const coverVersion: Record<string, number> = {};
+
+/** The portrait poster from PlayStation Store (or the one uploaded for a game not in the library), else the console's
+ *  square icon. `children` are the overlays on the art. */
 export function Art({ g, children }: { g: InstalledGame; children?: ReactNode }) {
-  const [src, setSrc] = useState<string | null>(g.game_id ? `/api/v1/games/${g.game_id}/poster` : `/api/v1/titles/${g.title_id}/poster`);
+  const v = coverVersion[g.title_id] ?? 0;
+  const [src, setSrc] = useState<string | null>(g.game_id ? `/api/v1/games/${g.game_id}/poster` : `/api/v1/titles/${g.title_id}/poster?v=${v}`);
   if (!src) return <div className="sp-cover__art"><span className="sp-cover__ph">{g.title}</span>{children}</div>;
   const square = src === g.cover_url;
   return (

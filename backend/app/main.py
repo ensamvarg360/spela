@@ -633,8 +633,11 @@ async def _store_images(title_id: str, content_id: str | None):
 
 @api.get("/titles/{title_id}/poster")
 def get_title_poster(title_id: str):
-    """The portrait key art for a title ID (logos.poster); 404 when PlayStation Store has none."""
-    if not TITLE_ID.fullmatch(title_id) or not (path := logos.poster(title_id)):
+    """The cover uploaded for a title ID, else its portrait key art (logos.poster); 404 when PlayStation Store has none."""
+    TITLE_ID.fullmatch(title_id) or _not_found()
+    if uploaded := next((config.COVERS_DIR / "titles").glob(f"{title_id}.*"), None):
+        return FileResponse(uploaded, headers=NO_CACHE)
+    if not (path := logos.poster(title_id)):
         _not_found()
     return FileResponse(path, headers=NO_CACHE)
 
@@ -656,9 +659,8 @@ def refresh_store(background: BackgroundTasks, db: Session = Depends(get_db)):
 COVER_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
 
-@api.post("/games/{game_id}/cover", response_model=GameOut)
-async def upload_cover(game_id: str, file: UploadFile, db: Session = Depends(get_db)):
-    g = _game(db, game_id)
+async def _read_cover(file: UploadFile) -> tuple[bytes, str]:
+    """An uploaded cover's bytes and file extension, once it's checked to be a JPEG, PNG or WebP under 10 MB."""
     ext = COVER_TYPES.get(file.content_type or "")
     if not ext:
         raise HTTPException(415, {"error": "unsupported_media", "message": "Use JPEG, PNG or WebP."})
@@ -671,6 +673,13 @@ async def upload_cover(game_id: str, file: UploadFile, db: Session = Depends(get
     except Exception:  # Pillow raises many kinds for a broken or disguised file
         raise HTTPException(415, {"error": "unsupported_media", "message": "That file isn't a readable image.",
                                   "fix": "Use a JPEG, PNG or WebP picture."})
+    return data, ext
+
+
+@api.post("/games/{game_id}/cover", response_model=GameOut)
+async def upload_cover(game_id: str, file: UploadFile, db: Session = Depends(get_db)):
+    g = _game(db, game_id)
+    data, ext = await _read_cover(file)
     for old in config.COVERS_DIR.glob(f"{g.id}.*"):
         old.unlink()
     dest = config.COVERS_DIR / f"{g.id}{ext}"
@@ -678,6 +687,18 @@ async def upload_cover(game_id: str, file: UploadFile, db: Session = Depends(get
     g.cover_path = str(dest)
     db.commit()
     return _out(g)
+
+
+@api.post("/titles/{title_id}/cover", status_code=204)
+async def upload_title_cover(title_id: str, file: UploadFile):
+    """A cover for a game on a console that isn't in the library, by its title ID: /titles/<id>/poster serves it then."""
+    TITLE_ID.fullmatch(title_id) or _not_found()
+    data, ext = await _read_cover(file)
+    folder = config.COVERS_DIR / "titles"
+    folder.mkdir(exist_ok=True)
+    for old in folder.glob(f"{title_id}.*"):
+        old.unlink()
+    (folder / f"{title_id}{ext}").write_bytes(data)
 
 
 @api.post("/library/scan", status_code=202)

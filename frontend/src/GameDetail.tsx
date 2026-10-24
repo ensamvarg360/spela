@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, formatBytes, formatLabel, needsOnline, session, SOURCE_LABEL, STATUS_LABEL, STATUS_TONE, useConsoles, type Console, type Drive, type Game, type InstalledGame, type Job } from "./api";
 import { cart, useCart } from "./Cart";
 import { Cover } from "./Library";
-import { Art, MoveDialog, RemoveDialog } from "./Installed";
+import { Art, coverVersion, MoveDialog, RemoveDialog } from "./Installed";
 import { RESULT } from "./AuditLog";
 import { toast, toastError } from "./Toast";
 import { Badge, Bar, Collapsible, Empty, Field, Icon, Notice, PageHead, Panel, Path, Spinner, Time, type Tone } from "./ui";
@@ -605,6 +605,7 @@ export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: st
   const c = consoles.find((x) => x.id === consoleId);
   const { rows, drives, load } = useConsoleInventory(consoleId);
   const [tid, setTid] = useState<string | null>(null);
+  const [coverV, setCoverV] = useState(0);
   // a move to another drive gives the copy a new id, so the page follows the title ID once it's known
   useEffect(() => { if (rows && !tid) setTid(rows.find((r) => r.id === id)?.title_id ?? null); }, [rows]);
   if (!rows) return <p className="sp-muted">Loading…</p>;
@@ -621,7 +622,20 @@ export function ConsoleGameDetail({ consoleId, id }: { consoleId: string; id: st
 
   return (
     <div className="sp-detail">
-      <aside className="sp-detail__aside"><Art key={g.id} g={g} /><HomeLogo tid={g.title_id} consoleIds={[consoleId]} /></aside>
+      <aside className="sp-detail__aside">
+        <Art key={`${g.id}-${coverV}`} g={g} />
+        <HomeLogo tid={g.title_id} consoleIds={[consoleId]} />
+        {!session.readOnly && !g.game_id && <label className="sp-btn">
+          Change cover
+          <input type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const body = new FormData();
+            body.append("file", file);
+            api(`/titles/${g.title_id}/cover`, { body }).then(() => (setCoverV(coverVersion[g.title_id] = Date.now()), toast("Cover updated.")), toastError);
+          }} />
+        </label>}
+      </aside>
       <div className="sp-detail__main">
         <PageHead back={["#/installed", "Installed"]} title={<>{g.title}<Badge tone="success" dot>Installed</Badge></>}
           desc={<span className="sp-code">{g.title_id}</span>}

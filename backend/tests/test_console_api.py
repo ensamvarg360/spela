@@ -486,3 +486,19 @@ def test_refresh_store(tmp_path, monkeypatch):
         assert client.post("/api/v1/store/refresh").status_code == 202
     assert not (tmp_path / "store").exists()
     assert ("PPSA07772", "UP0001-PPSA07772_00-REFRESH000000000") in warmed
+
+
+def test_title_cover_upload(tmp_path, monkeypatch):
+    """A cover uploaded for a game only on a console wins over the store's poster."""
+    monkeypatch.setattr(config, "COVERS_DIR", tmp_path / "covers")
+    (tmp_path / "covers").mkdir()
+    monkeypatch.setattr(logos, "poster", lambda *a: pytest.fail("an uploaded cover is served without asking the store"))
+    out = io.BytesIO()
+    Image.new("RGB", (40, 60), "red").save(out, "PNG")
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        r = client.post("/api/v1/titles/PPSA07773/cover", files={"file": ("c.png", out.getvalue(), "image/png")})
+        assert r.status_code == 204
+        assert client.get("/api/v1/titles/PPSA07773/poster").content == out.getvalue()
+        assert client.post("/api/v1/titles/PPSA07773/cover", files={"file": ("c.png", b"nope", "image/png")}).status_code == 415
+        assert client.post("/api/v1/titles/nope/cover", files={"file": ("c.png", out.getvalue(), "image/png")}).status_code == 404
