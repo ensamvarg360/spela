@@ -1811,6 +1811,83 @@ async def clean_leftovers(console_id: str, db: Session = Depends(get_db)):
     return {"bytes_freed": freed}
 
 
+class Lz4In(BaseModel):
+    installed_game_id: str
+
+
+class Lz4FinishIn(BaseModel):
+    path: str  # the packed game, as /lz4 lists it under "originals"
+    keep: bool  # True: delete the original; False: put it back in place of the packed copy
+
+
+_lz4_logged: set[tuple] = set()  # finished packings already in the activity log
+LZ4_ACTION = {"pack": "console_pack", "delete": "console_pack_keep", "restore": "console_pack_undo"}  # the helper's kinds
+
+
+@api.post("/consoles/{console_id}/lz4", status_code=202)
+async def pack_on_console(console_id: str, body: Lz4In, db: Session = Depends(get_db)):
+    """Starts the helper LZ4-packing a game folder on the console, in place (adapter.pack_lz4): it goes on with this
+    PC away, and sets the original aside until /lz4/finish. Returns its status, as GET /lz4 does."""
+    c = db.get(Console, console_id) or _not_found()
+    row = db.get(InstalledGame, body.installed_game_id)
+    if not row or row.console_id != c.id:
+        _not_found()
+    if reason := jobs.lz4_blocker(row):
+        raise HTTPException(409, {"error": "cannot_pack", "message": reason})
+    adapter = inventory.adapter_for(db, c)
+    try:
+        await adapter.pack_lz4(row.source_path)
+    except AdapterError as e:
+        raise _adapter_failed(502, e)
+    return await console_lz4(console_id, db)
+
+
+@api.get("/consoles/{console_id}/lz4")
+async def console_lz4(console_id: str, db: Session = Depends(get_db)):
+    """{"status": the helper's packing since it started, or null; "originals": [{"path", "original", "title_id",
+    "title"}], the packed games whose original is set aside}. A packing that ended goes into the activity log once."""
+    c = db.get(Console, console_id) or _not_found()
+    adapter = inventory.adapter_for(db, c)
+    try:
+        status, originals = await adapter.lz4_status(), await adapter.lz4_originals()
+    except AdapterError as e:
+        raise _adapter_failed(502, e)
+    rows = {r.source_path: r for r in db.scalars(select(InstalledGame).where(InstalledGame.console_id == c.id))}
+    if status and not status["running"] and (key := (c.id, status["kind"], status["game"], status["phase"], status["after"])) not in _lz4_logged:
+        _lz4_logged.add(key)  # ponytail: in memory, so a restart of this PC logs the last one again
+        row = rows.get(status["game"])
+        db.add(AuditLog(action=LZ4_ACTION.get(status["kind"], "console_pack"), console_id=c.id, title_id=row.title_id if row else None,
+                        target_path=status["game"],
+                        result="canceled" if status["phase"] == "canceled" else "failed" if status["phase"] == "failed" else "success",
+                        details={"before_bytes": status["before"], "after_bytes": status["after"], "message": status["error"]}
+                        if status["kind"] == "pack" else {"message": status["error"]}))
+        db.commit()
+    return {"status": status, "originals": [{"path": p, "original": o, "title_id": r.title_id if (r := rows.get(p)) else None,
+                                             "title": r.title if r else p.rpartition("/")[2]} for p, o in originals.items()]}
+
+
+@api.post("/consoles/{console_id}/lz4/cancel")
+async def cancel_console_pack(console_id: str, db: Session = Depends(get_db)):
+    c = db.get(Console, console_id) or _not_found()
+    try:
+        await inventory.adapter_for(db, c).cancel_lz4()
+    except AdapterError as e:
+        raise _adapter_failed(502, e)
+    return {"ok": True}
+
+
+@api.post("/consoles/{console_id}/lz4/finish", status_code=202)
+async def finish_console_pack(console_id: str, body: Lz4FinishIn, db: Session = Depends(get_db)):
+    """Starts the helper deleting the original set aside after packing (keep), or putting it back and deleting the
+    packed copy. GET /lz4 follows it, and logs it when it ends."""
+    c = db.get(Console, console_id) or _not_found()
+    try:
+        await inventory.adapter_for(db, c).finish_lz4(body.path, body.keep)
+    except AdapterError as e:
+        raise _adapter_failed(502, e)
+    return await console_lz4(console_id, db)
+
+
 @api.delete("/consoles/{console_id}/console-app")
 async def remove_console_app(console_id: str, db: Session = Depends(get_db)):
     """Deletes the PS5 app's folder and its home-screen tile. {"tile_left", "message"}."""

@@ -78,6 +78,15 @@ class Client
     void request_logo(const std::string &game_id);
     bool take_logo(std::string *game_id, std::vector<std::uint8_t> *rgba);
 
+    // ---- the LZ4 tab: the helper on this console, never the PC, so it works with the PC away ----
+    // The game folders on this PS5 and the helper's LZ4 job, when they changed since the last call.
+    // False on both until the helper has answered once.
+    bool take_console(std::vector<ConsoleGame> *games, Pack *pack);
+    // Packs a game folder; deletes its set-aside original (keep) or puts it back. Answers via take_message.
+    void pack(const std::string &path);
+    void cancel_pack();
+    void finish_pack(const std::string &path, bool keep);
+
   private:
     struct Job
     {
@@ -89,10 +98,13 @@ class Client
             cancel,
             favorite,
             preview,
-            remove
+            remove,
+            pack,
+            pack_cancel,
+            pack_finish
         } kind;
         std::string game_id; // the removal id for remove
-        std::string arg = {}; // the title ID for remove, the drive id for install, true/false for favorite
+        std::string arg = {}; // the title ID for remove, the drive id for install, true/false for favorite, 1/0 for pack_finish
     };
 
     static void *thread_main(void *self);
@@ -101,6 +113,7 @@ class Client
     void drain();
     void fetch_library();
     void check_removals();
+    void fetch_console();
 
     Server server_;
     bool paired_ = false;
@@ -124,6 +137,9 @@ class Client
     std::deque<Removal> removals_;
     std::vector<std::string> watching_; // removal ids started here and not ended yet
     std::deque<RemovalResult> results_;
+    std::vector<ConsoleGame> console_games_;
+    Pack pack_;
+    bool console_new_ = false;
 };
 
 } // namespace hui::store

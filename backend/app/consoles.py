@@ -171,6 +171,12 @@ class ConsoleAdapter(Protocol):
     async def list_leftovers(self) -> dict[str, int]: ...
     async def remove_leftovers(self) -> int: ...  # AdapterError("busy") while the helper copies a game between drives
     async def get_home_db(self) -> bytes: ...  # the home screen's database (HOME_DB), read-only copy
+    # LZ4 packing on the console, by the helper (payload/main.c, pack_start): see FTPConsoleAdapter.
+    async def pack_lz4(self, source_path: str) -> None: ...
+    async def lz4_status(self) -> dict | None: ...
+    async def cancel_lz4(self) -> None: ...
+    async def lz4_originals(self) -> dict[str, str]: ...  # packed game's path -> its original, set aside
+    async def finish_lz4(self, game_path: str, keep_packed: bool) -> None: ...  # in the background, like packing
     async def read_file(self, path: str) -> bytes | None: ...  # None when it's missing; raises AdapterError
     # Copies every save folder of `title_id` (all users) under `dest`, mirroring console paths. Reads only. Returns files copied.
     async def backup_saves(self, title_id: str, dest: Path, progress_callback: ProgressCallback) -> int: ...
@@ -198,6 +204,7 @@ class MockConsoleAdapter:
     def __init__(self, console: Console | None = None, online: bool = True):
         self.online = online
         self.leftovers: dict[str, int] = {}  # hidden .partial path -> bytes
+        self.originals: dict[str, str] = {}  # LZ4-packed game -> its original, set aside
         self.drives = [
             DriveInfo("internal", "Internal SSD", "/user", "internal", 825 * GiB, 210 * GiB),
             DriveInfo("usb0", "USB Extended", "/mnt/usb0", "usb", 2000 * GiB, 1500 * GiB),
@@ -355,6 +362,32 @@ class MockConsoleAdapter:
     async def list_leftovers(self) -> dict[str, int]:
         self._check()
         return dict(self.leftovers)
+
+    async def pack_lz4(self, source_path: str) -> None:
+        self._check()
+        g = next((g for g in self.games if g.source_path == source_path), None)
+        if not g:
+            raise AdapterError("helper_refused", "The console refused: p must be a game folder")
+        homebrew, _, name = source_path.rpartition("/")
+        self.lz4 = {"running": False, "kind": "pack", "phase": "done", "done": 0, "total": 0, "before": g.size_bytes,
+                    "after": g.size_bytes // 2, "game": source_path, "backup": f"{homebrew}/.{name}.lz4-original", "error": ""}
+        self.originals[source_path] = self.lz4["backup"]
+
+    async def lz4_status(self) -> dict | None:
+        self._check()
+        return getattr(self, "lz4", None)
+
+    async def cancel_lz4(self) -> None:
+        self._check()
+
+    async def lz4_originals(self) -> dict[str, str]:
+        self._check()
+        return dict(self.originals)
+
+    async def finish_lz4(self, game_path: str, keep_packed: bool) -> None:
+        self._check()
+        self.lz4 = {**self.lz4, "kind": "delete" if keep_packed else "restore", "phase": "deleted" if keep_packed else "restored",
+                    "game": game_path, "backup": self.originals.pop(game_path)}
 
     async def remove_leftovers(self) -> int:
         self._check()
@@ -1137,6 +1170,8 @@ class FTPConsoleAdapter:
         copy = self._helper("/copy")  # a move between drives runs on the console, even after the PC app restarts
         if copy and copy.get("running"):
             raise AdapterError("busy", "The PS5 is copying a game to another drive. Clean up once that's done.")
+        if (self._helper("/pack") or {}).get("running"):  # it packs into a hidden .partial too
+            raise AdapterError("busy", "The PS5 is packing a game with LZ4. Clean up once that's done.")
         found = self._leftovers(ftp)
         for path in found:
             self._rm_partial(ftp, path)
@@ -1165,6 +1200,38 @@ class FTPConsoleAdapter:
     async def remove_home_screen_icon(self, title_id: str) -> RemovalResult:
         """Asks the helper to remove a ShadowMountPlus tile whose game files are gone (payload/main.c, uninstall_tile)."""
         return await asyncio.to_thread(self._remove_tile, title_id)
+
+    # ------------------------------------------------ LZ4 packing on the console (payload/main.c, pack_start)
+
+    async def pack_lz4(self, source_path: str) -> None:
+        """Starts the helper LZ4-packing a folder game in place. It runs on without the PC: lz4_status follows it."""
+        await asyncio.to_thread(self._ask_helper, "POST", "/pack", p=source_path)
+
+    async def lz4_status(self) -> dict | None:
+        """The helper's last packing since it started ({running, phase, done, total, before, after, game, backup,
+        error}), or None when it has packed nothing."""
+        st = await asyncio.to_thread(self._ask_helper, "GET", "/pack")
+        return st if st.get("game") else None
+
+    async def cancel_lz4(self) -> None:
+        await asyncio.to_thread(self._ask_helper, "POST", "/pack/cancel")
+
+    def _lz4_originals(self, ftp: ftplib.FTP) -> dict[str, str]:
+        found = {}
+        for _, _, homebrew in self._drives(ftp):
+            for name in ftp.ls(homebrew):
+                if m := re.fullmatch(r"\.(.+)\.lz4-original", name):
+                    found[f"{homebrew}/{m[1]}"] = f"{homebrew}/{name}"
+        return found
+
+    async def lz4_originals(self) -> dict[str, str]:
+        """Originals the helper set aside after packing: packed game's path -> its original, hidden next to it."""
+        return await self._run(self._lz4_originals)
+
+    async def finish_lz4(self, game_path: str, keep_packed: bool) -> None:
+        """Starts the helper deleting the original it set aside (keep_packed), or putting it back in place of the
+        packed copy, which is deleted (payload/main.c, pack_finish). In the background: lz4_status follows it."""
+        await asyncio.to_thread(self._ask_helper, "POST", "/pack/finish", p=game_path, keep=int(keep_packed))
 
     def _ask_helper(self, method: str, op: str, **query) -> dict:
         """One request to the helper; its JSON answer. Raises AdapterError when it says no or isn't running."""

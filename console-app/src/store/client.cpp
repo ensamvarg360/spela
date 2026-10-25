@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 
@@ -134,6 +135,31 @@ Response request(const Server &server, const char *method, const std::string &pa
     return response;
 }
 
+// For a query: a path's bytes outside A-Z a-z 0-9 - . _ ~ / as %XX (a game folder's name may have spaces).
+std::string url_encode(const std::string &s)
+{
+    static const char kHex[] = "0123456789ABCDEF";
+    std::string out;
+    for (const unsigned char c : s)
+    {
+        if (std::isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~' || c == '/')
+            out += static_cast<char>(c);
+        else
+            out += {'%', kHex[c >> 4], kHex[c & 15]};
+    }
+    return out;
+}
+
+// The helper's {"error":"..."}, as text.
+std::string error_of(const std::string &body)
+{
+    const std::size_t at = body.find("\"error\":\"");
+    if (at == std::string::npos)
+        return body;
+    const std::size_t from = at + 9;
+    return body.substr(from, body.find('"', from) - from);
+}
+
 std::string unpaired_message()
 {
     return "This app isn't paired with your PC any more. On the PC, open Settings, find this console under "
@@ -248,6 +274,23 @@ bool Client::step()
         pthread_mutex_unlock(&lock_);
         return true;
     }
+    if (have_job && (job.kind == Job::pack || job.kind == Job::pack_cancel || job.kind == Job::pack_finish))
+    {
+        const std::string path = job.kind == Job::pack          ? "/local/pack?p=" + url_encode(job.game_id)
+                                 : job.kind == Job::pack_cancel ? std::string("/local/pack/cancel")
+                                                                : "/local/pack/finish?p=" + url_encode(job.game_id) + "&keep=" + job.arg;
+        const Response r = request(server_, "POST", path, 4096);
+        const char *done = job.kind == Job::pack          ? "Packing started. It carries on with your PC off."
+                           : job.kind == Job::pack_cancel ? "Stopping. The game stays as it was."
+                           : job.arg == "1"               ? "Deleting the original."
+                                                          : "Putting the original back.";
+        pthread_mutex_lock(&lock_);
+        messages_.emplace_back(r.status == 0 ? std::string(kCantReach) : r.status == 200 ? std::string(done) : error_of(r.body),
+                               r.status == 200);
+        pthread_mutex_unlock(&lock_);
+        refresh_ = true; // its progress straight away
+        return true;
+    }
     if (have_job && job.kind != Job::cover && job.kind != Job::logo)
     {
         const std::string path =
@@ -289,7 +332,11 @@ bool Client::step()
     {
         fetch_library();
         check_removals();
-        next_poll_ = sys::monotonic_us() + (busy ? kPollBusy : kPollIdle);
+        fetch_console();
+        pthread_mutex_lock(&lock_);
+        const bool packing = pack_.running;
+        pthread_mutex_unlock(&lock_);
+        next_poll_ = sys::monotonic_us() + (busy || packing ? kPollBusy : kPollIdle);
         return true;
     }
     return false;
@@ -337,6 +384,56 @@ void Client::fetch_library()
                  "icon. If it keeps happening, the details are in app.log in Spela's data folder.";
     }
     library_new_ = true;
+    pthread_mutex_unlock(&lock_);
+}
+
+void Client::fetch_console()
+{
+    const Response g = request(server_, "GET", "/local/games", 1u << 20);
+    const Response p = g.status == 200 ? request(server_, "GET", "/local/pack", 8192) : Response{};
+    Pack pack;
+    if (g.status != 200 || p.status != 200 || !parse_pack(p.body, &pack))
+        return; // no helper, or one too old for the LZ4 tab: it says so
+    pthread_mutex_lock(&lock_);
+    console_games_ = parse_console_games(g.body);
+    pack_ = pack;
+    console_new_ = true;
+    pthread_mutex_unlock(&lock_);
+}
+
+bool Client::take_console(std::vector<ConsoleGame> *games, Pack *pack)
+{
+    drain();
+    pthread_mutex_lock(&lock_);
+    const bool fresh = console_new_;
+    if (fresh)
+    {
+        *games = console_games_;
+        *pack = pack_;
+        console_new_ = false;
+    }
+    pthread_mutex_unlock(&lock_);
+    return fresh;
+}
+
+void Client::pack(const std::string &path)
+{
+    pthread_mutex_lock(&lock_);
+    jobs_.push_front({Job::pack, path});
+    pthread_mutex_unlock(&lock_);
+}
+
+void Client::cancel_pack()
+{
+    pthread_mutex_lock(&lock_);
+    jobs_.push_front({Job::pack_cancel, {}});
+    pthread_mutex_unlock(&lock_);
+}
+
+void Client::finish_pack(const std::string &path, bool keep)
+{
+    pthread_mutex_lock(&lock_);
+    jobs_.push_front({Job::pack_finish, path, keep ? "1" : "0"});
     pthread_mutex_unlock(&lock_);
 }
 

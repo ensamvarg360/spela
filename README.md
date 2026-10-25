@@ -209,6 +209,8 @@ The software is provided as is, without warranty, under the GPL. Running homebre
 - The PS5 app is built on [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) (GPL-3.0-or-later) and the [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) (GPL-3.0); the fonts it bundles keep their own licenses, next to them in [backend/app/console_app/PPSA99787/assets/fonts](backend/app/console_app/PPSA99787/assets/fonts).
 - [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) does the actual mounting on the console. [Chiaki-ng](https://github.com/chiaki-ng/chiaki-ng) is how you get the Remote Play key for the Wake button.
 - The helper links the public-domain [SQLite](https://www.sqlite.org/) to set home-screen logos.
+- **LZ4 packing on the console** uses a modified copy of the packer from [exFAT2AMPR](https://github.com/exFAT2AMPR/exfat2ampr): *based on exFAT2AMPR by V-10, made by V-10* (GPL-3.0-or-later with additional terms, in [payload/e2a/NOTICE](payload/e2a/NOTICE); what was changed is in [payload/e2a/README.md](payload/e2a/README.md)), with [LZ4](https://github.com/lz4/lz4) by Yann Collet (BSD-2-Clause).
+- **LZ4 packing on this PC** and the AMPR emulator it adds to packed games are [ampr_emu](https://github.com/drakmor/ampr_emu) by drakmor (GPL-3.0-or-later), in [backend/app/ampr](backend/app/ampr).
 - Game art, ratings and metadata come from PlayStation Store's public catalog.
 
 ## License

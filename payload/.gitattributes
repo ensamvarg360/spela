@@ -1,0 +1,2 @@
+# Run in Linux containers (hosttest/run.sh): keep Unix line endings on Windows checkouts too.
+*.sh text eol=lf

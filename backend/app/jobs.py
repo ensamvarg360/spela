@@ -535,6 +535,20 @@ def moving(installed_game_id: str) -> bool:
     return any(m["installed_game_id"] == installed_game_id and m["status"] == "moving" for m in moves.values())
 
 
+def lz4_blocker(row: InstalledGame) -> str | None:
+    """Why the game can't be LZ4-packed on the console, as far as this PC can tell. The helper checks the rest: that
+    it uses AMPR, the free space, and that nothing else is packing or copying."""
+    if row.install_route != "shadowmountplus" or not row.source_path:
+        return "Only games installed through ShadowMountPlus can be packed."
+    if row.source_path.lower().endswith(IMAGE_EXTS):
+        return "Only game folders can be packed on the console, not disc images."
+    if row.status == "orphaned_icon":
+        return "Its files are gone from the console."
+    if inventory.status.get(row.console_id, {}).get("state") != "online":
+        return "The console isn't online."
+    return None
+
+
 def move_blocker(db: Session, row: InstalledGame, drive: Drive | None) -> str | None:
     if row.install_route != "shadowmountplus" or not row.source_path:
         return "Only games installed through ShadowMountPlus can be moved."

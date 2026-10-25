@@ -81,6 +81,37 @@ bool parse_removal_result(std::string_view text, RemovalResult *out);
 
 // Where the PC app is: assets/server.txt, written by the PC when it installs
 // this app ("url=http://192.168.0.40:8787" and "token=..." lines).
+// A game installed on this PS5, as the helper lists it (local_games in payload/main.c): the Installed tab without
+// the PC, and the LZ4 tab's game folders. The PC isn't asked: these work with it away.
+struct ConsoleGame
+{
+    std::string path; // /data/homebrew/PPSA01234
+    std::string title_id;
+    std::string title;
+    bool packed = false;   // LZ4-packed already
+    bool original = false; // its original is set aside, hidden next to it, since it was packed
+    std::string kind = "folder"; // folder | image | package
+    std::string version;
+};
+
+std::vector<ConsoleGame> parse_console_games(std::string_view text);
+
+// The helper's LZ4 job (local_pack in payload/main.c): packing a game, or deleting or putting back its original.
+struct Pack
+{
+    bool running = false;
+    std::string kind;  // pack | delete | restore; empty: nothing since the helper started
+    std::string phase; // checking, packing, ... done, failed, canceled, deleted, restored
+    std::uint64_t done = 0;
+    std::uint64_t total = 0;
+    std::uint64_t before = 0; // the game's size, and its packed size once it's done
+    std::uint64_t after = 0;
+    std::string game; // its path
+    std::string error;
+};
+
+bool parse_pack(std::string_view text, Pack *out);
+
 struct Server
 {
     std::string url; // as written, for messages

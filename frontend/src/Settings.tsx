@@ -273,6 +273,15 @@ export default function Settings() {
       <HelperKey />
       <ViewOnly />
       <AuditLog />
+      <Panel title="Credits">
+        {/* exFAT2AMPR's terms (payload/e2a/NOTICE): its credit wherever Spela shows credits, and that this is modified */}
+        <ul className="sp-credits">
+          <li>LZ4 packing on the console uses a modified copy of the packer from exFAT2AMPR. Based on exFAT2AMPR by V-10. Made by V-10.</li>
+          <li>LZ4 packing on this PC and the AMPR emulator: ampr_emu by drakmor.</li>
+          <li>Mounting games on the console: ShadowMountPlus by drakmor.</li>
+          <li>The PS5 app: ps5-homebrew-ui by BlackBearReloaded, and the PS5 Payload SDK.</li>
+        </ul>
+      </Panel>
     </>
   );
 }

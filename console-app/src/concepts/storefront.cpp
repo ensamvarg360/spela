@@ -11,6 +11,9 @@
 // but the cart. L2 sorts the rest by name, by when they were added, or by size.
 // Up from the top row reaches a row of genres (PlayStation Store's, via the PC):
 // left and right there show only that genre's games.
+// The LZ4 tab lists the game folders on this PS5 itself, from the helper, so it
+// works with the PC off: Cross packs one with LZ4 on the console, Square deletes
+// the original it sets aside (or stops the packing), Options puts it back.
 // Square on an install in progress offers to stop it. Square on an installed
 // game asks the PC what removing it would delete, shows it, and Square again
 // removes it; a dialog says how it ended, and whether its home-screen tile
@@ -74,10 +77,14 @@ constexpr float kMessageSeconds = 5.0f;
 constexpr float kLift = 0.06f;  // how much the focused card grows
 constexpr float kArtH = 260.0f; // the focused game's art at the top of the panel
 constexpr int kMaxDrives = 5;   // rows in the install dialog
-constexpr const char *kTabs[] = {"Games", "Installed", "DLC", "Cart"};
-constexpr const char *kTabCounts[] = {"games", "installed", "DLC", "in cart"};
-constexpr int kTabCount = 4;
-constexpr int kCartTab = 3;
+// LZ4 before the cart: L1 from Games still reaches the cart.
+constexpr const char *kTabs[] = {"Games", "Installed", "DLC", "LZ4", "Cart"};
+constexpr const char *kTabCounts[] = {"games", "installed", "DLC", "on this PS5", "in cart"};
+constexpr int kTabCount = 5;
+constexpr int kInstalledTab = 1;
+constexpr int kLz4Tab = 3;
+constexpr int kCartTab = 4;
+constexpr float kRowH = 84.0f; // a game in the LZ4 tab's list
 constexpr int kCheckoutNames = 5; // titles listed in the install-all dialog
 constexpr const char *kSorts[] = {"Name", "Newest", "Size"};
 constexpr int kSortCount = 3;
@@ -94,6 +101,7 @@ constexpr const char *kTechniques[] = {
     "Installs run on the PC, to the drive picked here; this screen polls their progress",
     "Removals show the PC's preview and wait for a second press",
     "The backdrop eases toward the focused cover's colours",
+    "The LZ4 tab asks the helper on the console, not the PC, so it works with the PC off",
 };
 
 // Shown in the PC preview: the tour waits, moves, and installs one game.
@@ -140,6 +148,14 @@ constexpr app::TourStep kTour[] = {
     {0.8f, 0, Direction::none, "genres"},
     {0.4f, 0, Direction::down},
     {0.8f, 0, Direction::none, "genre-grid"},
+    {0.3f, action_bit(Action::page_prev), Direction::none}, // the cart
+    {0.3f, action_bit(Action::page_prev), Direction::none}, // the LZ4 tab: the helper's list, not the PC's
+    {0.8f, 0, Direction::none, "lz4"},
+    {0.3f, 0, Direction::down}, // the packed one whose original is kept
+    {0.8f, 0, Direction::none, "lz4-original"},
+    {0.4f, action_bit(Action::west), Direction::none},
+    {0.6f, 0, Direction::none, "lz4-delete"},
+    {0.4f, action_bit(Action::back), Direction::none},
 };
 
 struct StateLook
@@ -206,6 +222,19 @@ void draw_heart(gfx::DrawList &list, float cx, float cy, float size, Color color
     list.circle(cx + off, y - off, a * 0.5f, color);
 }
 
+const char *pack_phase(const std::string &phase)
+{
+    return phase == "checking"    ? "Checking the game"
+           : phase == "packing"   ? "Packing with LZ4"
+           : phase == "copying"   ? "Copying the files that stay as they are"
+           : phase == "verifying" ? "Checking every block"
+           : phase == "waiting"   ? "Waiting for the game to be closed"
+           : phase == "swapping"  ? "Putting it in place"
+           : phase == "deleting"  ? "Deleting the original"
+           : phase == "restoring" ? "Putting the original back"
+                                  : "Working";
+}
+
 bool removable(const store::Game &g)
 {
     return g.state == "installed" || g.state == "update";
@@ -234,6 +263,16 @@ bool in_tab(const store::Game &g, int tab)
         return tab == 2 && g.kind == "dlc";
     return tab == 0 || (g.state != "installable" && g.state != "blocked");
 }
+
+// What the LZ4 tab asks before it goes ahead.
+enum class Lz4Ask
+{
+    none,
+    pack,
+    stop,
+    keep,   // delete the original
+    restore // put the original back
+};
 
 class Storefront final : public app::Concept
 {
@@ -302,6 +341,20 @@ class Storefront final : public app::Concept
             // A recorded chime: the glass set has no "complete", whose stand-in tone is a long rising sweep.
             feedback.play(ok ? audio::Cue::saved : audio::Cue::error);
         }
+        if (client_.take_console(&console_games_, &pack_))
+        {
+            console_loaded_ = true;
+            lz4_games_.clear();
+            for (const store::ConsoleGame &g : console_games_)
+                if (g.kind == "folder")
+                    lz4_games_.push_back(g);
+            lz4_focus_ = std::clamp(lz4_focus_, 0, std::max(0, static_cast<int>(lz4_games_.size()) - 1));
+            if (offline()) // what's installed here, until the PC answers
+            {
+                games_ = offline_games();
+                show_tab(keep);
+            }
+        }
         take_covers();
         store::Removal removal;
         while (client_.take_removal(&removal))
@@ -335,7 +388,11 @@ class Storefront final : public app::Concept
             feedback.play(result.ok ? audio::Cue::notify : audio::Cue::error);
         }
 
-        if (!confirm_.id.empty())
+        if (lz4_ask_ != Lz4Ask::none)
+        {
+            update_lz4_ask(input, feedback);
+        }
+        else if (!confirm_.id.empty())
         {
             update_confirm(input, feedback);
         }
@@ -538,8 +595,12 @@ class Storefront final : public app::Concept
             tab_ = (tab_ + tab_step) % kTabCount;
             show_tab({});
             age_ = 0.0f; // the new tab's cards rise in (the shell plays the tab sound)
+            if (tab_ == kLz4Tab)
+                client_.refresh(); // what's on the console now
             return;
         }
+        if (tab_ == kLz4Tab)
+            return update_lz4(input, feedback);
         if (tab_ != kCartTab && input.is_pressed(Action::jump_prev))
         {
             sort_ = (sort_ + 1) % kSortCount;
@@ -607,6 +668,16 @@ class Storefront final : public app::Concept
                 refusal_.trigger();
             }
         }
+        if (offline() && count > 0 && (input.is_pressed(Action::west) || input.is_pressed(Action::jump_next)))
+        {
+            message_ = input.is_pressed(Action::west) ? "Removing a game needs Spela running on your PC."
+                                                      : "Favorites are kept on your PC: Spela needs to be running there.";
+            message_ok_ = false;
+            message_age_ = 0.0f;
+            feedback.play(audio::Cue::error);
+            refusal_.trigger();
+            return;
+        }
         if (count > 0 && input.is_pressed(Action::west))
         {
             const store::Game &g = *focused();
@@ -664,6 +735,117 @@ class Storefront final : public app::Concept
         }
     }
 
+    // The PC hasn't answered since the app started, and the helper has: the Installed tab shows the helper's list.
+    bool offline() const
+    {
+        return !loaded_ && !error_.empty() && console_loaded_;
+    }
+
+    // What's installed here as the Installed tab's cards, while the PC is away. No covers: they come from the PC.
+    std::vector<store::Game> offline_games() const
+    {
+        std::vector<store::Game> games;
+        for (const store::ConsoleGame &c : console_games_)
+        {
+            store::Game g;
+            g.id = "console:" + c.path;
+            g.title = c.title;
+            g.title_id = c.title_id;
+            g.version = c.version;
+            g.state = "installed";
+            g.format = c.kind == "package" ? "ps5_pkg" : c.kind == "image" ? "image" : "folder_dump";
+            games.push_back(std::move(g));
+        }
+        return games;
+    }
+
+    const store::ConsoleGame *lz4_focused() const
+    {
+        return lz4_games_.empty() ? nullptr : &lz4_games_[static_cast<std::size_t>(lz4_focus_)];
+    }
+
+    // This game's job, while it runs or after it ended; null when the helper's job is another game's.
+    const store::Pack *pack_of(const store::ConsoleGame &g) const
+    {
+        return !pack_.kind.empty() && pack_.game == g.path ? &pack_ : nullptr;
+    }
+
+    // Up and down pick a game; Cross packs it, Square deletes its set-aside original or stops the packing, Options
+    // puts the original back. Each asks first (update_lz4_ask).
+    void update_lz4(const InputFrame &input, app::Feedback &feedback)
+    {
+        if (input.is_pressed(Action::north))
+        {
+            client_.refresh();
+            feedback.play(audio::Cue::tick);
+        }
+        const int count = static_cast<int>(lz4_games_.size());
+        if (count > 0 && (input.nav == Direction::up || input.nav == Direction::down))
+        {
+            const int next = std::clamp(lz4_focus_ + (input.nav == Direction::down ? 1 : -1), 0, count - 1);
+            if (next != lz4_focus_)
+            {
+                lz4_focus_ = next;
+                feedback.play(audio::Cue::focus);
+            }
+            else if (!input.nav_repeat)
+            {
+                feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
+                refusal_.trigger();
+            }
+        }
+        const store::ConsoleGame *g = lz4_focused();
+        if (g == nullptr)
+            return;
+        const store::Pack *mine = pack_of(*g);
+        const bool running_here = mine != nullptr && mine->running;
+        const bool pressed = input.is_pressed(Action::confirm) || input.is_pressed(Action::west) || input.is_pressed(Action::menu);
+        Lz4Ask ask = Lz4Ask::none;
+        if (input.is_pressed(Action::confirm) && !g->packed && !g->original && !pack_.running)
+            ask = Lz4Ask::pack;
+        else if (input.is_pressed(Action::west) && running_here && mine->kind == "pack")
+            ask = Lz4Ask::stop;
+        else if (input.is_pressed(Action::west) && g->original && !pack_.running)
+            ask = Lz4Ask::keep;
+        else if (input.is_pressed(Action::menu) && g->original && !pack_.running)
+            ask = Lz4Ask::restore;
+        if (ask != Lz4Ask::none)
+        {
+            lz4_ask_ = ask;
+            lz4_path_ = g->path;
+            lz4_title_ = g->title;
+            modal_.snap(0.0f);
+            feedback.play(audio::Cue::modal_open);
+        }
+        else if (pressed)
+        {
+            feedback.play(audio::Cue::error);
+            refusal_.trigger();
+        }
+    }
+
+    // The same button again goes ahead; Circle doesn't.
+    void update_lz4_ask(const InputFrame &input, app::Feedback &feedback)
+    {
+        const Action go = lz4_ask_ == Lz4Ask::pack ? Action::confirm : lz4_ask_ == Lz4Ask::restore ? Action::menu : Action::west;
+        if (input.is_pressed(go))
+        {
+            if (lz4_ask_ == Lz4Ask::pack)
+                client_.pack(lz4_path_);
+            else if (lz4_ask_ == Lz4Ask::stop)
+                client_.cancel_pack();
+            else
+                client_.finish_pack(lz4_path_, lz4_ask_ == Lz4Ask::keep);
+            lz4_ask_ = Lz4Ask::none;
+            feedback.play(audio::Cue::select);
+        }
+        else if (input.is_pressed(Action::back))
+        {
+            lz4_ask_ = Lz4Ask::none;
+            feedback.play(audio::Cue::modal_close);
+        }
+    }
+
     // Left and right pick a genre and the grid follows; down, Cross or Circle go back to the games.
     void update_genres(const InputFrame &input, app::Feedback &feedback)
     {
@@ -716,6 +898,8 @@ class Storefront final : public app::Concept
         {
             list.rounded_rect({0, 0, 1920, 1080}, 0, kNight.with_alpha(0.55f * modal_.value));
             frame.glass = true;
+            if (lz4_ask_ != Lz4Ask::none)
+                return draw_lz4_ask(frame.overlay, frame.glass_texture);
             if (!confirm_.id.empty())
                 return draw_confirm(frame.overlay, frame.glass_texture);
             if (!done_.id.empty())
@@ -726,7 +910,9 @@ class Storefront final : public app::Concept
                 return draw_checkout(frame.overlay, frame.glass_texture);
             return draw_stop(frame.overlay, frame.glass_texture);
         }
-        if (!client_.paired() || !loaded_ || games_.empty())
+        if (client_.paired() && tab_ == kLz4Tab)
+            return draw_lz4_hints(list);
+        if (!client_.paired() || (!loaded_ && !offline()) || games_.empty() || (offline() && tab_ != kInstalledTab))
             return;
         ui::Hint hints[7];
         int count = 0;
@@ -741,11 +927,11 @@ class Storefront final : public app::Concept
             hints[count++] = {ui::Button::options, "Take out"};
         else if (g != nullptr && g->state == "installable")
             hints[count++] = {ui::Button::options, "Add to cart"};
-        if (g != nullptr && removable(*g))
+        if (g != nullptr && removable(*g) && !offline())
             hints[count++] = {ui::Button::square, "Remove"};
         if (g != nullptr && installing(*g))
             hints[count++] = {ui::Button::square, "Stop"};
-        if (g != nullptr)
+        if (g != nullptr && !offline())
             hints[count++] = {ui::Button::r2, g->favorite ? "Unfavorite" : "Favorite"};
         if (tab_ != kCartTab)
             hints[count++] = {ui::Button::l2, "Sort"};
@@ -780,7 +966,8 @@ class Storefront final : public app::Concept
 
     bool dialog_open() const
     {
-        return !confirm_.id.empty() || !done_.id.empty() || !install_id_.empty() || !stop_id_.empty() || checkout_;
+        return lz4_ask_ != Lz4Ask::none || !confirm_.id.empty() || !done_.id.empty() || !install_id_.empty() ||
+               !stop_id_.empty() || checkout_;
     }
 
     bool in_cart(const std::string &id) const
@@ -868,6 +1055,12 @@ class Storefront final : public app::Concept
     void show_tab(const std::string &keep)
     {
         shown_.clear();
+        if (tab_ == kLz4Tab || (offline() && tab_ != kInstalledTab)) // its own list, or the PC's library while it's away
+        {
+            genres_.clear();
+            in_genres_ = false;
+            return;
+        }
         std::unordered_map<std::string, int> counts;
         for (std::size_t i = 0; i < games_.size(); ++i)
         {
@@ -973,18 +1166,29 @@ class Storefront final : public app::Concept
         else // no GPU batch yet
             ui::text(list, fonts.semibold, "SPELA", kMargin + 2, 84, 18, kInk.with_alpha(0.55f),
                      gfx::Align::left, 4.0f);
-        if (client_.paired() && loaded_ && !games_.empty())
+        if (client_.paired())
             draw_tabs(list);
         else
             ui::text(list, fonts.display, "Your games", kMargin, 150, 56, kInk);
+        if (client_.paired() && tab_ == kLz4Tab)
+            return draw_lz4(list);
 
         if (!client_.paired())
             return draw_notice(list, "Not paired with a PC",
                                "Install it again from Spela on your PC: open Settings, find this console under Consoles, and click Install PS5 app.");
-        if (!loaded_)
+        if (!loaded_ && !offline())
             return error_.empty()
                        ? draw_notice(list, "Connecting to your PC...", "Through the Spela helper on this PS5.")
                        : draw_notice(list, "Can't reach Spela", error_);
+        if (offline() && tab_ != kInstalledTab)
+        {
+            draw_notice(list, "Library offline",
+                        "Your PC's library shows here while Spela runs on your PC. Installed and LZ4 show what's on this "
+                        "PS5 without it.");
+            return draw_message(list);
+        }
+        if (offline() && games_.empty())
+            return draw_notice(list, "Nothing installed", "No games are installed on this PS5.");
         if (games_.empty())
             return draw_notice(list, "No games on your PC yet",
                                "On the PC, follow the setup guide on Spela's Dashboard, or add your games folder in Settings and scan it.");
@@ -999,7 +1203,10 @@ class Storefront final : public app::Concept
         list.rounded_rect(pill, 22, kWhite.with_alpha(0.08f));
         list.bordered_rect(pill, 22, kTransparent, 1.5f, kWhite.with_alpha(0.14f));
         ui::text(list, fonts.semibold, count, pill.cx(), pill.y + 30, 22, kInk, gfx::Align::center);
-        if (!error_.empty()) // a later poll failed; the last good list stays up
+        if (offline())
+            ui::text(list, fonts.regular, "Offline: what's installed on this PS5. Your library comes back once Spela runs on your PC.",
+                     kMargin, kGenresY + 30, 24, kMuted);
+        else if (!error_.empty()) // a later poll failed; the last good list stays up
             ui::text(list, fonts.regular, list_fit(fonts, error_, 24, 1200), kMargin, kGenresY + 30, 24, kBad); // in the genres' place
 
         if (shown_.empty())
@@ -1018,7 +1225,12 @@ class Storefront final : public app::Concept
         }
         if (tab_ != kCartTab && !genres_.empty() && error_.empty())
             draw_genres(list);
+        draw_message(list);
+    }
 
+    void draw_message(gfx::DrawList &list) const
+    {
+        const ui::Fonts &fonts = context_.fonts;
         if (!message_.empty() && message_age_ < kMessageSeconds)
         {
             const float fade = std::min(1.0f, (kMessageSeconds - message_age_) * 2.0f);
@@ -1327,6 +1539,176 @@ class Storefront final : public app::Concept
         ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 2, 1824, true);
     }
 
+    // The LZ4 tab: the console's game folders on the left, the focused one on the right.
+    void draw_lz4(gfx::DrawList &list) const
+    {
+        const ui::Fonts &fonts = context_.fonts;
+        if (!console_loaded_)
+        {
+            draw_notice(list, "Asking the helper...", "The LZ4 tab needs the Spela helper running on this PS5. If this stays, "
+                                                      "run your jailbreak, or update Spela on your PC.");
+            return draw_message(list);
+        }
+        if (lz4_games_.empty())
+        {
+            ui::paragraph(list, fonts.regular, "No game folders on this PS5's drives. Only games installed as folders, in "
+                                               "a homebrew folder, can be packed here.",
+                          kMargin, kGridTop + 60, 28, 1200, 40, kMuted, 3);
+            return draw_message(list);
+        }
+        if (pack_.running) // whichever game it is
+        {
+            const int percent = pack_.total ? static_cast<int>(pack_.done * 100 / pack_.total) : 0;
+            std::string busy = std::string(pack_phase(pack_.phase)) + ": " + pack_.game.substr(pack_.game.rfind('/') + 1);
+            if (pack_.total)
+                busy += "  ·  " + std::to_string(percent) + "%";
+            ui::text(list, fonts.semibold, list_fit(fonts, busy, 24, 1150), kMargin, kGenresY + 30, 24, kWarn);
+        }
+        const int visible = static_cast<int>((kGridBottom - kGridTop) / kRowH);
+        const int first = std::max(0, lz4_focus_ - visible + 1);
+        for (int i = first; i < std::min(static_cast<int>(lz4_games_.size()), first + visible); ++i)
+        {
+            const store::ConsoleGame &g = lz4_games_[static_cast<std::size_t>(i)];
+            Rect row{kMargin, kGridTop + static_cast<float>(i - first) * kRowH, kPanelX - kGap - kMargin, kRowH - 12};
+            const bool on = i == lz4_focus_;
+            if (on)
+                row.x += ui::shake(refusal_.value, clock_);
+            list.rounded_rect(row, 16, on ? kWhite.with_alpha(0.12f) : kWhite.with_alpha(0.04f));
+            if (on)
+                list.bordered_rect(row.inset(-4), 20, kTransparent, 3, kWhite.with_alpha(0.75f + 0.25f * ui::breathe(clock_)));
+            ui::text(list, fonts.semibold, list_fit(fonts, g.title, 28, row.w - 330), row.x + 24, row.y + 46, 28, kInk);
+            const store::Pack *mine = pack_of(g);
+            const StateLook state = mine != nullptr && mine->running ? StateLook{"Working", kWarn}
+                                    : g.original                     ? StateLook{"Original kept", kWarn}
+                                    : g.packed                       ? StateLook{"Packed", kGood}
+                                                                     : StateLook{g.title_id.c_str(), kMuted};
+            ui::text(list, fonts.semibold, state.label, row.x + row.w - 24, row.y + 46, 22, state.color, gfx::Align::right);
+        }
+        draw_lz4_panel(list);
+        draw_message(list);
+    }
+
+    void draw_lz4_panel(gfx::DrawList &list) const
+    {
+        const ui::Fonts &fonts = context_.fonts;
+        const store::ConsoleGame &g = *lz4_focused();
+        const store::Pack *mine = pack_of(g);
+        const Rect panel{kPanelX, kPanelTop, kPanelW, kGridBottom - kPanelTop};
+        list.shadow({panel.x, panel.y + 20, panel.w, panel.h}, 24, 50, Color::rgb(0x000000, 0.45f));
+        list.rounded_rect(panel, 24, kPanel.with_alpha(0.7f));
+        list.bordered_rect(panel, 24, kTransparent, 1.5f, kWhite.with_alpha(0.12f));
+        const float x = panel.x + 36;
+        const float width = panel.w - 72;
+        float y = panel.y + 70;
+        const auto lines = ui::paragraph_lines(fonts.semibold, g.title, 36, width, 3);
+        ui::paragraph(list, fonts.semibold, lines, x, y, 36, 46, kInk);
+        y += 46.0f * static_cast<float>(lines.lines.size()) + 8;
+        ui::text(list, fonts.regular, g.title_id, x, y, 24, kMuted);
+        y += 34;
+        ui::paragraph(list, fonts.mono, g.path, x, y, 20, width, 28, kMuted, 2);
+        y += 80;
+        std::string text;
+        Color colour = kMuted;
+        if (mine != nullptr && mine->running)
+        {
+            const float progress = mine->total ? static_cast<float>(mine->done) / static_cast<float>(mine->total) : 0.0f;
+            draw_progress(list, {x, y - 6, width, 12}, progress);
+            char percent[16];
+            std::snprintf(percent, sizeof(percent), "%d%%", static_cast<int>(progress * 100.0f + 0.5f));
+            ui::text(list, fonts.mono, percent, x + width, y - 44, 22, kInk, gfx::Align::right);
+            text = std::string(pack_phase(mine->phase)) + ". " +
+                   (mine->kind == "pack" ? "It carries on with your PC off. Press Square to stop." : "");
+        }
+        else if (mine != nullptr && mine->phase == "failed")
+        {
+            text = mine->error;
+            colour = kBad;
+        }
+        else if (mine != nullptr && mine->phase == "canceled")
+        {
+            text = "Packing was stopped. The game is as it was.";
+        }
+        else if (pack_.running && (g.original || !g.packed))
+        {
+            text = "This PS5 is busy with " + pack_.game.substr(pack_.game.rfind('/') + 1) +
+                   ". Wait for it to finish, then come back to this one.";
+        }
+        else if (g.original)
+        {
+            text = (mine != nullptr && mine->phase == "done"
+                        ? "Packed: " + store::format_size(mine->after) + ", was " + store::format_size(mine->before) + ". "
+                        : std::string("Packed with LZ4. ")) +
+                   "The original is kept, hidden, so it still takes its space. Start the game: if it runs, press Square to "
+                   "delete the original. If it doesn't, press Options to put the original back.";
+        }
+        else if (g.packed)
+        {
+            text = mine != nullptr && mine->phase == "deleted" ? "The original is deleted. The packed game stays."
+                                                               : "Packed with LZ4.";
+        }
+        else
+        {
+            text = (mine != nullptr && mine->phase == "restored" ? std::string("The original is back. ") : std::string()) +
+                   "Press Cross to pack it with LZ4 on this PS5, often to about half its size. Only for games that use "
+                   "AMPR. Your PC can be off while it runs.";
+        }
+        ui::paragraph(list, fonts.regular, text, x, y + 40, 24, width, 34, colour, 8);
+    }
+
+    void draw_lz4_hints(gfx::DrawList &list) const
+    {
+        ui::Hint hints[6];
+        int count = 0;
+        if (const store::ConsoleGame *g = console_loaded_ ? lz4_focused() : nullptr)
+        {
+            const store::Pack *mine = pack_of(*g);
+            if (!g->packed && !g->original && !pack_.running)
+                hints[count++] = {ui::Button::cross, "Pack with LZ4"};
+            if (mine != nullptr && mine->running && mine->kind == "pack")
+                hints[count++] = {ui::Button::square, "Stop"};
+            else if (g->original && !pack_.running)
+            {
+                hints[count++] = {ui::Button::square, "Delete original"};
+                hints[count++] = {ui::Button::options, "Put original back"};
+            }
+        }
+        hints[count++] = {ui::Button::triangle, "Refresh"};
+        hints[count++] = {ui::Button::l1, "Category", ui::Button::r1};
+        ui::draw_hints(list, context_.fonts, ui::GlyphStyle::dark(), hints, count, 1824, true);
+    }
+
+    void draw_lz4_ask(gfx::DrawList &list, std::uint32_t glass) const
+    {
+        const ui::Fonts &fonts = context_.fonts;
+        const bool risky = lz4_ask_ == Lz4Ask::keep || lz4_ask_ == Lz4Ask::restore;
+        const float height = lz4_ask_ == Lz4Ask::pack ? 330.0f : 250.0f; // the pack question says the most
+        const Rect box = draw_dialog(list, glass, 540 - height * 0.5f, height, risky ? kBad : kAccent);
+        const float x = box.x + 48;
+        const float width = box.w - 96;
+        const std::string title = lz4_ask_ == Lz4Ask::pack    ? "Pack " + lz4_title_ + " with LZ4?"
+                                  : lz4_ask_ == Lz4Ask::stop  ? "Stop packing " + lz4_title_ + "?"
+                                  : lz4_ask_ == Lz4Ask::keep  ? "Delete the original of " + lz4_title_ + "?"
+                                                              : "Put the original of " + lz4_title_ + " back?";
+        const char *text =
+            lz4_ask_ == Lz4Ask::pack ? "This PS5 packs it by itself, which takes a while for a big game. Your PC can be off. The "
+                                       "drive needs free space for about half the game. The original is kept, hidden, until you "
+                                       "delete it or put it back. Some games that use AMPR still won't start packed."
+            : lz4_ask_ == Lz4Ask::stop ? "What it packed so far is deleted. The game stays as it was."
+            : lz4_ask_ == Lz4Ask::keep ? "Only do this once the packed game has started. It frees the original's space, and "
+                                         "can't be undone."
+                                       : "The packed copy is deleted and the original takes its place again. Close the game first.";
+        const float y = ui::paragraph(list, fonts.semibold, title, x, box.y + 76, 36, width, 46, kInk, 2);
+        ui::paragraph(list, fonts.regular, text, x, y + 12, 24, width, 34, kMuted, 6);
+        end_dialog(list);
+        const ui::Hint hints[] = {
+            lz4_ask_ == Lz4Ask::pack      ? ui::Hint{ui::Button::cross, "Pack"}
+            : lz4_ask_ == Lz4Ask::restore ? ui::Hint{ui::Button::options, "Put back"}
+            : lz4_ask_ == Lz4Ask::keep    ? ui::Hint{ui::Button::square, "Delete"}
+                                          : ui::Hint{ui::Button::square, "Stop"},
+            {ui::Button::circle, lz4_ask_ == Lz4Ask::stop ? "Keep packing" : "Cancel"}};
+        ui::draw_hints(list, fonts, ui::GlyphStyle::dark(), hints, 2, 1824, true);
+    }
+
     void draw_grid(gfx::DrawList &list) const
     {
         list.push_clip({0, kGenresY + kChipH + 4, kPanelX - 8, kGridBottom + 20 - (kGenresY + kChipH + 4)});
@@ -1461,7 +1843,8 @@ class Storefront final : public app::Concept
             meta += "  ·  v" + g.version;
         ui::text(list, fonts.regular, meta, x, y, 24, kMuted);
         y += 40;
-        ui::text(list, fonts.regular, store::format_size(g.size_bytes), x, y, 24, kMuted);
+        if (g.size_bytes > 0) // unknown offline
+            ui::text(list, fonts.regular, store::format_size(g.size_bytes), x, y, 24, kMuted);
         y += 56;
 
         const StateLook state = in_cart(g.id) ? StateLook{"In cart", kAccent} : look(g);
@@ -1501,6 +1884,7 @@ class Storefront final : public app::Concept
                              : g.state == "installable"
                                  ? g.kind == "dlc" ? "Press Cross to add it to its game on this console, or Options to put it in the cart."
                                                    : "Press Cross to copy it from your PC to this console, or Options to put it in the cart."
+                             : g.state == "installed" && offline() ? "It's on this PS5. Removing it needs Spela running on your PC."
                              : g.state == "installed"  ? "It's on the home screen. Press Square to remove it."
                              : g.state == "update"     ? "Your PC has a newer version than the one installed."
                              : g.state == "queued"     ? "Your PC will start copying it soon. Press Square to cancel."
@@ -1517,6 +1901,14 @@ class Storefront final : public app::Concept
 
     app::Context &context_;
     store::Client client_;
+    std::vector<store::ConsoleGame> console_games_; // what's installed here, from the helper
+    std::vector<store::ConsoleGame> lz4_games_;     // its game folders: the LZ4 tab's
+    store::Pack pack_;
+    bool console_loaded_ = false; // the helper has answered
+    int lz4_focus_ = 0;
+    Lz4Ask lz4_ask_ = Lz4Ask::none; // the LZ4 tab's question, shown while set
+    std::string lz4_path_;          // the game it's about
+    std::string lz4_title_;
     std::vector<store::Game> games_;
     std::vector<store::Drive> drives_;
     std::vector<int> shown_; // indexes into games_ of the open tab; focus_ indexes this

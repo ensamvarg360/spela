@@ -94,6 +94,23 @@ def cover(seed: int) -> bytes:
     return b"".join(rows)
 
 
+# The helper's own list for the PS5 app's LZ4 tab (local_games in payload/main.c): path, title ID, title, packed,
+# original set aside. And its job (local_pack): running, kind, phase, done, total, before, after, game, error.
+CONSOLE_GAMES = [
+    ["/data/homebrew/Neon Drift PPSA01001", "PPSA01001", "Neon Drift™: Tokyo 2099", 0, 0],
+    ["/data/homebrew/Deep Sea 9", "PPSA01002", "Deep Sea 9", 1, 1],
+    ["/mnt/usb0/homebrew/Frostline", "PPSA01004", "Frostline: Expedition Zero", 1, 0],
+    ["/mnt/usb0/homebrew/Void Runners", "PPSA01012", "Void Runners", 0, 0],
+]
+for g in CONSOLE_GAMES:
+    g += ["folder", "01.000.000"]  # kind, version
+CONSOLE_GAMES += [["/mnt/usb0/homebrew/Mecha Brawl PPSA01005.exfat", "PPSA01005", "Mecha Brawl: Uprising", 0, 0, "image", "01.000.000"],
+                  ["/user/app/PPSA01008", "PPSA01008", "Chrono Heist", 0, 0, "package", "01.000.000"]]
+PC_AWAY = "--pc-away" in sys.argv  # the helper answers, Spela on the PC doesn't: the app's offline Installed tab
+NO_PC = b"Spela on your PC isn't answering. Check that it's running and that this PS5 is added under Settings, Consoles."
+PACK = [0, "pack", "done", 0, 0, 88_900_000_000, 47_300_000_000, "/data/homebrew/Deep Sea 9", ""]  # done: its delete dialog shows
+
+
 class Handler(BaseHTTPRequestHandler):
     removal_asks = 0
     def _send(self, status: int, body: bytes, kind="text/plain; charset=utf-8"):
@@ -112,6 +129,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._authorized():
             return
+        if self.path == "/local/games":
+            return self._send(200, "".join("\t".join(map(str, g)) + "\n" for g in CONSOLE_GAMES).encode())
+        if self.path == "/local/pack":
+            return self._send(200, ("\t".join(map(str, PACK)) + "\n").encode())
+        if PC_AWAY:
+            return self._send(503, NO_PC)
         if self.path == "/api/v1/console-app/library":
             text = "".join(line(i, g) for i, g in enumerate(GAMES))
             return self._send(200, text.encode())
@@ -142,6 +165,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._authorized():
             return
+        if self.path.startswith("/local/"):  # the LZ4 tab: the tour only opens its dialogs
+            return self._send(200, b"{}")
+        if PC_AWAY:
+            return self._send(503, NO_PC)
         parts = self.path.split("/")  # "", api, v1, console-app, uninstall, <id>, preview | confirm, <title ID>
         if len(parts) > 6 and parts[4] == "uninstall":
             game = next((g for g in GAMES if g[0] == parts[5].removeprefix("rm-")), None)

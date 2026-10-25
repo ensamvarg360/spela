@@ -64,6 +64,12 @@ if [[ $mode == preview ]]; then
         tools/host-snapshots.sh /repo/console-app/preview/unreachable storefront
     # without a PC every step of the tour looks the same: keep one
     find /repo/console-app/preview/unreachable -name '*.png' ! -name '01-storefront-focus.png' -delete
+    # and with the helper answering but not the PC: the library offline, what's installed from the helper
+    printf 'url=http://127.0.0.1:8798\ntoken=preview\n' >/tmp/offline.txt
+    python3 /repo/console-app/preview_server.py 8798 --pc-away &
+    sleep 1
+    HUI_SERVER_FILE=/tmp/offline.txt HOST_CXX=clang++-18 HOST_CC=clang-18 \
+        tools/host-snapshots.sh /repo/console-app/preview/offline storefront
     exit
 fi
 

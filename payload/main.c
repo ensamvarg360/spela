@@ -10,6 +10,12 @@
  *                              kept on the console and put back after a restart (keep_logos())
  *   POST /copy?p=<from>&to=<to>  starts copying a file or folder on the console, e.g. to another drive (copy_start())
  *   GET  /copy                 {"running", "done", "total", "error", "to"} of that copy;  POST /copy/cancel stops it
+ *   POST /pack?p=<game folder>  LZ4-packs the game on the console and puts it in the original's place (pack_start())
+ *   GET  /pack                 {"running", "kind", "phase", "done", "total", "before", "after", "game", "backup", "error"};
+ *                              POST /pack/cancel stops it
+ *   POST /pack/finish?p=<packed game>&keep=1|0  deletes the original set aside after packing, or puts it back (pack_finish())
+ *   any  /local/...            from this console only, without the key: the PS5 app's Installed and LZ4 tabs, with the PC away
+ *                              (local_games(), local_pack(), and /pack, /pack/cancel, /pack/finish as above)
  *   POST /install?p=<.pkg in a homebrew folder>&cid=<content ID>  starts the console's package installer (install_pkg(), untested)
  *   GET  /klog?s=<seconds>     the kernel log as it's written, for up to 120 seconds: the loader's reason when an app won't start
  *   GET  /relay  POST /relay?id=<id>&status=<status>  the PS5 app's requests, taken and answered by the PC (relay_app())
@@ -43,7 +49,11 @@
 
 #include <ps5/kernel.h>
 
+#include <sys/statvfs.h>
+
 #include "sqlite3.h"  /* the amalgamation build.ps1 downloads; compiled in, the console has no SQLite to link */
+#include "ampr_pack.h"  /* e2a/: exFAT2AMPR's LZ4 packer, for POST /pack */
+#include "verify.h"
 
 #define PORT 7735
 #define BLOCK (1 << 20)
@@ -731,6 +741,412 @@ static void copy_status(int c) {
   free(b.s);
 }
 
+/* LZ4 packing on the console (POST /pack), with exFAT2AMPR's packer in e2a/ (by V-10, GPL-3.0-or-later with
+ * additional terms: e2a/NOTICE). The game's assets go into ampr_assets-NNN.pak volumes and fakelib/libSceAmpr.sprx
+ * unpacks them as the game reads them, as the PC app's lz4pack.py does. It runs on with the PC away: packed into a
+ * hidden .<name>.lz4.partial next to the game, every block checked, then the original is set aside as
+ * .<name>.lz4-original (ShadowMountPlus skips hidden names, and two copies of one title ID would clash), its tile
+ * removed, and the packed copy renamed into the original's place, so ShadowMountPlus adds it like a new install.
+ * The PC app deletes the set-aside original once the packed game has started, or puts it back. One at a time. */
+extern const unsigned char libSceAmpr_sprx[];
+extern const unsigned int libSceAmpr_sprx_len;
+#define SMP_SPRX "/data/shadowmount/emus/libSceAmpr.sprx" /* ShadowMountPlus keeps this one up to date: preferred */
+#define PACK_WORKERS 6 /* compression threads, LZ4 level 9: exFAT2AMPR's defaults */
+#define PACK_LEVEL 9
+
+/* e2a/activity.h: exFAT2AMPR slows down while a game runs. ponytail: the helper packs at full speed; add its game
+ * mode if people play while packing. */
+int activity_workers(int requested) { return requested; }
+void activity_throttle(uint64_t bytes) { (void)bytes; }
+
+static pthread_mutex_t pack_lock = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int pack_cancel;
+static struct {
+  int running;
+  char kind[8];    /* pack, delete (the set-aside original) or restore (it, in place of the packed copy) */
+  char phase[16];  /* pack: checking, packing, copying, verifying, waiting, swapping, then done, failed or canceled;
+                    * delete: deleting, then deleted or failed; restore: waiting, restoring, then restored or failed */
+  unsigned long long done, total, before, after;
+  char game[PATH_MAX], backup[PATH_MAX], error[256];
+} pk;
+
+static void pack_set(const char *phase, unsigned long long total) {
+  pthread_mutex_lock(&pack_lock);
+  snprintf(pk.phase, sizeof pk.phase, "%s", phase);
+  pk.done = 0;
+  pk.total = total;
+  pthread_mutex_unlock(&pack_lock);
+}
+
+static void pack_progress(void *ctx, uint64_t done, const char *msg) {
+  (void)ctx;
+  (void)msg;
+  pthread_mutex_lock(&pack_lock);
+  pk.done = done;
+  pthread_mutex_unlock(&pack_lock);
+}
+
+static unsigned long long dir_bytes(const char *path) { return (unsigned long long)tree_size(path); }
+
+/* Writes the emulator into <dir>/fakelib and lists it in `l` with its real size, as exFAT2AMPR's job does. */
+static const char *pack_runtime(const char *dir, e2a_list *l) {
+  char fakelib[PATH_MAX], sprx[PATH_MAX];
+  unsigned char magic = 0;
+  struct stat st;
+  snprintf(fakelib, sizeof fakelib, "%s/fakelib", dir);
+  snprintf(sprx, sizeof sprx, "%s/libSceAmpr.sprx", fakelib);
+  if (e2a_mkdir_p(fakelib)) return "can't create fakelib";
+  int fd = open(SMP_SPRX, O_RDONLY);
+  int smp = fd >= 0 && read(fd, &magic, 1) == 1 && magic == 0x4F;  /* a PRX starts with 0x4F */
+  if (fd >= 0) close(fd);
+  if (!(smp && !e2a_copy_file(SMP_SPRX, sprx, time(NULL))) &&
+      e2a_write_file_atomic(sprx, libSceAmpr_sprx, libSceAmpr_sprx_len))
+    return "can't write fakelib/libSceAmpr.sprx";
+  if (stat(sprx, &st)) return "fakelib/libSceAmpr.sprx is missing";
+  for (size_t i = 0; i < l->n; i++)
+    if (!strcasecmp(l->v[i].rel, "fakelib/libSceAmpr.sprx")) {  /* the game had its own: ours replaces it */
+      l->v[i].synthetic = true;
+      l->v[i].action = E2A_LOOSE;
+      l->v[i].size = st.st_size;
+      l->v[i].mtime = st.st_mtime;
+      return NULL;
+    }
+  return e2a_list_add(l, "fakelib/libSceAmpr.sprx", st.st_size, st.st_mtime, true) ? "out of memory" : NULL;
+}
+
+/* remove_tile(), waiting while ShadowMountPlus refuses because the game is open: half an hour at most. */
+static int remove_tile_waiting(const char *id) {
+  char why[1024];
+  int r = TILE_REFUSED;
+  for (int tries = 0; tries < 180 && (r = remove_tile(id, why, sizeof why)) == TILE_REFUSED; tries++) {
+    pack_set("waiting", 0);
+    sleep(10);
+  }
+  return r;
+}
+
+/* Sets the original aside, removes its tile and puts the packed copy in its place. NULL when done. */
+static const char *pack_swap(const char *game, const char *work, const char *backup, const char *id) {
+  if (rename(game, backup)) return strerror(errno);
+  int r = remove_tile_waiting(id);
+  if (r == TILE_REFUSED || rename(work, game)) {
+    rename(backup, game);
+    return r == TILE_REFUSED ? "the game's tile couldn't be removed: close the game, then try again" : strerror(errno);
+  }
+  return NULL;
+}
+
+static void *pack_thread(void *arg) {
+  (void)arg;
+  char game[PATH_MAX], parent[PATH_MAX], work[PATH_MAX], state[PATH_MAX], backup[PATH_MAX], why[256] = "";
+  pthread_mutex_lock(&pack_lock);
+  snprintf(game, sizeof game, "%s", pk.game);
+  snprintf(backup, sizeof backup, "%s", pk.backup);
+  pthread_mutex_unlock(&pack_lock);
+  const char *name = strrchr(game, '/') + 1;
+  snprintf(parent, sizeof parent, "%.*s", (int)(name - 1 - game), game);
+  snprintf(work, sizeof work, "%s/.%s.lz4.partial", parent, name);
+  snprintf(state, sizeof state, "%s/.e2a-state", work);
+
+  e2a_list l = {0};
+  e2a_game g = {0};
+  e2a_pack_stats st = {0};
+  e2a_verify_stats vs = {0};
+  e2a_pack_opts o = {0};
+  uint64_t verified[16] = {0};
+  struct statvfs fs;
+  const char *err = NULL;
+  pack_set("checking", 0);
+  e2a_mkdir_p(E2A_STATE_DIR);  /* its log */
+  e2a_rm_rf(work);             /* left by a run cut short */
+  int ampr = e2a_ampr_compat(game, why, sizeof why);
+  if (e2a_read_game(game, &g) || !g.title_id[0]) err = "the game's sce_sys/param.json is unreadable";
+  else if (ampr == 0) err = "this game doesn't use AMPR, so LZ4 can't be used for it";
+  else if (ampr < 0) err = "its eboot.bin is encrypted, so whether it uses AMPR can't be told";
+  else if (e2a_scan_tree(game, &l, true)) err = "couldn't list the game's files";
+  else if (!statvfs(parent, &fs) && (unsigned long long)fs.f_bavail * fs.f_frsize < l.total_bytes / 3)
+    err = "not enough free space on that drive: LZ4 needs room for about half the game";
+  else if (e2a_mkdir_p(state)) err = "can't create the packed copy";
+  if (!err) {
+    pthread_mutex_lock(&pack_lock);
+    pk.before = l.total_bytes;
+    pthread_mutex_unlock(&pack_lock);
+    e2a_blind_tune(&l);
+    err = pack_runtime(work, &l);
+  }
+  if (!err) {
+    char note[300] = "", index[PATH_MAX];
+    e2a_list_sort(&l);
+    snprintf(index, sizeof index, "%s/ampr_emu.index", work);
+    if (e2a_plan_budget(&l, E2A_BLOCK_BUDGET, note, sizeof note) > E2A_BLOCK_LIMIT)
+      err = "the game has too many blocks for the AMPR emulator (over 16 million)";
+    else if (e2a_write_index(index, &l)) err = "couldn't write ampr_emu.index";
+  }
+  if (!err) {
+    unsigned long long packed = 0, loose = 0;
+    o.src_root = game;
+    o.out_dir = work;
+    o.state_dir = state;
+    o.level = PACK_LEVEL;
+    o.workers = PACK_WORKERS;
+    o.dedup = true;
+    o.max_pack_size = E2A_MAX_PACK;
+    o.cancel = &pack_cancel;
+    o.progress = pack_progress;
+    o.verified_bits = verified;
+    for (size_t i = 0; i < l.n; i++)
+      if (!l.v[i].synthetic) *(l.v[i].action == E2A_LOOSE ? &loose : &packed) += l.v[i].size;
+    pack_set("packing", packed);
+    if (e2a_pack(&l, &o, &st) != E2A_PACK_OK) err = pack_cancel ? "canceled" : "packing failed";
+    if (!err) {
+      pack_set("copying", loose);
+      if (e2a_copy_loose(&l, &o) != E2A_PACK_OK) err = pack_cancel ? "canceled" : "copying the other files failed";
+    }
+    if (!err) {
+      pack_set("verifying", packed + loose);
+      if (e2a_verify(work, &o, &vs) != E2A_PACK_OK) err = pack_cancel ? "canceled" : vs.first_error[0] ? vs.first_error : "the check failed";
+    }
+  }
+  if (!err) {
+    e2a_rm_rf(state);
+    pack_set("swapping", 0);
+    unsigned long long after = dir_bytes(work);
+    err = pack_swap(game, work, backup, g.title_id);
+    pthread_mutex_lock(&pack_lock);
+    pk.after = after;
+    pthread_mutex_unlock(&pack_lock);
+  }
+  if (err) e2a_rm_rf(work);
+  e2a_list_free(&l);
+  pthread_mutex_lock(&pack_lock);
+  snprintf(pk.phase, sizeof pk.phase, "%s", !err ? "done" : !strcmp(err, "canceled") ? "canceled" : "failed");
+  snprintf(pk.error, sizeof pk.error, "%s", err && strcmp(err, "canceled") ? err : "");
+  pk.running = 0;
+  pthread_mutex_unlock(&pack_lock);
+  return NULL;
+}
+
+/* Claims the job for `kind` on `game` (its set-aside original: `backup`) and starts `run` on it. Replies 409 when a
+ * copy or another job is running. */
+static void pack_claim(int c, const char *kind, const char *phase, const char *game, const char *backup,
+                       void *(*run)(void *)) {
+  pthread_mutex_lock(&pack_lock);
+  pthread_mutex_lock(&copy_lock);
+  int busy = pk.running || cp.running;
+  pthread_mutex_unlock(&copy_lock);
+  if (!busy) {
+    memset(&pk, 0, sizeof pk);
+    pk.running = 1;
+    pack_cancel = 0;
+    snprintf(pk.kind, sizeof pk.kind, "%s", kind);
+    snprintf(pk.phase, sizeof pk.phase, "%s", phase);
+    snprintf(pk.game, sizeof pk.game, "%s", game);
+    snprintf(pk.backup, sizeof pk.backup, "%s", backup);
+  }
+  pthread_mutex_unlock(&pack_lock);
+  if (busy) {
+    fail(c, "409 Conflict", "a copy or another packing is running");
+    return;
+  }
+  pthread_t t;
+  if (pthread_create(&t, NULL, run, NULL)) {
+    pthread_mutex_lock(&pack_lock);
+    pk.running = 0;
+    pthread_mutex_unlock(&pack_lock);
+    fail(c, "500 Internal Server Error", "can't start it");
+    return;
+  }
+  pthread_detach(t);
+  ok(c);
+}
+
+/* POST /pack?p=<a game folder in a homebrew folder>: starts packing it; GET /pack follows it. */
+static void pack_start(int c, const char *path) {
+  char backup[PATH_MAX], work[PATH_MAX];
+  const char *name = strrchr(path, '/');
+  if (!name || !name[1] || name[1] == '.' || !is_dir(path)) {
+    fail(c, "400 Bad Request", "p must be a game folder");
+    return;
+  }
+  snprintf(backup, sizeof backup, "%.*s/.%s.lz4-original", (int)(name - path), path, name + 1);
+  snprintf(work, sizeof work, "%.*s/.%s.lz4.partial", (int)(name - path), path, name + 1);
+  struct stat st;
+  if (!lstat(backup, &st)) {
+    fail(c, "409 Conflict", "the original of an earlier LZ4 packing is still set aside: delete it or put it back first");
+    return;
+  }
+  pack_claim(c, "pack", "checking", path, backup, pack_thread);
+}
+
+/* Deletes the set-aside original (kind delete), or puts it back: the packed copy hidden as .<name>.lz4.partial, its
+ * tile removed, the original renamed into place (ShadowMountPlus adds it like a new install), the packed copy deleted.
+ * In the background, like packing: a game is tens of gigabytes. */
+static void *finish_thread(void *arg) {
+  (void)arg;
+  char game[PATH_MAX], backup[PATH_MAX], hidden[PATH_MAX], kind[8];
+  pthread_mutex_lock(&pack_lock);
+  snprintf(game, sizeof game, "%s", pk.game);
+  snprintf(backup, sizeof backup, "%s", pk.backup);
+  snprintf(kind, sizeof kind, "%s", pk.kind);
+  pthread_mutex_unlock(&pack_lock);
+  const char *name = strrchr(game, '/') + 1, *err = NULL;
+  snprintf(hidden, sizeof hidden, "%.*s/.%s.lz4.partial", (int)(name - 1 - game), game, name);
+  e2a_game g = {0};
+  if (!strcmp(kind, "delete")) {
+    if (e2a_rm_rf(backup)) err = "couldn't delete all of the original";
+  } else if (e2a_read_game(backup, &g) || !g.title_id[0]) {
+    err = "the original's sce_sys/param.json is unreadable";
+  } else {
+    e2a_rm_rf(hidden);  /* left by a run cut short */
+    if (rename(game, hidden)) {
+      err = strerror(errno);
+    } else if (remove_tile_waiting(g.title_id) == TILE_REFUSED) {
+      rename(hidden, game);
+      err = "the game's tile couldn't be removed: close the game, then try again";
+    } else if (rename(backup, game)) {
+      err = strerror(errno);
+      rename(hidden, game);
+    } else {
+      pack_set("restoring", 0);
+      e2a_rm_rf(hidden);
+    }
+  }
+  pthread_mutex_lock(&pack_lock);
+  snprintf(pk.phase, sizeof pk.phase, "%s", err ? "failed" : !strcmp(kind, "delete") ? "deleted" : "restored");
+  snprintf(pk.error, sizeof pk.error, "%s", err ? err : "");
+  pk.running = 0;
+  pthread_mutex_unlock(&pack_lock);
+  return NULL;
+}
+
+/* POST /pack/finish?p=<the packed game>&keep=1 deletes its set-aside original; keep=0 puts the original back. */
+static void pack_finish(int c, const char *path, const char *query) {
+  char keep[4] = "", backup[PATH_MAX];
+  const char *name = strrchr(path, '/');
+  struct stat st;
+  if (!name || !name[1] || name[1] == '.' || !param(query, "keep", keep, sizeof keep)) {
+    fail(c, "400 Bad Request", "p must be a game folder, and keep 1 or 0");
+    return;
+  }
+  snprintf(backup, sizeof backup, "%.*s/.%s.lz4-original", (int)(name - path), path, name + 1);
+  if (lstat(backup, &st)) {
+    fail(c, "404 Not Found", "no original is set aside for this game");
+    return;
+  }
+  int del = keep[0] == '1';
+  pack_claim(c, del ? "delete" : "restore", del ? "deleting" : "restoring", path, backup, finish_thread);
+}
+
+/* The title and version in a param.json (the first titleName: the default language's) into `g`; left empty when the
+ * file is missing or unreadable. */
+static void read_param(const char *file, e2a_game *g) {
+  char *doc = NULL;
+  if (e2a_read_text(file, &doc, NULL, 1 << 20)) return;
+  json_str(doc, "titleName", g->title, sizeof g->title);
+  json_str(doc, "contentVersion", g->version, sizeof g->version);
+  free(doc);
+}
+
+static void list_game(buf_t *b, const char *path, const char *kind, e2a_game *g, const char *fallback, int packed, int original) {
+  if (!g->title[0]) snprintf(g->title, sizeof g->title, "%s", fallback);
+  for (char *t = g->title; *t; t++)  /* the line format's separators */
+    if (*t == '\t' || *t == '\n' || *t == '\r') *t = ' ';
+  for (char *t = g->version; *t; t++)
+    if (*t == '\t' || *t == '\n' || *t == '\r') *t = ' ';
+  put(b, "%s\t%s\t%s\t%d\t%d\t%s\t%s\n", path, g->title_id, g->title, packed, original, kind, g->version);
+}
+
+/* GET /local/games, for the PS5 app (its Installed tab with the PC away, and its LZ4 tab): what's installed on this
+ * console, one per line, tab-separated: path, title ID, title, packed (1/0), original set aside (1/0), kind (folder,
+ * image or package), version. As the PC app lists it (FTPConsoleAdapter._games): games installed from a package in
+ * <user>/app, named by the console's copy of their param.json in <user>/appmeta, and ShadowMountPlus's game folders
+ * and disc images in the homebrew folders. Plain text: the app has no JSON parser. */
+static void local_games(int c) {
+  static const char *const images[] = {".exfat", ".ffpkg", ".ffpfs", ".ffpfsc"};
+  buf_t b = {0};
+  char dir[32], path[PATH_MAX], probe[PATH_MAX];
+  struct stat st;
+  struct dirent *e;
+  for (int d = 0; d < 9; d++) {  /* the internal SSD's user folder, then the M.2 drives' */
+    if (d == 0) snprintf(dir, sizeof dir, "/user");
+    else snprintf(dir, sizeof dir, "/mnt/ext%d/user", d - 1);
+    snprintf(path, sizeof path, "%s/app", dir);
+    DIR *apps = opendir(path);
+    while (apps && (e = readdir(apps))) {
+      e2a_game g = {0};
+      if (strlen(e->d_name) != 9 || !title_id_at(e->d_name) || !strncmp(e->d_name, "NPXS", 4)) continue;  /* NPXS: system */
+      snprintf(probe, sizeof probe, "%s/app/%s/app.pkg", dir, e->d_name);
+      if (stat(probe, &st)) continue;  /* ShadowMountPlus's stub (listed below) or a launcher */
+      snprintf(g.title_id, sizeof g.title_id, "%s", e->d_name);
+      snprintf(probe, sizeof probe, "%s/appmeta/%s/param.json", dir, e->d_name);  /* a PS4 game's is param.sfo: its ID shows */
+      read_param(probe, &g);
+      snprintf(path, sizeof path, "%s/app/%s", dir, e->d_name);
+      list_game(&b, path, "package", &g, e->d_name, 0, 0);
+    }
+    if (apps) closedir(apps);
+  }
+  for (int d = 0; d < 17; d++) {
+    if (d == 0) snprintf(dir, sizeof dir, "/data/homebrew");
+    else snprintf(dir, sizeof dir, "/mnt/%s%d/homebrew", d <= 8 ? "usb" : "ext", (d - 1) % 8);
+    DIR *hb = opendir(dir);
+    while (hb && (e = readdir(hb))) {
+      e2a_game g = {0};
+      const char *name = e->d_name, *dot = strrchr(name, '.');
+      if (name[0] == '.' || snprintf(path, sizeof path, "%s/%s", dir, name) >= (int)sizeof path) continue;
+      if (is_dir(path)) {
+        if (e2a_read_game(path, &g) || !g.title_id[0] || !strcmp(g.title_id, "PPSA99787")) continue;  /* not a game, or the PS5 app */
+        snprintf(probe, sizeof probe, "%s/ampr_assets.index", path);
+        int packed = !stat(probe, &st);
+        snprintf(probe, sizeof probe, "%s/.%s.lz4-original", dir, name);
+        list_game(&b, path, "folder", &g, name, packed, !lstat(probe, &st));
+        continue;
+      }
+      int image = 0;
+      for (int i = 0; dot && i < 4; i++) image |= !strcasecmp(dot, images[i]);
+      for (const char *t = name; image && strlen(t) >= 9 && !g.title_id[0]; t++)  /* its title ID is in its name */
+        if (title_id_at(t)) snprintf(g.title_id, sizeof g.title_id, "%.9s", t);
+      if (!g.title_id[0]) continue;
+      snprintf(probe, sizeof probe, "/user/appmeta/%s/param.json", g.title_id);  /* registered: the console's copy */
+      read_param(probe, &g);
+      list_game(&b, path, "image", &g, name, 0, 0);
+    }
+    if (hb) closedir(hb);
+  }
+  reply(c, "200 OK", &b);
+  free(b.s);
+}
+
+static void pack_status(int c) {
+  buf_t b = {0};
+  pthread_mutex_lock(&pack_lock);
+  put(&b, "{\"running\":%s,\"kind\":", pk.running ? "true" : "false");
+  put_str(&b, pk.kind);
+  put(&b, ",\"phase\":");
+  put_str(&b, pk.phase);
+  put(&b, ",\"done\":%llu,\"total\":%llu,\"before\":%llu,\"after\":%llu,\"game\":", pk.done, pk.total, pk.before, pk.after);
+  put_str(&b, pk.game);
+  put(&b, ",\"backup\":");
+  put_str(&b, pk.backup);
+  put(&b, ",\"error\":");
+  put_str(&b, pk.error);
+  pthread_mutex_unlock(&pack_lock);
+  put(&b, "}");
+  reply(c, "200 OK", &b);
+  free(b.s);
+}
+
+/* GET /local/pack, for the PS5 app: GET /pack as one tab-separated line: running (1/0), kind, phase, done, total,
+ * before, after, game, error. */
+static void local_pack(int c) {
+  buf_t b = {0};
+  pthread_mutex_lock(&pack_lock);
+  put(&b, "%d\t%s\t%s\t%llu\t%llu\t%llu\t%llu\t%s\t%s\n", pk.running, pk.kind, pk.phase, pk.done, pk.total, pk.before,
+      pk.after, pk.game, pk.error);
+  pthread_mutex_unlock(&pack_lock);
+  reply(c, "200 OK", &b);
+  free(b.s);
+}
+
 #define LOGO_KEEP "/data/spela/logos" /* <title ID>.png: the last logo set for each title, for keep_logos() */
 static pthread_mutex_t logo_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -1104,7 +1520,8 @@ static void handle(int c) {
   int put_file = !strcmp(method, "PUT") && !strcmp(target, "/file"), save_op = 0;
   int post_file = post && (!strcmp(target, "/mkdir") || !strcmp(target, "/rename") || !strcmp(target, "/rm"));
   int app = !strncmp(target, RELAY_PATH, sizeof RELAY_PATH - 1);  /* the PS5 app, for the PC */
-  if (!authorized(c, head, (post && !strcmp(target, "/quit")) || app)) {
+  int local = !strncmp(target, "/local/", 7);  /* the PS5 app, for us: LZ4 with the PC away */
+  if (!authorized(c, head, (post && !strcmp(target, "/quit")) || app || local)) {
     buf_t b = {0};
     put(&b, "{\"error\":\"wrong key: install the helper again from the PC app\",\"owner\":");
     put_str(&b, owner);
@@ -1119,6 +1536,23 @@ static void handle(int c) {
       snprintf(full, sizeof full, "%s%s%s", target, query ? "?" : "", query ? query : "");
       relay_app(c, method, full, head);
     }
+  } else if (local && !from_loopback(c)) {
+    fail(c, "403 Forbidden", "only the PS5 app on this console can ask for this");
+  } else if (local && get && !strcmp(target, "/local/games")) {
+    local_games(c);
+  } else if (local && get && !strcmp(target, "/local/pack")) {
+    local_pack(c);
+  } else if (local && post && !strcmp(target, "/local/pack/cancel")) {
+    pack_cancel = 1;
+    ok(c);
+  } else if (local && post && (!has_path || !writable(path))) {
+    fail(c, "403 Forbidden", "p must be a game folder in a homebrew folder");
+  } else if (local && post && !strcmp(target, "/local/pack")) {
+    pack_start(c, path);
+  } else if (local && post && !strcmp(target, "/local/pack/finish")) {
+    pack_finish(c, path, query);
+  } else if (local) {
+    fail(c, "404 Not Found", "not_found");
   } else if (get && !strcmp(target, "/relay")) {
     relay_take(c);
   } else if (post && !strcmp(target, "/relay")) {
@@ -1146,6 +1580,11 @@ static void handle(int c) {
   } else if (post && !strcmp(target, "/copy/cancel")) {
     cp.cancel = 1;
     ok(c);
+  } else if (get && !strcmp(target, "/pack")) {
+    pack_status(c);
+  } else if (post && !strcmp(target, "/pack/cancel")) {
+    pack_cancel = 1;
+    ok(c);
   } else if (!has_path && (get || post || !strcmp(method, "PUT"))) {
     fail(c, "400 Bad Request", "p must be an absolute path");
   } else if (get && !strcmp(target, "/ls")) {
@@ -1156,6 +1595,10 @@ static void handle(int c) {
     fail(c, "403 Forbidden", "only the homebrew folders and save data can be changed");
   } else if (post && !strcmp(target, "/copy")) {
     copy_start(c, path, query);
+  } else if (post && !strcmp(target, "/pack")) {
+    pack_start(c, path);
+  } else if (post && !strcmp(target, "/pack/finish")) {
+    pack_finish(c, path, query);
   } else if (post && !strcmp(target, "/install")) {
     install_pkg(c, path, query);
   } else if (!strcmp(method, "PUT") && !strcmp(target, "/file")) {

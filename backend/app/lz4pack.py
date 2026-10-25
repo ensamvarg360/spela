@@ -55,9 +55,12 @@ def pack(src: Path, out: Path, progress: ProgressCallback, stop: Event, say) -> 
         if p.phase == "packing":
             progress(p.logical_bytes_done, p.logical_bytes_total)
 
+    sprx = out / "fakelib" / SPRX.name
+    sprx.parent.mkdir(exist_ok=True)
+    shutil.copyfile(SPRX, sprx)
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:  # its CLI output
         say("Listing the game's files.")
-        if build_ampr_index.build_index_local(src, index, False):
+        if not _write_index(src, sprx, index):
             raise AdapterError("pack_failed", f"Couldn't list the game's files: {err.getvalue().strip()}")
         say("Packing with LZ4.")
         try:
@@ -68,9 +71,28 @@ def pack(src: Path, out: Path, progress: ProgressCallback, stop: Event, say) -> 
             ap.verify_packs_against_root(manifest, src)  # raises on the first difference
         except (ap.PackError, ValueError) as e:
             raise AdapterError("pack_failed", f"Couldn't pack the game: {e}")
-    (out / "fakelib").mkdir(exist_ok=True)
-    shutil.copyfile(SPRX, out / "fakelib" / SPRX.name)
     return {asset_relative_path(f["path"]) for f in ap.list_manifest(manifest) if f["packed"]}
+
+
+def _write_index(src: Path, sprx: Path, index: Path) -> bool:
+    """ampr_emu.index of the game as it will be: src's files, with the emulator in fakelib (the game's own copy, if it
+    had one, replaced), as build_ampr_index.build_index_local and exFAT2AMPR list them. False on a path clash."""
+    rows, seen, emu = [], {}, f"/app0/fakelib/{SPRX.name}"
+    for dirpath, dirs, names in os.walk(src):
+        dirs.sort(key=build_ampr_index.key_for)
+        for name in sorted(names, key=build_ampr_index.key_for):
+            path = Path(dirpath, name)
+            rel = build_ampr_index.app0_path(src, path)
+            if rel.lower() in (emu.lower(), "/app0/ampr_commands.bin", "/app0/apr_emu.log") or not path.is_file():
+                continue
+            st = path.stat()
+            if not build_ampr_index.validate_and_add_row(rows, seen, st.st_size, int(st.st_mtime), rel, False):
+                return False
+    st = sprx.stat()
+    if not build_ampr_index.validate_and_add_row(rows, seen, st.st_size, int(st.st_mtime), emu, False):
+        return False
+    build_ampr_index.write_index(rows, index)
+    return True
 
 
 def copy_loose(src: Path, out: Path, packed: set[str], stop: Event, say):

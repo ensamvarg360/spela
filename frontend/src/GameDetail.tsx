@@ -643,9 +643,84 @@ function ConsoleCopies({ console: c, copies, drives, reload }: { console?: Conso
         </Panel>
       );
     })}
+    {copies.filter((r) => r.install_route === "shadowmountplus" && r.status !== "orphaned_icon" && r.source_path && !/\.(exfat|ffpkg|ffpfsc?)$/i.test(r.source_path))
+      .map((r) => <PackOnConsole key={`lz4-${r.id}`} console={c} copy={r} reload={reload} />)}
     {dialog?.kind === "move" && c && <MoveDialog consoleId={c.id} game={dialog.game} drives={drives} onClose={() => { setDialog(null); reload(); }} />}
     {dialog?.kind === "remove" && c && <RemoveDialog consoleId={c.id} game={dialog.game} onClose={() => { setDialog(null); reload(); }} />}
   </>;
+}
+
+type Pack = { running: boolean; kind: "pack" | "delete" | "restore"; phase: string; done: number; total: number; before: number; after: number; game: string; backup: string; error: string };
+type Lz4 = { status: Pack | null; originals: { path: string; original: string; title_id: string | null; title: string }[] };
+const PACK_PHASE: Record<string, string> = {
+  checking: "Checking the game", packing: "Packing with LZ4", copying: "Copying the files that stay as they are",
+  verifying: "Checking every block", waiting: "Waiting for the game to be closed on the PS5", swapping: "Putting it in place",
+  deleting: "Deleting the original", restoring: "Putting the original back",
+};
+
+/** LZ4-packs a game folder on the console itself, with the helper (payload/main.c, pack_start): no PC space needed,
+ * and it carries on if this PC goes away. The original is set aside until the packed game has been started. */
+function PackOnConsole({ console: c, copy: r, reload }: { console?: Console; copy: InstalledGame; reload: () => void }) {
+  const [lz4, setLz4] = useState<Lz4 | null>(null);
+  const online = c?.state === "online";
+  const load = () => { if (c) api<Lz4>(`/consoles/${c.id}/lz4`).then(setLz4, () => {}); };
+  useEffect(() => { if (online) load(); }, [c?.id, online]);
+  const running = !!lz4?.status?.running;
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(load, 2000);
+    return () => clearInterval(t);
+  }, [running]);
+  const mine = lz4?.status?.game === r.source_path ? lz4.status : null;
+  useEffect(() => { if (mine && ["done", "restored"].includes(mine.phase)) reload(); }, [mine?.phase]); // its size changed
+  if (!c || !lz4) return null;
+  const original = lz4.originals.find((o) => o.path === r.source_path);
+
+  async function start() {
+    if (!confirm(`Pack ${r.title} with LZ4 on ${c!.name}?\n\nThe PS5 does it by itself and carries on if this PC is off. It needs ` +
+      "free space for about half the game on its drive. The original is kept, hidden, until you delete it or put it back. " +
+      "Only works for games that use AMPR; some of those still won't start packed.")) return;
+    try {
+      setLz4(await api<Lz4>(`/consoles/${c!.id}/lz4`, { method: "POST", json: { installed_game_id: r.id } }));
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  async function finish(keep: boolean) {
+    if (!confirm(keep ? `Delete the original of ${r.title} from ${c!.name}?\n\nOnly do this once the packed game has started on the PS5.`
+      : `Put the original of ${r.title} back?\n\nThe packed copy is deleted. Close the game on the PS5 first.`)) return;
+    try {
+      setLz4(await api<Lz4>(`/consoles/${c!.id}/lz4/finish`, { method: "POST", json: { path: r.source_path, keep } }));
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  const pct = mine?.total ? Math.floor((mine.done / mine.total) * 100) : 0;
+  return (
+    <Panel title={`LZ4 on ${c.name}`}
+      foot={!session.readOnly && (mine?.running
+        ? mine.kind === "pack" && <button type="button" className="sp-btn sp-btn--ghost" onClick={() => api(`/consoles/${c.id}/lz4/cancel`, { method: "POST" }).then(load, toastError)}>Cancel</button>
+        : original
+          ? <div className="sp-btngroup">
+            <button type="button" className="sp-btn" disabled={!online} onClick={() => finish(false)}>Put the original back</button>
+            <button type="button" className="sp-btn sp-btn--danger" disabled={!online} onClick={() => finish(true)}>Delete the original</button>
+          </div>
+          : <button type="button" className="sp-btn" {...needsOnline(c)} disabled={!online || running} title={running ? "The console is packing another game." : undefined} onClick={start}>Pack with LZ4</button>)}>
+      {mine?.running ? <>
+        <Bar value={pct / 100} label="Packing progress" />
+        <div className="sp-listrow__meta" role="status"><span className="sp-num">{pct}%</span><span className="sp-sep" /><span>{PACK_PHASE[mine.phase] ?? mine.phase}</span></div>
+      </> : <p className="sp-muted">
+        {mine?.phase === "failed" ? <span className="sp-error">{mine.kind === "pack" ? "Packing" : mine.kind === "delete" ? "Deleting the original" : "Putting the original back"} failed: {mine.error}</span>
+          : mine?.phase === "canceled" ? "Packing was canceled. The game is as it was."
+          : mine?.phase === "deleted" ? "The original is deleted. The packed game stays."
+          : mine?.phase === "restored" ? "The original is back, and the packed copy deleted."
+          : original ? <>Packed{mine?.phase === "done" && <>: {formatBytes(mine.after)}, was {formatBytes(mine.before)}</>}. The original is kept, hidden, next to it. Start the game on the PS5, then delete the original, or put it back if the game doesn't run.</>
+          : "Packs the game's assets with LZ4 on the console, often to about half the size. Only for games that use AMPR."}
+      </p>}
+    </Panel>
+  );
 }
 
 /** A library game's copies on one console, for its page. */

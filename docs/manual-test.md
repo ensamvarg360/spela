@@ -312,6 +312,16 @@ Paste the paths, `.schema` output and answers under *Problems found*, even if ev
 - [ ] Do the same with **LZ4-packed folder**.
 - [ ] Click **Delete the folder** next to the result, and confirm.
   **Expect:** the folder is gone, the page opens the converted game, the original shows as missing after a scan, and the activity log says *Original folder deleted*.
+- [ ] On **Installed**, open a folder game that uses AMPR and is only on the console, and click **Pack with LZ4**. Quit Spela on the PC halfway, then start it again.
+  **Expect:** the progress bar moves through the steps; after the restart the page shows the packing still going on the console.
+- [ ] When it's done, look at the home screen and start the game.
+  **Expect:** the tile comes back within about a minute with its logo, and the game starts. The page shows the new and old size, and the activity log says *LZ4-packed on the console*.
+- [ ] Quit Spela on the PC and open the PS5 app.
+  **Expect:** **Games** says *Library offline*; **Installed** lists every game on the console (folders, disc images, games installed from packages) with their titles, and Square says removing needs the PC.
+- [ ] Still without the PC, open the **LZ4** tab, pick another folder game that uses AMPR and press Cross twice.
+  **Expect:** the tab lists the console's game folders without the PC; the packing's progress shows at the top and in the panel; when it's done the game says *Original kept*, then Square twice deletes the original and it says *Packed*.
+- [ ] Click **Put the original back**, then pack it again and click **Delete the original**.
+  **Expect:** each time the tile comes back and the game starts; at the end, the hidden `.<name>.lz4-original` is gone (list the homebrew folder over FTP).
 
 ## Package install (needs a console on firmware 11.60 or lower; untested)
 

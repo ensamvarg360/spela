@@ -605,3 +605,31 @@ def test_logo_sync_schedule(monkeypatch):
         inventory.record("sched", "online")  # due again
     asyncio.run(go())
     assert len(started) == 2
+
+
+def test_lz4_on_console(monkeypatch):
+    """A game folder on the console is packed by the helper; a disc image isn't offered. The original stays set aside
+    until it's deleted or put back, and the end of the packing goes into the activity log once."""
+    mock = consoles.MockConsoleAdapter()
+    mock.games.append(consoles.InstalledGameInfo("PPSA04444", "Mock Folder", "01.000.000", "shadowmountplus", "usb0",
+                                                 "/mnt/usb0/homebrew/PPSA04444", "/mnt/usb0/homebrew/PPSA04444", 20 * consoles.GiB))
+    monkeypatch.setattr(inventory, "adapter_for", lambda db, c: mock)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        login(client)
+        cid = _console(client)
+        url = f"/api/v1/consoles/{cid}"
+        assert client.post(f"{url}/test-connection").json()["state"] == "online"
+        rows = {g["title_id"]: g for g in client.get(f"{url}/installed").json()}
+        r = client.post(f"{url}/lz4", json={"installed_game_id": rows["PPSA05678"]["id"]})
+        assert r.status_code == 409 and "disc images" in r.json()["message"]
+        r = client.post(f"{url}/lz4", json={"installed_game_id": rows["PPSA04444"]["id"]})
+        assert r.status_code == 202 and r.json()["status"]["phase"] == "done"
+        originals = client.get(f"{url}/lz4").json()["originals"]
+        assert originals == [{"path": "/mnt/usb0/homebrew/PPSA04444", "original": "/mnt/usb0/homebrew/.PPSA04444.lz4-original",
+                              "title_id": "PPSA04444", "title": "Mock Folder"}]
+        r = client.post(f"{url}/lz4/finish", json={"path": originals[0]["path"], "keep": True})
+        assert r.status_code == 202 and r.json()["originals"] == [] and r.json()["status"]["phase"] == "deleted"
+        client.get(f"{url}/lz4")  # logged once, however often it's asked
+    with SessionLocal() as db:
+        events = [(e.action, e.result) for e in db.scalars(select(AuditLog).where(AuditLog.action.like("console_pack%")))]
+        assert events == [("console_pack", "success"), ("console_pack_keep", "success")]

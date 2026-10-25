@@ -36,6 +36,42 @@ std::string_view trim(std::string_view s)
 
 } // namespace
 
+std::vector<ConsoleGame> parse_console_games(std::string_view text)
+{
+    std::vector<ConsoleGame> games;
+    for (std::string_view line : split(text, '\n'))
+    {
+        const std::vector<std::string_view> f = split(trim(line), '\t');
+        if (f.size() < 5 || f[0].empty())
+            continue;
+        ConsoleGame g{std::string(f[0]), std::string(f[1]), std::string(f[2]), f[3] == "1", f[4] == "1"};
+        if (f.size() >= 7)
+        {
+            g.kind = f[5];
+            g.version = f[6];
+        }
+        games.push_back(std::move(g));
+    }
+    return games;
+}
+
+bool parse_pack(std::string_view text, Pack *out)
+{
+    const std::vector<std::string_view> f = split(trim(split(text, '\n')[0]), '\t');
+    if (f.size() < 9)
+        return false;
+    out->running = f[0] == "1";
+    out->kind = f[1];
+    out->phase = f[2];
+    out->done = std::strtoull(std::string(f[3]).c_str(), nullptr, 10);
+    out->total = std::strtoull(std::string(f[4]).c_str(), nullptr, 10);
+    out->before = std::strtoull(std::string(f[5]).c_str(), nullptr, 10);
+    out->after = std::strtoull(std::string(f[6]).c_str(), nullptr, 10);
+    out->game = f[7];
+    out->error = f[8];
+    return true;
+}
+
 std::vector<Game> parse_library(std::string_view text)
 {
     std::vector<Game> games;

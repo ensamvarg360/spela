@@ -26,6 +26,10 @@ def test_lz4_pack(tmp_path):
     assert packed == {"data/level.assets"}
     assert (out / "fakelib" / "libSceAmpr.sprx").read_bytes() == lz4pack.SPRX.read_bytes()
     assert sum(p.stat().st_size for p in out.glob("ampr_assets-*.pak")) < 300_000  # from 2.1 MB (64 KiB pages)
+    from app.ampr.ampr_pack_format import read_ampridx3  # the game as deployed, emulator included, as exFAT2AMPR lists it
+    assert {e.path for e in read_ampridx3(out / "ampr_emu.index")} == {
+        "/app0/sce_sys/param.json", "/app0/eboot.bin", "/app0/data/level.assets", "/app0/movie/intro.mp4",
+        "/app0/fakelib/libSceAmpr.sprx"}
 
     image = exfat._walk([str(src), str(out)], "", 0, frozenset(packed))
     lz4pack.copy_loose(src, out, packed, stop, lambda m: None)
